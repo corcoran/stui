@@ -43,9 +43,11 @@ fn format_bytes(bytes: u64) -> String {
 struct BreadcrumbLevel {
     folder_id: String,
     folder_label: String,
+    folder_path: String,  // Cache the folder's container path
     prefix: Option<String>,
     items: Vec<BrowseItem>,
     state: ListState,
+    translated_base_path: String,  // Cached translated base path for this level
 }
 
 struct App {
@@ -133,12 +135,17 @@ impl App {
                     state.select(Some(0));
                 }
 
+                // Compute translated base path once
+                let translated_base_path = self.translate_path(folder, "");
+
                 self.breadcrumb_trail = vec![BreadcrumbLevel {
                     folder_id: folder.id.clone(),
                     folder_label: folder.label.clone().unwrap_or_else(|| folder.id.clone()),
+                    folder_path: folder.path.clone(),
                     prefix: None,
                     items,
                     state,
+                    translated_base_path,
                 }];
                 self.focus_level = 1;
             }
@@ -166,6 +173,7 @@ impl App {
 
                 let folder_id = current_level.folder_id.clone();
                 let folder_label = current_level.folder_label.clone();
+                let folder_path = current_level.folder_path.clone();
 
                 // Build new prefix
                 let new_prefix = if let Some(ref prefix) = current_level.prefix {
@@ -181,6 +189,18 @@ impl App {
                     state.select(Some(0));
                 }
 
+                // Compute translated base path once for this level
+                let full_relative_path = new_prefix.trim_end_matches('/');
+                let container_path = format!("{}/{}", folder_path.trim_end_matches('/'), full_relative_path);
+
+                // Map to host path
+                let translated_base_path = self.path_map.iter()
+                    .find_map(|(container_prefix, host_prefix)| {
+                        container_path.strip_prefix(container_prefix.as_str())
+                            .map(|remainder| format!("{}{}", host_prefix.trim_end_matches('/'), remainder))
+                    })
+                    .unwrap_or(container_path);
+
                 // Truncate breadcrumb trail to current level + 1
                 self.breadcrumb_trail.truncate(level_idx + 1);
 
@@ -188,9 +208,11 @@ impl App {
                 self.breadcrumb_trail.push(BreadcrumbLevel {
                     folder_id,
                     folder_label,
+                    folder_path,
                     prefix: Some(new_prefix),
                     items,
                     state,
+                    translated_base_path,
                 });
 
                 self.focus_level += 1;
@@ -517,9 +539,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                             let in_sync = status.global_total_items.saturating_sub(status.need_total_items);
                             let items_display = format!("{}/{}", in_sync, status.global_total_items);
                             let need_display = if status.need_total_items > 0 {
-                                format!("{} items ({})", status.need_total_items, format_bytes(status.need_bytes))
+                                format!("{} items ({}) ", status.need_total_items, format_bytes(status.need_bytes))
                             } else {
-                                "Up to date".to_string()
+                                "Up to date ".to_string()
                             };
 
                             format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
@@ -556,22 +578,16 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 _ => "Item",
                             };
 
-                            // Build relative path
-                            let relative_path = format!("{}{}",
-                                level.prefix.as_deref().unwrap_or(""),
+                            // Use cached translated base path and append item name
+                            let full_path = format!("{}/{}",
+                                level.translated_base_path.trim_end_matches('/'),
                                 item.name
                             );
-
-                            // Find the folder to translate path
-                            let translated_path = app.folders.iter()
-                                .find(|f| f.id == level.folder_id)
-                                .map(|folder| app.translate_path(folder, &relative_path))
-                                .unwrap_or_else(|| relative_path.clone());
 
                             format!("{}: {}  |  Path: {}",
                                 item_type,
                                 item.name,
-                                translated_path
+                                full_path
                             )
                         } else {
                             "No item selected".to_string()
