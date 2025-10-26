@@ -79,6 +79,9 @@ struct App {
     // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
+    // Performance metrics
+    last_load_time_ms: Option<u64>,  // Time to load current directory (milliseconds)
+    cache_hit: Option<bool>,          // Whether last load was a cache hit
 }
 
 impl App {
@@ -180,6 +183,8 @@ impl App {
             pattern_selection: None,
             api_tx,
             api_rx,
+            last_load_time_ms: None,
+            cache_hit: None,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -795,6 +800,9 @@ impl App {
                     return Ok(());
                 }
 
+                // Start timing
+                let start = Instant::now();
+
                 // Get folder sequence for cache validation
                 let folder_sequence = self.folder_statuses
                     .get(&folder.id)
@@ -806,6 +814,7 @@ impl App {
 
                 // Try cache first
                 let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder.id, None, folder_sequence) {
+                    self.cache_hit = Some(true);
                     cached_items
                 } else if self.loading_browse.contains(&browse_key) {
                     // Already loading this path, skip to avoid duplicate work
@@ -815,6 +824,7 @@ impl App {
                     self.loading_browse.insert(browse_key.clone());
 
                     // Cache miss - fetch from API (BLOCKING for root level)
+                    self.cache_hit = Some(false);
                     let items = self.client.browse_folder(&folder.id, None).await?;
                     let _ = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence);
 
@@ -823,6 +833,9 @@ impl App {
 
                     items
                 };
+
+                // Record load time
+                self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
                 let mut state = ListState::default();
                 if !items.is_empty() {
@@ -861,6 +874,9 @@ impl App {
             return Ok(());
         }
 
+        // Start timing
+        let start = Instant::now();
+
         let current_level = &self.breadcrumb_trail[level_idx];
         if let Some(selected_idx) = current_level.state.selected() {
             if let Some(item) = current_level.items.get(selected_idx) {
@@ -893,10 +909,12 @@ impl App {
                 let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
                     // Have cached data - clear loading flag and use it immediately
                     self.loading_browse.remove(&browse_key);
+                    self.cache_hit = Some(true);
                     cached_items
                 } else {
                     // Cache miss or stale - always request fresh data
                     self.loading_browse.insert(browse_key.clone());
+                    self.cache_hit = Some(false);
 
                     let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
                         folder_id: folder_id.clone(),
@@ -908,6 +926,9 @@ impl App {
                     // TODO: Could show a loading indicator here
                     Vec::new()
                 };
+
+                // Record load time
+                self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
                 let mut state = ListState::default();
                 if !items.is_empty() {
@@ -1855,34 +1876,38 @@ async fn run_app<B: ratatui::backend::Backend>(
                     "No folder selected".to_string()
                 }
             } else {
-                // Show current item in breadcrumb trail
+                // Show current directory performance metrics
                 let level_idx = app.focus_level - 1;
                 if let Some(level) = app.breadcrumb_trail.get(level_idx) {
+                    let folder_name = &level.folder_label;
+                    let item_count = level.items.len();
+
+                    // Build performance metrics string
+                    let mut metrics = Vec::new();
+                    metrics.push(format!("Folder: {}", folder_name));
+                    metrics.push(format!("{} items", item_count));
+
+                    if let Some(load_time) = app.last_load_time_ms {
+                        metrics.push(format!("Load: {}ms", load_time));
+                    }
+
+                    if let Some(cache_hit) = app.cache_hit {
+                        metrics.push(format!("Cache: {}", if cache_hit { "HIT" } else { "MISS" }));
+                    }
+
+                    // Show selected item info if available
                     if let Some(selected) = level.state.selected() {
                         if let Some(item) = level.items.get(selected) {
                             let item_type = match item.item_type.as_str() {
-                                "FILE_INFO_TYPE_DIRECTORY" => "Directory",
+                                "FILE_INFO_TYPE_DIRECTORY" => "Dir",
                                 "FILE_INFO_TYPE_FILE" => "File",
                                 _ => "Item",
                             };
-
-                            // Use cached translated base path and append item name
-                            let full_path = format!("{}/{}",
-                                level.translated_base_path.trim_end_matches('/'),
-                                item.name
-                            );
-
-                            format!("{}: {}  |  Path: {}",
-                                item_type,
-                                item.name,
-                                full_path
-                            )
-                        } else {
-                            "No item selected".to_string()
+                            metrics.push(format!("Selected: {} ({})", item.name, item_type));
                         }
-                    } else {
-                        "No item selected".to_string()
                     }
+
+                    metrics.join(" | ")
                 } else {
                     "".to_string()
                 }
