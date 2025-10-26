@@ -97,6 +97,7 @@ pub struct FileDetails {
 #[serde(rename_all = "camelCase")]
 pub struct FolderStatus {
     pub state: String,
+    pub sequence: u64,
     #[allow(dead_code)]
     pub global_bytes: u64,
     #[allow(dead_code)]

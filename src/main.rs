@@ -12,12 +12,14 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
-use std::{collections::HashMap, fs::{self, OpenOptions}, io::{self, Write}, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, fs, io, time::{Duration, Instant}};
 
 mod api;
+mod cache;
 mod config;
 
 use api::{BrowseItem, Folder, FolderStatus, SyncState, SyncthingClient};
+use cache::CacheDb;
 use config::Config;
 
 fn format_bytes(bytes: u64) -> String {
@@ -53,6 +55,7 @@ struct BreadcrumbLevel {
 
 struct App {
     client: SyncthingClient,
+    cache: CacheDb,
     folders: Vec<Folder>,
     folders_state: ListState,
     folder_statuses: HashMap<String, FolderStatus>,
@@ -62,19 +65,13 @@ struct App {
     breadcrumb_trail: Vec<BreadcrumbLevel>,
     focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
     should_quit: bool,
+    // Track in-flight operations to prevent duplicate fetches
+    loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
+    loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
+    prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
 }
 
 impl App {
-    fn log(message: &str) {
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/synctui.log")
-        {
-            let _ = writeln!(file, "{}", message);
-        }
-    }
-
     fn translate_path(&self, folder: &Folder, relative_path: &str) -> String {
         // Get the full container path
         let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
@@ -93,10 +90,12 @@ impl App {
 
     async fn new(config: Config) -> Result<Self> {
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
+        let cache = CacheDb::new()?;
         let folders = client.get_folders().await?;
 
         let mut app = App {
             client,
+            cache,
             folders,
             folders_state: ListState::default(),
             folder_statuses: HashMap::new(),
@@ -106,22 +105,47 @@ impl App {
             breadcrumb_trail: Vec::new(),
             focus_level: 0,
             should_quit: false,
+            loading_browse: HashSet::new(),
+            loading_sync_states: HashSet::new(),
+            prefetch_enabled: true,
         };
+
+        // Load folder statuses first (needed for cache validation)
+        app.load_folder_statuses().await;
 
         if !app.folders.is_empty() {
             app.folders_state.select(Some(0));
             app.load_root_level().await?;
         }
 
-        // Load folder statuses asynchronously
-        app.load_folder_statuses().await;
-
         Ok(app)
     }
 
     async fn load_folder_statuses(&mut self) {
         for folder in &self.folders {
+            // Try cache first - use it without validation on initial load
+            if !self.statuses_loaded {
+                if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
+                    self.folder_statuses.insert(folder.id.clone(), cached_status);
+                    continue;
+                }
+            }
+
+            // Cache miss or this is a refresh - fetch from API
             if let Ok(status) = self.client.get_folder_status(&folder.id).await {
+                let sequence = status.sequence;
+
+                // Check if cache is still valid
+                if let Ok(true) = self.cache.is_folder_status_valid(&folder.id, sequence) {
+                    // Cache is still good, use it
+                    if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
+                        self.folder_statuses.insert(folder.id.clone(), cached_status);
+                        continue;
+                    }
+                }
+
+                // Cache stale or miss - use fresh status and save to cache
+                let _ = self.cache.save_folder_status(&folder.id, &status, sequence);
                 self.folder_statuses.insert(folder.id.clone(), status);
             }
         }
@@ -136,6 +160,362 @@ impl App {
         }
     }
 
+
+    fn load_sync_states_from_cache(&self, folder_id: &str, items: &[BrowseItem], prefix: Option<&str>) -> HashMap<String, SyncState> {
+        let mut sync_states = HashMap::new();
+
+        for item in items {
+            // Build the file path
+            let file_path = if let Some(prefix) = prefix {
+                format!("{}{}", prefix, item.name)
+            } else {
+                item.name.clone()
+            };
+
+            // Load from cache without validation (will be validated on next fetch if needed)
+            if let Ok(Some(state)) = self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
+                sync_states.insert(item.name.clone(), state);
+            }
+        }
+
+        sync_states
+    }
+
+
+    async fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        // Get items that need fetching (don't have sync state and aren't loading)
+        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+
+        let items_to_fetch: Vec<String> = self.breadcrumb_trail[level_idx]
+            .items
+            .iter()
+            .filter(|item| {
+                // Skip if already have sync state
+                if self.breadcrumb_trail[level_idx].file_sync_states.contains_key(&item.name) {
+                    return false;
+                }
+
+                // Build file path and check if already loading
+                let file_path = if let Some(ref prefix) = prefix {
+                    format!("{}{}", prefix, item.name)
+                } else {
+                    item.name.clone()
+                };
+                let sync_key = format!("{}:{}", folder_id, file_path);
+
+                !self.loading_sync_states.contains(&sync_key)
+            })
+            .take(max_concurrent) // Limit how many we fetch at once
+            .map(|item| item.name.clone())
+            .collect();
+
+        // Spawn concurrent fetches
+        for item_name in items_to_fetch {
+            let file_path = if let Some(ref prefix) = prefix {
+                format!("{}{}", prefix, item_name)
+            } else {
+                item_name.clone()
+            };
+
+            let sync_key = format!("{}:{}", folder_id, file_path);
+
+            // Mark as loading
+            self.loading_sync_states.insert(sync_key.clone());
+
+            // Fetch file info from API
+            match self.client.get_file_info(&folder_id, &file_path).await {
+                Ok(file_details) => {
+                    let file_sequence = file_details.local.as_ref()
+                        .or(file_details.global.as_ref())
+                        .map(|f| f.sequence)
+                        .unwrap_or(0);
+
+                    // Check cache first
+                    let sync_state = if let Ok(Some(cached_state)) = self.cache.get_sync_state(&folder_id, &file_path, file_sequence) {
+                        cached_state
+                    } else {
+                        // Cache miss - determine state and save
+                        let state = file_details.determine_sync_state();
+                        let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
+                        state
+                    };
+
+                    // Update the sync state in the current level
+                    if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                        level.file_sync_states.insert(item_name.clone(), sync_state);
+                    }
+                }
+                Err(_e) => {
+                    // Silently ignore errors
+                }
+            }
+
+            // Done loading
+            self.loading_sync_states.remove(&sync_key);
+        }
+    }
+
+    // Recursively discover and fetch states for subdirectories when hovering over a directory
+    // This ensures we have complete subdirectory information for deep trees
+    async fn prefetch_hovered_subdirectories(&mut self, max_depth: usize, max_dirs_per_frame: usize) {
+        if !self.prefetch_enabled {
+            return;
+        }
+
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        // Only run if system isn't too busy
+        let total_in_flight = self.loading_browse.len() + self.loading_sync_states.len();
+        if total_in_flight > 15 {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        // Get the currently selected/hovered item
+        let selected_idx = self.breadcrumb_trail[level_idx].state.selected();
+        if selected_idx.is_none() {
+            return;
+        }
+
+        let selected_item = if let Some(item) = self.breadcrumb_trail[level_idx].items.get(selected_idx.unwrap()) {
+            item.clone()
+        } else {
+            return;
+        };
+
+        // Only process if it's a directory
+        if selected_item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
+            return;
+        }
+
+        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_sequence = self.folder_statuses
+            .get(&folder_id)
+            .map(|s| s.sequence)
+            .unwrap_or(0);
+
+        // Build path to hovered directory
+        let hovered_dir_path = if let Some(ref prefix) = prefix {
+            format!("{}{}/", prefix, selected_item.name)
+        } else {
+            format!("{}/", selected_item.name)
+        };
+
+        // Recursively discover subdirectories
+        let mut dirs_to_fetch = Vec::new();
+        self.discover_subdirectories_recursive(
+            &folder_id,
+            &hovered_dir_path,
+            folder_sequence,
+            0,
+            max_depth,
+            &mut dirs_to_fetch,
+        ).await;
+
+        // Fetch states for discovered subdirectories (limit per frame)
+        for dir_path in dirs_to_fetch.iter().take(max_dirs_per_frame) {
+            let sync_key = format!("{}:{}", folder_id, dir_path);
+
+            // Skip if already loading or cached
+            if self.loading_sync_states.contains(&sync_key) {
+                continue;
+            }
+
+            // Check if already cached
+            if let Ok(Some(_)) = self.cache.get_sync_state_unvalidated(&folder_id, dir_path) {
+                continue;
+            }
+
+            // Mark as loading
+            self.loading_sync_states.insert(sync_key.clone());
+
+            // Fetch directory's own sync state
+            match self.client.get_file_info(&folder_id, dir_path).await {
+                Ok(file_details) => {
+                    let file_sequence = file_details.local.as_ref()
+                        .or(file_details.global.as_ref())
+                        .map(|f| f.sequence)
+                        .unwrap_or(0);
+
+                    let state = file_details.determine_sync_state();
+                    let _ = self.cache.save_sync_state(&folder_id, dir_path, state, file_sequence);
+                }
+                Err(_) => {}
+            }
+
+            self.loading_sync_states.remove(&sync_key);
+        }
+    }
+
+    // Helper to recursively discover subdirectories (browse only, no state fetching)
+    async fn discover_subdirectories_recursive(
+        &mut self,
+        folder_id: &str,
+        dir_path: &str,
+        folder_sequence: u64,
+        current_depth: usize,
+        max_depth: usize,
+        result: &mut Vec<String>,
+    ) {
+        if current_depth >= max_depth {
+            return;
+        }
+
+        let browse_key = format!("{}:{}", folder_id, dir_path);
+
+        // Check if already loading
+        if self.loading_browse.contains(&browse_key) {
+            return;
+        }
+
+        // Try to get from cache first
+        let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(folder_id, Some(dir_path), folder_sequence) {
+            cached_items
+        } else {
+            // Not cached - fetch it
+            self.loading_browse.insert(browse_key.clone());
+
+            let items = match self.client.browse_folder(folder_id, Some(dir_path)).await {
+                Ok(items) => {
+                    // Cache the browse results
+                    let _ = self.cache.save_browse_items(folder_id, Some(dir_path), &items, folder_sequence);
+                    items
+                }
+                Err(_) => {
+                    self.loading_browse.remove(&browse_key);
+                    return;
+                }
+            };
+
+            self.loading_browse.remove(&browse_key);
+            items
+        };
+
+        // Add all subdirectories to result list
+        for item in &items {
+            if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                let subdir_path = format!("{}{}", dir_path, item.name);
+                result.push(subdir_path.clone());
+
+                // Recursively discover deeper
+                let nested_path = format!("{}/", subdir_path);
+                Box::pin(self.discover_subdirectories_recursive(
+                    folder_id,
+                    &nested_path,
+                    folder_sequence,
+                    current_depth + 1,
+                    max_depth,
+                    result,
+                )).await;
+            }
+        }
+    }
+
+    // Fetch directory-level sync states for subdirectories (their own metadata, not children)
+    // This is cheap and gives immediate feedback for navigation (ignored/deleted/out-of-sync dirs)
+    async fn fetch_directory_states(&mut self, max_concurrent: usize) {
+        if !self.prefetch_enabled {
+            return;
+        }
+
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        // Only run if system isn't too busy
+        let total_in_flight = self.loading_browse.len() + self.loading_sync_states.len();
+        if total_in_flight > 10 {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+
+        // Find directories that don't have their own sync state cached
+        let dirs_to_fetch: Vec<String> = self.breadcrumb_trail[level_idx]
+            .items
+            .iter()
+            .filter(|item| {
+                // Only process directories
+                if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
+                    return false;
+                }
+
+                // Check if we already have this directory's state
+                self.breadcrumb_trail[level_idx].file_sync_states.get(&item.name).is_none()
+            })
+            .take(max_concurrent)
+            .map(|item| item.name.clone())
+            .collect();
+
+        // Fetch directory metadata (not children) for each
+        for dir_name in dirs_to_fetch {
+            let dir_path = if let Some(ref prefix) = prefix {
+                format!("{}{}", prefix, dir_name)
+            } else {
+                dir_name.clone()
+            };
+
+            let sync_key = format!("{}:{}", folder_id, dir_path);
+
+            // Skip if already loading
+            if self.loading_sync_states.contains(&sync_key) {
+                continue;
+            }
+
+            // Mark as loading
+            self.loading_sync_states.insert(sync_key.clone());
+
+            // Fetch directory's own sync state (just metadata, not children)
+            match self.client.get_file_info(&folder_id, &dir_path).await {
+                Ok(file_details) => {
+                    let file_sequence = file_details.local.as_ref()
+                        .or(file_details.global.as_ref())
+                        .map(|f| f.sequence)
+                        .unwrap_or(0);
+
+                    // Determine the directory's own sync state
+                    let state = file_details.determine_sync_state();
+
+                    // Cache it
+                    let _ = self.cache.save_sync_state(&folder_id, &dir_path, state, file_sequence);
+
+                    // Update in-memory state
+                    if level_idx < self.breadcrumb_trail.len() {
+                        self.breadcrumb_trail[level_idx].file_sync_states.insert(dir_name.clone(), state);
+                    }
+                }
+                Err(_) => {
+                    // Silently ignore errors
+                }
+            }
+
+            // Done loading
+            self.loading_sync_states.remove(&sync_key);
+        }
+    }
 
     async fn fetch_selected_item_sync_state(&mut self) {
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
@@ -158,18 +538,45 @@ impl App {
                         item.name.clone()
                     };
 
-                    // Fetch file info from API
-                    Self::log(&format!("[DEBUG] Fetching sync state for: folder={}, path={}", level.folder_id, file_path));
+                    // Create key for tracking in-flight operations
+                    let sync_key = format!("{}:{}", level.folder_id, file_path);
+
+                    // Skip if already loading
+                    if self.loading_sync_states.contains(&sync_key) {
+                        return;
+                    }
+
+                    // Mark as loading
+                    self.loading_sync_states.insert(sync_key.clone());
+
+                    // Try to get file sequence for cache validation
+                    // We need to fetch file info first to get the sequence
                     match self.client.get_file_info(&level.folder_id, &file_path).await {
                         Ok(file_details) => {
-                            let sync_state = file_details.determine_sync_state();
-                            Self::log(&format!("[DEBUG] Sync state for {}: {:?}", item.name, sync_state));
+                            let file_sequence = file_details.local.as_ref()
+                                .or(file_details.global.as_ref())
+                                .map(|f| f.sequence)
+                                .unwrap_or(0);
+
+                            // Check cache first
+                            let sync_state = if let Ok(Some(cached_state)) = self.cache.get_sync_state(&level.folder_id, &file_path, file_sequence) {
+                                cached_state
+                            } else {
+                                // Cache miss - determine state and save
+                                let state = file_details.determine_sync_state();
+                                let _ = self.cache.save_sync_state(&level.folder_id, &file_path, state, file_sequence);
+                                state
+                            };
+
                             level.file_sync_states.insert(item.name.clone(), sync_state);
                         }
-                        Err(e) => {
-                            Self::log(&format!("[ERROR] Failed to fetch sync state for {}: {}", file_path, e));
+                        Err(_e) => {
+                            // Silently ignore errors
                         }
                     }
+
+                    // Done loading
+                    self.loading_sync_states.remove(&sync_key);
                 }
             }
         }
@@ -184,7 +591,34 @@ impl App {
                     return Ok(());
                 }
 
-                let items = self.client.browse_folder(&folder.id, None).await?;
+                // Get folder sequence for cache validation
+                let folder_sequence = self.folder_statuses
+                    .get(&folder.id)
+                    .map(|s| s.sequence)
+                    .unwrap_or(0);
+
+                // Create key for tracking in-flight operations
+                let browse_key = format!("{}:", folder.id); // Empty prefix for root
+
+                // Try cache first
+                let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder.id, None, folder_sequence) {
+                    cached_items
+                } else if self.loading_browse.contains(&browse_key) {
+                    // Already loading this path, skip to avoid duplicate work
+                    return Ok(());
+                } else {
+                    // Mark as loading
+                    self.loading_browse.insert(browse_key.clone());
+
+                    // Cache miss - fetch from API
+                    let items = self.client.browse_folder(&folder.id, None).await?;
+                    let _ = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence);
+
+                    // Done loading
+                    self.loading_browse.remove(&browse_key);
+
+                    items
+                };
 
                 let mut state = ListState::default();
                 if !items.is_empty() {
@@ -194,6 +628,9 @@ impl App {
                 // Compute translated base path once
                 let translated_base_path = self.translate_path(folder, "");
 
+                // Load cached sync states for items
+                let file_sync_states = self.load_sync_states_from_cache(&folder.id, &items, None);
+
                 self.breadcrumb_trail = vec![BreadcrumbLevel {
                     folder_id: folder.id.clone(),
                     folder_label: folder.label.clone().unwrap_or_else(|| folder.id.clone()),
@@ -202,7 +639,7 @@ impl App {
                     items,
                     state,
                     translated_base_path,
-                    file_sync_states: HashMap::new(),
+                    file_sync_states,
                 }];
                 self.focus_level = 1;
             }
@@ -239,7 +676,34 @@ impl App {
                     format!("{}/", item.name)
                 };
 
-                let items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
+                // Get folder sequence for cache validation
+                let folder_sequence = self.folder_statuses
+                    .get(&folder_id)
+                    .map(|s| s.sequence)
+                    .unwrap_or(0);
+
+                // Create key for tracking in-flight operations
+                let browse_key = format!("{}:{}", folder_id, new_prefix);
+
+                // Try cache first
+                let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
+                    cached_items
+                } else if self.loading_browse.contains(&browse_key) {
+                    // Already loading this path, skip to avoid duplicate work
+                    return Ok(());
+                } else {
+                    // Mark as loading
+                    self.loading_browse.insert(browse_key.clone());
+
+                    // Cache miss - fetch from API
+                    let items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
+                    let _ = self.cache.save_browse_items(&folder_id, Some(&new_prefix), &items, folder_sequence);
+
+                    // Done loading
+                    self.loading_browse.remove(&browse_key);
+
+                    items
+                };
 
                 let mut state = ListState::default();
                 if !items.is_empty() {
@@ -261,6 +725,9 @@ impl App {
                 // Truncate breadcrumb trail to current level + 1
                 self.breadcrumb_trail.truncate(level_idx + 1);
 
+                // Load cached sync states for items
+                let file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(&new_prefix));
+
                 // Add new level
                 self.breadcrumb_trail.push(BreadcrumbLevel {
                     folder_id,
@@ -270,7 +737,7 @@ impl App {
                     items,
                     state,
                     translated_base_path,
-                    file_sync_states: HashMap::new(),
+                    file_sync_states,
                 });
 
                 self.focus_level += 1;
@@ -536,52 +1003,45 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .items
                     .iter()
                     .map(|item| {
-                        // Check for cached sync state
-                        let icon = if let Some(sync_state) = level.file_sync_states.get(&item.name) {
-                            match sync_state {
-                                SyncState::Synced => {
-                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                        "📁✅ "
-                                    } else {
-                                        "📄✅ "
-                                    }
-                                }
-                                SyncState::OutOfSync => {
-                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                        "📁⚠️ "
-                                    } else {
-                                        "📄⚠️ "
-                                    }
-                                }
-                                SyncState::LocalOnly => {
-                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                        "📁💻 "
-                                    } else {
-                                        "📄💻 "
-                                    }
-                                }
-                                SyncState::RemoteOnly => {
-                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                        "📁☁️ "
-                                    } else {
-                                        "📄☁️ "
-                                    }
-                                }
-                                SyncState::Ignored => "🚫.. ",
-                                SyncState::Unknown => {
-                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                        "📁❓ "
-                                    } else {
-                                        "📄❓ "
-                                    }
+                        // Use cached state directly (directories show their own metadata state, not aggregate)
+                        let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
+
+                        let icon = match sync_state {
+                            SyncState::Synced => {
+                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                    "📁✅ "
+                                } else {
+                                    "📄✅ "
                                 }
                             }
-                        } else {
-                            // No sync state cached yet, show default icons with placeholder for consistent spacing
-                            match item.item_type.as_str() {
-                                "FILE_INFO_TYPE_DIRECTORY" => "📁.. ",
-                                "FILE_INFO_TYPE_FILE" => "📄.. ",
-                                _ => "❓.. ",
+                            SyncState::OutOfSync => {
+                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                    "📁⚠️ "
+                                } else {
+                                    "📄⚠️ "
+                                }
+                            }
+                            SyncState::LocalOnly => {
+                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                    "📁💻 "
+                                } else {
+                                    "📄💻 "
+                                }
+                            }
+                            SyncState::RemoteOnly => {
+                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                    "📁☁️ "
+                                } else {
+                                    "📄☁️ "
+                                }
+                            }
+                            SyncState::Ignored => "🚫.. ",
+                            SyncState::Unknown => {
+                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                    "📁🔄 "
+                                } else {
+                                    "📄🔄 "
+                                }
                             }
                         };
                         ListItem::new(Span::raw(format!("{}{}", icon, item.name)))
@@ -734,8 +1194,18 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Check for periodic status updates
         app.check_and_update_statuses().await;
 
-        // Fetch sync state for selected item in breadcrumb trail
+        // HIGHEST PRIORITY: If hovering over a directory, recursively discover all subdirectories
+        // and fetch their states (goes as deep as possible, depth=10, fetch 15 dirs per frame)
+        app.prefetch_hovered_subdirectories(10, 15).await;
+
+        // Fetch directory metadata states for visible directories in current level
+        app.fetch_directory_states(10).await;
+
+        // Fetch selected item specifically (high priority for user interaction)
         app.fetch_selected_item_sync_state().await;
+
+        // LOWEST PRIORITY: Batch fetch file sync states for visible files
+        app.batch_fetch_visible_sync_states(5).await;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
