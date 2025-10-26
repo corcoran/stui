@@ -275,9 +275,20 @@ impl App {
     }
 
     async fn check_and_update_statuses(&mut self) {
-        // Auto-refresh every 5 seconds
+        // Auto-refresh every 5 seconds (non-blocking)
         if self.last_status_update.elapsed() >= Duration::from_secs(5) {
-            self.load_folder_statuses().await;
+            self.refresh_folder_statuses_nonblocking();
+            self.last_status_update = Instant::now();
+        }
+    }
+
+    fn refresh_folder_statuses_nonblocking(&mut self) {
+        // Non-blocking version for background polling
+        // Sends status requests via API service
+        for folder in &self.folders {
+            let _ = self.api_tx.send(api_service::ApiRequest::GetFolderStatus {
+                folder_id: folder.id.clone(),
+            });
         }
     }
 
@@ -615,21 +626,12 @@ impl App {
             // Mark as loading
             self.loading_sync_states.insert(sync_key.clone());
 
-            // Fetch directory's own sync state
-            match self.client.get_file_info(&folder_id, dir_path).await {
-                Ok(file_details) => {
-                    let file_sequence = file_details.local.as_ref()
-                        .or(file_details.global.as_ref())
-                        .map(|f| f.sequence)
-                        .unwrap_or(0);
-
-                    let state = file_details.determine_sync_state();
-                    let _ = self.cache.save_sync_state(&folder_id, dir_path, state, file_sequence);
-                }
-                Err(_) => {}
-            }
-
-            self.loading_sync_states.remove(&sync_key);
+            // Send non-blocking request for directory's sync state
+            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                folder_id: folder_id.clone(),
+                file_path: dir_path.to_string(),
+                priority: api_service::Priority::Low, // Low priority, it's speculative prefetch
+            });
         }
     }
 
@@ -663,23 +665,19 @@ impl App {
         let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(folder_id, Some(dir_path), folder_sequence) {
             cached_items
         } else {
-            // Not cached - fetch it
-            self.loading_browse.insert(browse_key.clone());
+            // Not cached - request it non-blocking and skip for now
+            // It will be available on the next iteration
+            if !self.loading_browse.contains(&browse_key) {
+                self.loading_browse.insert(browse_key.clone());
 
-            let items = match self.client.browse_folder(folder_id, Some(dir_path)).await {
-                Ok(items) => {
-                    // Cache the browse results
-                    let _ = self.cache.save_browse_items(folder_id, Some(dir_path), &items, folder_sequence);
-                    items
-                }
-                Err(_) => {
-                    self.loading_browse.remove(&browse_key);
-                    return;
-                }
-            };
-
-            self.loading_browse.remove(&browse_key);
-            items
+                // Send non-blocking browse request
+                let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                    folder_id: folder_id.to_string(),
+                    prefix: Some(dir_path.to_string()),
+                    priority: api_service::Priority::Low,
+                });
+            }
+            return; // Skip this iteration, will process when cached
         };
 
         // Mark this directory as discovered to prevent re-querying
@@ -707,7 +705,7 @@ impl App {
 
     // Fetch directory-level sync states for subdirectories (their own metadata, not children)
     // This is cheap and gives immediate feedback for navigation (ignored/deleted/out-of-sync dirs)
-    async fn fetch_directory_states(&mut self, max_concurrent: usize) {
+    fn fetch_directory_states(&mut self, max_concurrent: usize) {
         if !self.prefetch_enabled {
             return;
         }
@@ -765,36 +763,17 @@ impl App {
             // Mark as loading
             self.loading_sync_states.insert(sync_key.clone());
 
-            // Fetch directory's own sync state (just metadata, not children)
-            match self.client.get_file_info(&folder_id, &dir_path).await {
-                Ok(file_details) => {
-                    let file_sequence = file_details.local.as_ref()
-                        .or(file_details.global.as_ref())
-                        .map(|f| f.sequence)
-                        .unwrap_or(0);
-
-                    // Determine the directory's own sync state
-                    let state = file_details.determine_sync_state();
-
-                    // Cache it
-                    let _ = self.cache.save_sync_state(&folder_id, &dir_path, state, file_sequence);
-
-                    // Update in-memory state
-                    if level_idx < self.breadcrumb_trail.len() {
-                        self.breadcrumb_trail[level_idx].file_sync_states.insert(dir_name.clone(), state);
-                    }
-                }
-                Err(_) => {
-                    // Silently ignore errors
-                }
-            }
-
-            // Done loading
-            self.loading_sync_states.remove(&sync_key);
+            // Send non-blocking request via API service
+            // Response will be handled by handle_api_response
+            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                folder_id: folder_id.clone(),
+                file_path: dir_path.clone(),
+                priority: api_service::Priority::Medium,
+            });
         }
     }
 
-    async fn fetch_selected_item_sync_state(&mut self) {
+    fn fetch_selected_item_sync_state(&mut self) {
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
@@ -826,34 +805,13 @@ impl App {
                     // Mark as loading
                     self.loading_sync_states.insert(sync_key.clone());
 
-                    // Try to get file sequence for cache validation
-                    // We need to fetch file info first to get the sequence
-                    match self.client.get_file_info(&level.folder_id, &file_path).await {
-                        Ok(file_details) => {
-                            let file_sequence = file_details.local.as_ref()
-                                .or(file_details.global.as_ref())
-                                .map(|f| f.sequence)
-                                .unwrap_or(0);
-
-                            // Check cache first
-                            let sync_state = if let Ok(Some(cached_state)) = self.cache.get_sync_state(&level.folder_id, &file_path, file_sequence) {
-                                cached_state
-                            } else {
-                                // Cache miss - determine state and save
-                                let state = file_details.determine_sync_state();
-                                let _ = self.cache.save_sync_state(&level.folder_id, &file_path, state, file_sequence);
-                                state
-                            };
-
-                            level.file_sync_states.insert(item.name.clone(), sync_state);
-                        }
-                        Err(_e) => {
-                            // Silently ignore errors
-                        }
-                    }
-
-                    // Done loading
-                    self.loading_sync_states.remove(&sync_key);
+                    // Send non-blocking request via API service
+                    // Response will be handled by handle_api_response
+                    let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                        folder_id: level.folder_id.clone(),
+                        file_path: file_path.clone(),
+                        priority: api_service::Priority::High, // High priority for selected item
+                    });
                 }
             }
         }
@@ -1186,7 +1144,9 @@ impl App {
 
         // Not receive-only or no local changes - just rescan
         self.client.rescan_folder(&folder_id).await?;
-        self.load_folder_statuses().await;
+
+        // Refresh statuses in background (non-blocking)
+        self.refresh_folder_statuses_nonblocking();
 
         Ok(())
     }
@@ -1467,7 +1427,10 @@ impl App {
                     let folder_id = folder_id.clone();
                     self.confirm_revert = None;
                     let _ = self.client.revert_folder(&folder_id).await;
-                    self.load_folder_statuses().await;
+
+                    // Refresh statuses in background (non-blocking)
+                    self.refresh_folder_statuses_nonblocking();
+
                     return Ok(());
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -2140,10 +2103,10 @@ async fn run_app<B: ratatui::backend::Backend>(
         app.prefetch_hovered_subdirectories(10, 15).await;
 
         // Fetch directory metadata states for visible directories in current level
-        app.fetch_directory_states(10).await;
+        app.fetch_directory_states(10);
 
         // Fetch selected item specifically (high priority for user interaction)
-        app.fetch_selected_item_sync_state().await;
+        app.fetch_selected_item_sync_state();
 
         // LOWEST PRIORITY: Batch fetch file sync states for visible files
         app.batch_fetch_visible_sync_states(5);
