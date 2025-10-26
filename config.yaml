@@ -1,0 +1,6 @@
+api_key: "AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN"
+base_url: "http://127.0.0.1:8384"
+path_map:
+  "/data": "/home/jeff/sync"
+  "/photos": "/home/jeff/Photos"
+

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/status?folder=lok75-7d42r\")",
+      "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/browse?folder=lok75-7d42r\")",
+      "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/status?folder=g3lsq-tta0y\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
