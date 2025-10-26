@@ -72,6 +72,7 @@ struct App {
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
     // Confirmation prompt state
     confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
+    confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
 }
 
 impl App {
@@ -113,6 +114,7 @@ impl App {
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
             confirm_revert: None,
+            confirm_delete: None,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -906,6 +908,59 @@ impl App {
         Ok(())
     }
 
+    async fn delete_ignored_file(&mut self) -> Result<()> {
+        // Only works when focused on a breadcrumb level (not folder list)
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return Ok(());
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return Ok(());
+        }
+
+        let level = &self.breadcrumb_trail[level_idx];
+
+        // Get selected item
+        let selected = match level.state.selected() {
+            Some(idx) => idx,
+            None => return Ok(()),
+        };
+
+        if selected >= level.items.len() {
+            return Ok(());
+        }
+
+        let item = &level.items[selected];
+
+        // Check if this is an ignored file
+        let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
+        if sync_state != SyncState::Ignored {
+            return Ok(()); // Only delete ignored files
+        }
+
+        // Build the full host path
+        let relative_path = if let Some(ref prefix) = level.prefix {
+            format!("{}/{}", prefix, item.name)
+        } else {
+            item.name.clone()
+        };
+        let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+
+        // Check if file exists on disk
+        if !std::path::Path::new(&host_path).exists() {
+            return Ok(()); // Nothing to delete
+        }
+
+        // Check if it's a directory
+        let is_dir = std::path::Path::new(&host_path).is_dir();
+
+        // Show confirmation prompt
+        self.confirm_delete = Some((host_path, item.name.clone(), is_dir));
+
+        Ok(())
+    }
+
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         // Handle confirmation prompts first
         if let Some((folder_id, _)) = &self.confirm_revert {
@@ -930,6 +985,42 @@ impl App {
             }
         }
 
+        // Handle delete confirmation prompt
+        if let Some((host_path, _name, is_dir)) = &self.confirm_delete {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // User confirmed - delete the file/directory
+                    let host_path = host_path.clone();
+                    let is_dir = *is_dir;
+                    self.confirm_delete = None;
+
+                    // Perform deletion
+                    let delete_result = if is_dir {
+                        std::fs::remove_dir_all(&host_path)
+                    } else {
+                        std::fs::remove_file(&host_path)
+                    };
+
+                    if delete_result.is_ok() {
+                        // Trigger rescan after successful deletion
+                        let _ = self.rescan_selected_folder().await;
+                    }
+                    // TODO: Show error message if deletion fails
+
+                    return Ok(());
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    // User cancelled
+                    self.confirm_delete = None;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while prompt is showing
+                    return Ok(());
+                }
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
@@ -939,6 +1030,10 @@ impl App {
             KeyCode::Char('R') => {
                 // Restore selected file (if remote-only/deleted locally)
                 let _ = self.restore_selected_file().await;
+            }
+            KeyCode::Char('d') => {
+                // Delete ignored file from disk (with confirmation)
+                let _ = self.delete_ignored_file().await;
             }
             KeyCode::Left | KeyCode::Backspace => {
                 self.go_back();
@@ -1140,7 +1235,21 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     "📄☁️ "
                                 }
                             }
-                            SyncState::Ignored => "🚫.. ",
+                            SyncState::Ignored => {
+                                // Check if file exists on disk
+                                let relative_path = if let Some(ref prefix) = level.prefix {
+                                    format!("{}/{}", prefix, item.name)
+                                } else {
+                                    item.name.clone()
+                                };
+                                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+
+                                if std::path::Path::new(&host_path).exists() {
+                                    "🚫⚠️ "  // Alarming - ignored file exists on disk
+                                } else {
+                                    "🚫.. "  // Normal - ignored file doesn't exist
+                                }
+                            }
                             SyncState::Unknown => {
                                 if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
                                     "📁🔄 "
@@ -1332,6 +1441,43 @@ async fn run_app<B: ratatui::backend::Backend>(
                         .borders(Borders::ALL)
                         .title("Confirm Revert")
                         .border_style(Style::default().fg(Color::Yellow)))
+                    .style(Style::default().fg(Color::White).bg(Color::Black))
+                    .wrap(ratatui::widgets::Wrap { trim: false });
+
+                f.render_widget(ratatui::widgets::Clear, prompt_area);
+                f.render_widget(prompt, prompt_area);
+            }
+
+            // Render delete confirmation prompt if active
+            if let Some((_host_path, display_name, is_dir)) = &app.confirm_delete {
+                let item_type = if *is_dir { "directory" } else { "file" };
+
+                let prompt_text = format!(
+                    "Delete {} from disk?\n\n\
+                    {}: {}\n\n\
+                    WARNING: This action cannot be undone!\n\n\
+                    Continue? (y/n)",
+                    item_type,
+                    if *is_dir { "Directory" } else { "File" },
+                    display_name
+                );
+
+                // Center the prompt
+                let area = f.size();
+                let prompt_width = 50;
+                let prompt_height = 11;
+                let prompt_area = ratatui::layout::Rect {
+                    x: (area.width.saturating_sub(prompt_width)) / 2,
+                    y: (area.height.saturating_sub(prompt_height)) / 2,
+                    width: prompt_width,
+                    height: prompt_height,
+                };
+
+                let prompt = Paragraph::new(prompt_text)
+                    .block(Block::default()
+                        .borders(Borders::ALL)
+                        .title("Confirm Delete")
+                        .border_style(Style::default().fg(Color::Red)))
                     .style(Style::default().fg(Color::White).bg(Color::Black))
                     .wrap(ratatui::widgets::Wrap { trim: false });
 
