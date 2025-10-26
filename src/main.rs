@@ -15,6 +15,7 @@ use ratatui::{
 use std::{collections::{HashMap, HashSet}, fs, io, time::{Duration, Instant}};
 
 mod api;
+mod api_service;
 mod cache;
 mod config;
 
@@ -75,6 +76,9 @@ struct App {
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
     pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
+    // API service channels
+    api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
+    api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
 }
 
 impl App {
@@ -152,6 +156,9 @@ impl App {
         let cache = CacheDb::new()?;
         let folders = client.get_folders().await?;
 
+        // Spawn API service worker
+        let (api_tx, api_rx) = api_service::spawn_api_service(client.clone());
+
         let mut app = App {
             client,
             cache,
@@ -171,6 +178,8 @@ impl App {
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
+            api_tx,
+            api_rx,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -235,6 +244,121 @@ impl App {
         }
     }
 
+    /// Handle API responses from background worker
+    fn handle_api_response(&mut self, response: api_service::ApiResponse) {
+        use api_service::ApiResponse;
+
+        match response {
+            ApiResponse::BrowseResult { folder_id, prefix, items } => {
+                // Mark browse as no longer loading
+                let browse_key = format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
+                self.loading_browse.remove(&browse_key);
+
+                let Ok(items) = items else {
+                    return; // Silently ignore errors
+                };
+
+                // Get folder sequence for cache
+                let folder_sequence = self.folder_statuses
+                    .get(&folder_id)
+                    .map(|s| s.sequence)
+                    .unwrap_or(0);
+
+                // Save to cache
+                let _ = self.cache.save_browse_items(&folder_id, prefix.as_deref(), &items, folder_sequence);
+
+                // Update UI if this browse result matches current navigation
+                if prefix.is_none() && self.focus_level == 1 && !self.breadcrumb_trail.is_empty() {
+                    // Root level update
+                    if self.breadcrumb_trail[0].folder_id == folder_id {
+                        self.breadcrumb_trail[0].items = items.clone();
+                        // Load sync states from cache
+                        let sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+                        self.breadcrumb_trail[0].file_sync_states = sync_states;
+                    }
+                } else if let Some(ref target_prefix) = prefix {
+                    // Load sync states first (before mutable borrow)
+                    let sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
+
+                    // Check if this matches a breadcrumb level
+                    for level in &mut self.breadcrumb_trail {
+                        if level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix) {
+                            level.items = items.clone();
+                            level.file_sync_states = sync_states.clone();
+                            break;
+                        }
+                    }
+                }
+            }
+
+            ApiResponse::FileInfoResult { folder_id, file_path, details } => {
+                // Mark as no longer loading
+                let sync_key = format!("{}:{}", folder_id, file_path);
+                self.loading_sync_states.remove(&sync_key);
+
+                let Ok(file_details) = details else {
+                    return; // Silently ignore errors
+                };
+
+                let file_sequence = file_details.local.as_ref()
+                    .or(file_details.global.as_ref())
+                    .map(|f| f.sequence)
+                    .unwrap_or(0);
+
+                let state = file_details.determine_sync_state();
+                let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
+
+                // Update UI if this file is visible in current level
+                for level in &mut self.breadcrumb_trail {
+                    if level.folder_id == folder_id {
+                        // Check if this file path belongs to this level
+                        let level_prefix = level.prefix.as_deref().unwrap_or("");
+                        if file_path.starts_with(level_prefix) {
+                            let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
+                            level.file_sync_states.insert(item_name.to_string(), state);
+                        }
+                    }
+                }
+            }
+
+            ApiResponse::FolderStatusResult { folder_id, status } => {
+                let Ok(status) = status else {
+                    return; // Silently ignore errors
+                };
+
+                let sequence = status.sequence;
+
+                // Check if sequence changed
+                if let Some(&last_seq) = self.last_known_sequences.get(&folder_id) {
+                    if last_seq != sequence {
+                        // Sequence changed! Invalidate cached data for this folder
+                        let _ = self.cache.invalidate_folder(&folder_id);
+
+                        // Clear in-memory sync states for this folder
+                        if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                            for level in &mut self.breadcrumb_trail {
+                                if level.folder_id == folder_id {
+                                    level.file_sync_states.clear();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update last known sequence
+                self.last_known_sequences.insert(folder_id.clone(), sequence);
+
+                // Save and use fresh status
+                let _ = self.cache.save_folder_status(&folder_id, &status, sequence);
+                self.folder_statuses.insert(folder_id, status);
+            }
+
+            // Other response types can be handled as needed
+            _ => {
+                // Ignore responses we don't need to handle immediately
+            }
+        }
+    }
 
     fn load_sync_states_from_cache(&self, folder_id: &str, items: &[BrowseItem], prefix: Option<&str>) -> HashMap<String, SyncState> {
         let mut sync_states = HashMap::new();
@@ -717,7 +841,7 @@ impl App {
         Ok(())
     }
 
-    async fn enter_directory(&mut self) -> Result<()> {
+    fn enter_directory(&mut self) -> Result<()> {
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
@@ -755,24 +879,26 @@ impl App {
                 // Create key for tracking in-flight operations
                 let browse_key = format!("{}:{}", folder_id, new_prefix);
 
-                // Try cache first
+                // Try cache first - show cached data immediately if available
                 let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
+                    // Have cached data - use it immediately
                     cached_items
                 } else if self.loading_browse.contains(&browse_key) {
                     // Already loading this path, skip to avoid duplicate work
                     return Ok(());
                 } else {
-                    // Mark as loading
+                    // Cache miss - request fresh data via API service (non-blocking)
                     self.loading_browse.insert(browse_key.clone());
 
-                    // Cache miss - fetch from API
-                    let items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
-                    let _ = self.cache.save_browse_items(&folder_id, Some(&new_prefix), &items, folder_sequence);
+                    let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                        folder_id: folder_id.clone(),
+                        prefix: Some(new_prefix.clone()),
+                        priority: api_service::Priority::High,
+                    });
 
-                    // Done loading
-                    self.loading_browse.remove(&browse_key);
-
-                    items
+                    // For now, return empty list - UI will update when response arrives
+                    // TODO: Could show a loading indicator here
+                    Vec::new()
                 };
 
                 let mut state = ListState::default();
@@ -1402,7 +1528,7 @@ impl App {
                 if self.focus_level == 0 {
                     self.load_root_level().await?;
                 } else {
-                    self.enter_directory().await?;
+                    self.enter_directory()?;
                 }
             }
             KeyCode::Up => {
@@ -1883,6 +2009,11 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         if app.should_quit {
             break;
+        }
+
+        // Process API responses (non-blocking)
+        while let Ok(response) = app.api_rx.try_recv() {
+            app.handle_api_response(response);
         }
 
         // Check for periodic status updates

@@ -42,8 +42,8 @@ Display visual indicators for file/folder states:
 
 ### User Actions
 
-- `i`: Add directory to `.stignore` via `PUT /rest/db/ignores`
-- `d`: Add to `.stignore` AND delete locally (with confirmation prompt)
+- `i`: Toggle directory in `.stignore` via `PUT /rest/db/ignores`
+- `I`: Add to `.stignore` AND delete locally (with confirmation prompt)
 - `r`: Rescan folder via `POST /rest/db/scan`
 - `p`: Pause/resume folder
 

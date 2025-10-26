@@ -1,4 +1,4 @@
-api_key: "AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN"
+api_key: "P3bR2oc3Dte2GCtcYvpAkbytTnR7iWSC"
 base_url: "http://127.0.0.1:8384"
 path_map:
   "/data": "/home/jeff/sync"
