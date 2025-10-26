@@ -1029,6 +1029,7 @@ impl App {
 
         let level = &self.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
+        let prefix = level.prefix.clone();
 
         // Get selected item
         let selected = match level.state.selected() {
@@ -1045,7 +1046,7 @@ impl App {
         let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
 
         // Build the relative path from folder root
-        let relative_path = if let Some(ref prefix) = level.prefix {
+        let relative_path = if let Some(ref prefix) = prefix {
             format!("{}/{}", prefix, item.name)
         } else {
             item.name.clone()
@@ -1073,17 +1074,28 @@ impl App {
 
                 self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
 
-                // Clear the state so background prefetch will fetch it fresh
+                // Immediately show as Unknown to give user feedback
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                    level.file_sync_states.remove(&item_name);
+                    level.file_sync_states.insert(item_name.clone(), SyncState::Unknown);
                 }
 
-                // Trigger rescan in background
-                let client = self.client.clone();
-                let folder_id_clone = folder_id.clone();
-                tokio::spawn(async move {
-                    let _ = client.rescan_folder(&folder_id_clone).await;
-                });
+                // Wait for rescan to complete so Syncthing processes the ignore change
+                self.client.rescan_folder(&folder_id).await?;
+
+                // Now fetch the fresh state
+                let file_path_for_api = if let Some(ref prefix) = prefix {
+                    format!("{}/{}", prefix.trim_matches('/'), item_name)
+                } else {
+                    item_name.clone()
+                };
+
+                // Fetch and update state
+                if let Ok(file_details) = self.client.get_file_info(&folder_id, &file_path_for_api).await {
+                    let new_state = file_details.determine_sync_state();
+                    if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                        level.file_sync_states.insert(item_name, new_state);
+                    }
+                }
             } else {
                 // Multiple patterns match - show selection menu
                 let mut selection_state = ListState::default();
@@ -1313,19 +1325,39 @@ impl App {
 
                         self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
 
-                        // Clear the state so background prefetch will fetch it fresh
+                        // Immediately show as Unknown to give user feedback
                         if self.focus_level > 0 && self.focus_level <= self.breadcrumb_trail.len() {
                             let level_idx = self.focus_level - 1;
                             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                                level.file_sync_states.remove(&item_name);
+                                level.file_sync_states.insert(item_name.clone(), SyncState::Unknown);
                             }
                         }
 
-                        // Trigger rescan in background
-                        let client = self.client.clone();
-                        tokio::spawn(async move {
-                            let _ = client.rescan_folder(&folder_id).await;
-                        });
+                        // Wait for rescan to complete so Syncthing processes the ignore change
+                        self.client.rescan_folder(&folder_id).await?;
+
+                        // Now fetch the fresh state
+                        if self.focus_level > 0 && self.focus_level <= self.breadcrumb_trail.len() {
+                            let level_idx = self.focus_level - 1;
+
+                            let file_path_for_api = if let Some(level) = self.breadcrumb_trail.get(level_idx) {
+                                if let Some(ref prefix) = level.prefix {
+                                    format!("{}/{}", prefix.trim_matches('/'), &item_name)
+                                } else {
+                                    item_name.clone()
+                                }
+                            } else {
+                                item_name.clone()
+                            };
+
+                            // Fetch and update state
+                            if let Ok(file_details) = self.client.get_file_info(&folder_id, &file_path_for_api).await {
+                                let new_state = file_details.determine_sync_state();
+                                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                                    level.file_sync_states.insert(item_name, new_state);
+                                }
+                            }
+                        }
                     }
                     return Ok(());
                 }
