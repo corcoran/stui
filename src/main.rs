@@ -99,6 +99,7 @@ struct App {
     // Track in-flight operations to prevent duplicate fetches
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
+    discovered_dirs: std::collections::HashSet<String>, // Set of "folder_id:prefix" already discovered (to prevent re-querying cache)
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
     // Confirmation prompt state
@@ -206,6 +207,7 @@ impl App {
             should_quit: false,
             loading_browse: HashSet::new(),
             loading_sync_states: HashSet::new(),
+            discovered_dirs: HashSet::new(),
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
             confirm_revert: None,
@@ -398,6 +400,9 @@ impl App {
                                 }
                             }
                         }
+
+                        // Clear discovered directories for this folder (so they get re-discovered with new sequence)
+                        self.discovered_dirs.retain(|key| !key.starts_with(&format!("{}:", folder_id)));
                     }
                 }
 
@@ -407,6 +412,20 @@ impl App {
                 // Save and use fresh status
                 let _ = self.cache.save_folder_status(&folder_id, &status, sequence);
                 self.folder_statuses.insert(folder_id, status);
+            }
+
+            ApiResponse::RescanResult { folder_id, success, error } => {
+                if success {
+                    log_debug(&format!("DEBUG [RescanResult]: Successfully rescanned folder={}, requesting immediate status update", folder_id));
+
+                    // Immediately request folder status to detect sequence changes
+                    // This makes the rescan feel more responsive
+                    let _ = self.api_tx.send(api_service::ApiRequest::GetFolderStatus {
+                        folder_id,
+                    });
+                } else {
+                    log_debug(&format!("DEBUG [RescanResult ERROR]: Failed to rescan folder={} error={:?}", folder_id, error));
+                }
             }
 
             // Other response types can be handled as needed
@@ -630,6 +649,11 @@ impl App {
 
         let browse_key = format!("{}:{}", folder_id, dir_path);
 
+        // Check if already discovered (prevent re-querying cache every frame)
+        if self.discovered_dirs.contains(&browse_key) {
+            return;
+        }
+
         // Check if already loading
         if self.loading_browse.contains(&browse_key) {
             return;
@@ -657,6 +681,9 @@ impl App {
             self.loading_browse.remove(&browse_key);
             items
         };
+
+        // Mark this directory as discovered to prevent re-querying
+        self.discovered_dirs.insert(browse_key);
 
         // Add all subdirectories to result list
         for item in &items {
@@ -1099,7 +1126,7 @@ impl App {
         }
     }
 
-    async fn rescan_selected_folder(&mut self) -> Result<()> {
+    fn rescan_selected_folder(&mut self) -> Result<()> {
         // Get the folder ID to rescan
         let folder_id = if self.focus_level == 0 {
             // On folder list - rescan selected folder
@@ -1121,12 +1148,12 @@ impl App {
             }
         };
 
-        // Trigger rescan via API
-        self.client.rescan_folder(&folder_id).await?;
+        log_debug(&format!("DEBUG [rescan_selected_folder]: Requesting rescan for folder={}", folder_id));
 
-        // Immediately refresh folder statuses to pick up the sequence change
-        // This will detect the sequence change and clear states automatically
-        self.load_folder_statuses().await;
+        // Trigger rescan via non-blocking API
+        let _ = self.api_tx.send(api_service::ApiRequest::RescanFolder {
+            folder_id,
+        });
 
         Ok(())
     }
@@ -1473,7 +1500,7 @@ impl App {
 
                     if delete_result.is_ok() {
                         // Trigger rescan after successful deletion
-                        let _ = self.rescan_selected_folder().await;
+                        let _ = self.rescan_selected_folder();
                     }
                     // TODO: Show error message if deletion fails
 
@@ -1578,7 +1605,7 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
                 // Rescan the selected/current folder
-                let _ = self.rescan_selected_folder().await;
+                let _ = self.rescan_selected_folder();
             }
             KeyCode::Char('R') => {
                 // Restore selected file (if remote-only/deleted locally)
