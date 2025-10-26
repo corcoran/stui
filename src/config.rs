@@ -1,0 +1,34 @@
+use serde::Deserialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub api_key: String,
+    pub base_url: String,
+    #[allow(dead_code)]
+    pub path_map: HashMap<String, String>,
+    #[serde(default)]
+    pub vim_mode: bool,
+    #[serde(default = "default_icon_mode")]
+    pub icon_mode: String,
+    #[serde(default)]
+    pub open_command: Option<String>,
+    #[serde(default)]
+    pub clipboard_command: Option<String>,
+    #[serde(default = "default_image_preview_enabled")]
+    pub image_preview_enabled: bool,
+    #[serde(default = "default_image_protocol")]
+    pub image_protocol: String,
+}
+
+fn default_icon_mode() -> String {
+    "nerdfont".to_string()
+}
+
+fn default_image_preview_enabled() -> bool {
+    true
+}
+
+fn default_image_protocol() -> String {
+    "auto".to_string()
+}

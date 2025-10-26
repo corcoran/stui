@@ -1,0 +1,24 @@
+[package]
+name = "synctui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+crossterm = "0.29"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+urlencoding = "2.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5.0"
+glob = "0.3"
+clap = { version = "4.5", features = ["derive"] }
+unicode-width = "0.1"
+ratatui-image = "8.0"
+image = { version = "0.25", default-features = true }
+codepage-437 = "0.1"
+
