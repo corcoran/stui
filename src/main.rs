@@ -23,6 +23,18 @@ use api::{BrowseItem, Folder, FolderStatus, SyncState, SyncthingClient};
 use cache::CacheDb;
 use config::Config;
 
+fn log_debug(msg: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-debug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -809,6 +821,8 @@ impl App {
                     .map(|s| s.sequence)
                     .unwrap_or(0);
 
+                log_debug(&format!("DEBUG [load_root_level]: folder={} using sequence={}", folder.id, folder_sequence));
+
                 // Create key for tracking in-flight operations
                 let browse_key = format!("{}:", folder.id); // Empty prefix for root
 
@@ -826,7 +840,9 @@ impl App {
                     // Cache miss - fetch from API (BLOCKING for root level)
                     self.cache_hit = Some(false);
                     let items = self.client.browse_folder(&folder.id, None).await?;
-                    let _ = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence);
+                    if let Err(e) = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence) {
+                        log_debug(&format!("ERROR saving root cache: {}", e));
+                    }
 
                     // Done loading
                     self.loading_browse.remove(&browse_key);

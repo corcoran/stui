@@ -1,8 +1,20 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 use crate::api::{BrowseItem, FolderStatus, SyncState};
+
+fn log_debug(msg: &str) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-debug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
 
 pub struct CacheDb {
     conn: Connection,
@@ -151,25 +163,34 @@ impl CacheDb {
 
     // Browse cache
     pub fn get_browse_items(&self, folder_id: &str, prefix: Option<&str>, folder_sequence: u64) -> Result<Option<Vec<BrowseItem>>> {
+        // Convert None to empty string for PRIMARY KEY compatibility
+        let prefix_str = prefix.unwrap_or("");
+
         // Check if cache is valid first
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT folder_sequence FROM browse_cache
-             WHERE folder_id = ?1 AND prefix IS ?2 LIMIT 1"
+             WHERE folder_id = ?1 AND prefix = ?2 LIMIT 1"
         )?;
 
-        let cached_seq: Option<i64> = stmt.query_row(params![folder_id, prefix], |row| row.get(0)).ok();
+        let cached_seq: Option<i64> = stmt.query_row(params![folder_id, prefix_str], |row| row.get(0)).ok();
+
+        log_debug(&format!("DEBUG [get_browse_items]: folder={} prefix={:?} requested_seq={} cached_seq={:?}",
+                  folder_id, prefix, folder_sequence, cached_seq));
 
         if cached_seq.map_or(false, |seq| seq as u64 != folder_sequence) || cached_seq.is_none() {
+            log_debug(&format!("DEBUG [get_browse_items]: Cache MISS - returning None"));
             return Ok(None); // Cache is stale or doesn't exist
         }
+
+        log_debug(&format!("DEBUG [get_browse_items]: Cache HIT - fetching items"));
 
         // Fetch cached items
         let mut stmt = self.conn.prepare(
             "SELECT name, item_type FROM browse_cache
-             WHERE folder_id = ?1 AND prefix IS ?2"
+             WHERE folder_id = ?1 AND prefix = ?2"
         )?;
 
-        let items = stmt.query_map(params![folder_id, prefix], |row| {
+        let items = stmt.query_map(params![folder_id, prefix_str], |row| {
             Ok(BrowseItem {
                 name: row.get(0)?,
                 item_type: row.get(1)?,
@@ -181,14 +202,21 @@ impl CacheDb {
     }
 
     pub fn save_browse_items(&self, folder_id: &str, prefix: Option<&str>, items: &[BrowseItem], folder_sequence: u64) -> Result<()> {
+        // Convert None to empty string for PRIMARY KEY compatibility
+        let prefix_str = prefix.unwrap_or("");
+
+        log_debug(&format!("DEBUG [save_browse_items]: folder={} prefix={:?} seq={} item_count={}",
+                  folder_id, prefix, folder_sequence, items.len()));
+
         // Use a transaction for better performance with many items
         let tx = self.conn.unchecked_transaction()?;
 
         // Delete old entries for this folder/prefix
-        tx.execute(
-            "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix IS ?2",
-            params![folder_id, prefix],
+        let deleted = tx.execute(
+            "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
+            params![folder_id, prefix_str],
         )?;
+        log_debug(&format!("DEBUG [save_browse_items]: Deleted {} old entries", deleted));
 
         // Insert new entries
         {
@@ -197,18 +225,29 @@ impl CacheDb {
                  VALUES (?1, ?2, ?3, ?4, ?5)"
             )?;
 
-            for item in items {
-                stmt.execute(params![
+            log_debug(&format!("DEBUG [save_browse_items]: Starting insert loop for {} items", items.len()));
+            for (idx, item) in items.iter().enumerate() {
+                match stmt.execute(params![
                     folder_id,
                     folder_sequence as i64,
-                    prefix,
+                    prefix_str,
                     &item.name,
                     &item.item_type,
-                ])?;
+                ]) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        log_debug(&format!("DEBUG [save_browse_items]: Insert failed at item {}: {} (name={}, type={})",
+                                           idx, e, item.name, item.item_type));
+                        return Err(e.into());
+                    }
+                }
             }
+            log_debug(&format!("DEBUG [save_browse_items]: All inserts completed"));
         }
 
+        log_debug(&format!("DEBUG [save_browse_items]: Committing transaction"));
         tx.commit()?;
+        log_debug(&format!("DEBUG [save_browse_items]: Successfully saved {} items", items.len()));
         Ok(())
     }
 
@@ -288,8 +327,10 @@ impl CacheDb {
 
     // Invalidate all cache for a folder when sequence changes
     pub fn invalidate_folder(&self, folder_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM browse_cache WHERE folder_id = ?1", params![folder_id])?;
-        self.conn.execute("DELETE FROM sync_states WHERE folder_id = ?1", params![folder_id])?;
+        log_debug(&format!("DEBUG [invalidate_folder]: Invalidating all cache for folder={}", folder_id));
+        let browse_deleted = self.conn.execute("DELETE FROM browse_cache WHERE folder_id = ?1", params![folder_id])?;
+        let sync_deleted = self.conn.execute("DELETE FROM sync_states WHERE folder_id = ?1", params![folder_id])?;
+        log_debug(&format!("DEBUG [invalidate_folder]: Deleted {} browse entries, {} sync entries", browse_deleted, sync_deleted));
         Ok(())
     }
 }
