@@ -66,6 +66,16 @@ pub struct FolderStatus {
     #[allow(dead_code)]
     pub need_symlinks: u64,
     pub need_total_items: u64,
+    pub receive_only_changed_bytes: u64,
+    #[allow(dead_code)]
+    pub receive_only_changed_deletes: u64,
+    #[allow(dead_code)]
+    pub receive_only_changed_directories: u64,
+    #[allow(dead_code)]
+    pub receive_only_changed_files: u64,
+    #[allow(dead_code)]
+    pub receive_only_changed_symlinks: u64,
+    pub receive_only_total_items: u64,
 }
 
 pub struct SyncthingClient {

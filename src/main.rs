@@ -544,7 +544,26 @@ async fn run_app<B: ratatui::backend::Backend>(
                             let state_display = if status.state.is_empty() { "paused" } else { &status.state };
                             let in_sync = status.global_total_items.saturating_sub(status.need_total_items);
                             let items_display = format!("{}/{}", in_sync, status.global_total_items);
-                            let need_display = if status.need_total_items > 0 {
+
+                            // Build status message considering both remote needs and local additions
+                            let need_display = if status.receive_only_total_items > 0 {
+                                // Has local additions
+                                if status.need_total_items > 0 {
+                                    // Both local additions and remote needs
+                                    format!("↓{} ↑{} ({})",
+                                        status.need_total_items,
+                                        status.receive_only_total_items,
+                                        format_bytes(status.need_bytes + status.receive_only_changed_bytes)
+                                    )
+                                } else {
+                                    // Only local additions
+                                    format!("Local: {} items ({})",
+                                        status.receive_only_total_items,
+                                        format_bytes(status.receive_only_changed_bytes)
+                                    )
+                                }
+                            } else if status.need_total_items > 0 {
+                                // Only remote needs
                                 format!("{} items ({}) ", status.need_total_items, format_bytes(status.need_bytes))
                             } else {
                                 "Up to date ".to_string()
