@@ -128,6 +128,12 @@ impl App {
     async fn load_root_level(&mut self) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
             if let Some(folder) = self.folders.get(selected) {
+                // Don't try to browse paused folders
+                if folder.paused {
+                    // Stay on folder list, don't enter the folder
+                    return Ok(());
+                }
+
                 let items = self.client.browse_folder(&folder.id, None).await?;
 
                 let mut state = ListState::default();
