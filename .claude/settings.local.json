@@ -12,7 +12,9 @@
       "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/system/config\")",
       "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/completion?folder=lok75-7d42r&device=52FR4F4-LN42VJ2-TR7JBXK-E677E6V-IS7ISBO-XG6OORV-W6OC2I3-QN3UTAW\")",
       "Bash(curl -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/file?folder=lok75-7d42r&file=.thumbnails\")",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/browse?folder=lok75-7d42r&prefix=Movies/\")",
+      "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/system/config\")"
     ],
     "deny": [],
     "ask": []

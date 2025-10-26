@@ -261,6 +261,54 @@ impl SyncthingClient {
 
         Ok(details)
     }
+
+    pub async fn rescan_folder(&self, folder_id: &str) -> Result<()> {
+        let url = format!("{}/rest/db/scan?folder={}", self.base_url, folder_id);
+        self.client
+            .post(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to trigger rescan")?;
+
+        Ok(())
+    }
+
+    pub async fn revert_folder(&self, folder_id: &str) -> Result<()> {
+        let url = format!("{}/rest/db/revert?folder={}", self.base_url, folder_id);
+        self.client
+            .post(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to revert folder")?;
+
+        Ok(())
+    }
+
+    pub async fn get_local_changed_files(&self, folder_id: &str) -> Result<Vec<String>> {
+        let url = format!("{}/rest/db/localchanged?folder={}", self.base_url, folder_id);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch local changed files")?;
+
+        #[derive(Deserialize)]
+        struct LocalChangedResponse {
+            files: Vec<FileInfo>,
+        }
+
+        let data: LocalChangedResponse = response
+            .json()
+            .await
+            .context("Failed to parse local changed files")?;
+
+        // Extract just the filenames
+        Ok(data.files.iter().map(|f| f.name.clone()).collect())
+    }
 }
 
 impl FileDetails {

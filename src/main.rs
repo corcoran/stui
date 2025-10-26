@@ -69,6 +69,9 @@ struct App {
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
+    last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
+    // Confirmation prompt state
+    confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
 }
 
 impl App {
@@ -108,6 +111,8 @@ impl App {
             loading_browse: HashSet::new(),
             loading_sync_states: HashSet::new(),
             prefetch_enabled: true,
+            last_known_sequences: HashMap::new(),
+            confirm_revert: None,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -135,16 +140,25 @@ impl App {
             if let Ok(status) = self.client.get_folder_status(&folder.id).await {
                 let sequence = status.sequence;
 
-                // Check if cache is still valid
-                if let Ok(true) = self.cache.is_folder_status_valid(&folder.id, sequence) {
-                    // Cache is still good, use it
-                    if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
-                        self.folder_statuses.insert(folder.id.clone(), cached_status);
-                        continue;
+                // Check if sequence changed from last known value
+                if let Some(&last_seq) = self.last_known_sequences.get(&folder.id) {
+                    if last_seq != sequence {
+                        // Sequence changed! Invalidate all cached data for this folder
+                        let _ = self.cache.invalidate_folder(&folder.id);
+
+                        // Clear in-memory sync states for this folder from breadcrumb trail
+                        for level in &mut self.breadcrumb_trail {
+                            if level.folder_id == folder.id {
+                                level.file_sync_states.clear();
+                            }
+                        }
                     }
                 }
 
-                // Cache stale or miss - use fresh status and save to cache
+                // Update last known sequence
+                self.last_known_sequences.insert(folder.id.clone(), sequence);
+
+                // Save fresh status and use it
                 let _ = self.cache.save_folder_status(&folder.id, &status, sequence);
                 self.folder_statuses.insert(folder.id.clone(), status);
             }
@@ -828,12 +842,103 @@ impl App {
         }
     }
 
+    async fn rescan_selected_folder(&mut self) -> Result<()> {
+        // Get the folder ID to rescan
+        let folder_id = if self.focus_level == 0 {
+            // On folder list - rescan selected folder
+            if let Some(selected) = self.folders_state.selected() {
+                if let Some(folder) = self.folders.get(selected) {
+                    folder.id.clone()
+                } else {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        } else {
+            // In a breadcrumb level - rescan the current folder
+            if !self.breadcrumb_trail.is_empty() {
+                self.breadcrumb_trail[0].folder_id.clone()
+            } else {
+                return Ok(());
+            }
+        };
+
+        // Trigger rescan via API
+        self.client.rescan_folder(&folder_id).await?;
+
+        // Immediately refresh folder statuses to pick up the sequence change
+        self.load_folder_statuses().await;
+
+        Ok(())
+    }
+
+    async fn restore_selected_file(&mut self) -> Result<()> {
+        // Only works when focused on a breadcrumb level (not folder list)
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return Ok(());
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return Ok(());
+        }
+
+        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+
+        // Check if this is a receive-only folder with local changes
+        if let Some(status) = self.folder_statuses.get(&folder_id) {
+            if status.receive_only_total_items > 0 {
+                // Receive-only folder with local changes - fetch the list of changed files
+                let changed_files = self.client.get_local_changed_files(&folder_id).await
+                    .unwrap_or_else(|_| Vec::new());
+
+                // Show confirmation prompt with file list
+                self.confirm_revert = Some((folder_id, changed_files));
+                return Ok(());
+            }
+        }
+
+        // Not receive-only or no local changes - just rescan
+        self.client.rescan_folder(&folder_id).await?;
+        self.load_folder_statuses().await;
+
+        Ok(())
+    }
+
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Handle confirmation prompts first
+        if let Some((folder_id, _)) = &self.confirm_revert {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // User confirmed - revert the folder
+                    let folder_id = folder_id.clone();
+                    self.confirm_revert = None;
+                    let _ = self.client.revert_folder(&folder_id).await;
+                    self.load_folder_statuses().await;
+                    return Ok(());
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    // User cancelled
+                    self.confirm_revert = None;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while prompt is showing
+                    return Ok(());
+                }
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
-                // Manual refresh of folder statuses
-                self.load_folder_statuses().await;
+                // Rescan the selected/current folder
+                let _ = self.rescan_selected_folder().await;
+            }
+            KeyCode::Char('R') => {
+                // Restore selected file (if remote-only/deleted locally)
+                let _ = self.restore_selected_file().await;
             }
             KeyCode::Left | KeyCode::Backspace => {
                 self.go_back();
@@ -1185,6 +1290,54 @@ async fn run_app<B: ratatui::backend::Backend>(
                 .style(Style::default().fg(Color::White));
 
             f.render_widget(status_bar, status_area);
+
+            // Render confirmation prompt if active
+            if let Some((_folder_id, changed_files)) = &app.confirm_revert {
+                let file_list = changed_files.iter()
+                    .take(5)
+                    .map(|f| format!("  - {}", f))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let more_text = if changed_files.len() > 5 {
+                    format!("\n  ... and {} more", changed_files.len() - 5)
+                } else {
+                    String::new()
+                };
+
+                let prompt_text = format!(
+                    "Revert folder to restore deleted files?\n\n\
+                    WARNING: This will remove {} local change(s):\n{}{}\n\n\
+                    Continue? (y/n)",
+                    changed_files.len(),
+                    file_list,
+                    more_text
+                );
+
+                // Center the prompt - adjust height based on number of files shown
+                let area = f.size();
+                let prompt_width = 60;
+                let base_height = 10;
+                let file_lines = changed_files.len().min(5);
+                let prompt_height = base_height + file_lines as u16;
+                let prompt_area = ratatui::layout::Rect {
+                    x: (area.width.saturating_sub(prompt_width)) / 2,
+                    y: (area.height.saturating_sub(prompt_height)) / 2,
+                    width: prompt_width,
+                    height: prompt_height,
+                };
+
+                let prompt = Paragraph::new(prompt_text)
+                    .block(Block::default()
+                        .borders(Borders::ALL)
+                        .title("Confirm Revert")
+                        .border_style(Style::default().fg(Color::Yellow)))
+                    .style(Style::default().fg(Color::White).bg(Color::Black))
+                    .wrap(ratatui::widgets::Wrap { trim: false });
+
+                f.render_widget(ratatui::widgets::Clear, prompt_area);
+                f.render_widget(prompt, prompt_area);
+            }
         })?;
 
         if app.should_quit {
