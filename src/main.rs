@@ -12,12 +12,12 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
-use std::{collections::HashMap, fs, io, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::{self, OpenOptions}, io::{self, Write}, time::{Duration, Instant}};
 
 mod api;
 mod config;
 
-use api::{BrowseItem, Folder, FolderStatus, SyncthingClient};
+use api::{BrowseItem, Folder, FolderStatus, SyncState, SyncthingClient};
 use config::Config;
 
 fn format_bytes(bytes: u64) -> String {
@@ -48,6 +48,7 @@ struct BreadcrumbLevel {
     items: Vec<BrowseItem>,
     state: ListState,
     translated_base_path: String,  // Cached translated base path for this level
+    file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
 }
 
 struct App {
@@ -64,6 +65,16 @@ struct App {
 }
 
 impl App {
+    fn log(message: &str) {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/synctui.log")
+        {
+            let _ = writeln!(file, "{}", message);
+        }
+    }
+
     fn translate_path(&self, folder: &Folder, relative_path: &str) -> String {
         // Get the full container path
         let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
@@ -125,6 +136,45 @@ impl App {
         }
     }
 
+
+    async fn fetch_selected_item_sync_state(&mut self) {
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(selected_idx) = level.state.selected() {
+                if let Some(item) = level.items.get(selected_idx) {
+                    // Check if we already have the sync state cached
+                    if level.file_sync_states.contains_key(&item.name) {
+                        return;
+                    }
+
+                    // Build the file path for the API call
+                    let file_path = if let Some(ref prefix) = level.prefix {
+                        format!("{}{}", prefix, item.name)
+                    } else {
+                        item.name.clone()
+                    };
+
+                    // Fetch file info from API
+                    Self::log(&format!("[DEBUG] Fetching sync state for: folder={}, path={}", level.folder_id, file_path));
+                    match self.client.get_file_info(&level.folder_id, &file_path).await {
+                        Ok(file_details) => {
+                            let sync_state = file_details.determine_sync_state();
+                            Self::log(&format!("[DEBUG] Sync state for {}: {:?}", item.name, sync_state));
+                            level.file_sync_states.insert(item.name.clone(), sync_state);
+                        }
+                        Err(e) => {
+                            Self::log(&format!("[ERROR] Failed to fetch sync state for {}: {}", file_path, e));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn load_root_level(&mut self) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
             if let Some(folder) = self.folders.get(selected) {
@@ -152,6 +202,7 @@ impl App {
                     items,
                     state,
                     translated_base_path,
+                    file_sync_states: HashMap::new(),
                 }];
                 self.focus_level = 1;
             }
@@ -219,6 +270,7 @@ impl App {
                     items,
                     state,
                     translated_base_path,
+                    file_sync_states: HashMap::new(),
                 });
 
                 self.focus_level += 1;
@@ -422,29 +474,29 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .map(|folder| {
                         let display_name = folder.label.as_ref().unwrap_or(&folder.id);
 
-                        // Determine status icon
+                        // Determine folder icon based on status
                         let icon = if !app.statuses_loaded {
-                            "🔍 " // Loading
+                            "📁🔍 " // Loading
                         } else if folder.paused {
-                            "⏸  " // Paused
+                            "📁⏸  " // Paused
                         } else if let Some(status) = app.folder_statuses.get(&folder.id) {
                             if status.state == "" || status.state == "paused" {
-                                "⏸  " // Paused (empty state means paused)
+                                "📁⏸  " // Paused (empty state means paused)
                             } else if status.state == "syncing" {
-                                "🔄 " // Syncing
-                            } else if status.need_total_items > 0 {
-                                "⚠️ " // Out of sync
+                                "📁🔄 " // Syncing
+                            } else if status.need_total_items > 0 || status.receive_only_total_items > 0 {
+                                "📁⚠️ " // Out of sync or has local additions
                             } else if status.state == "idle" {
-                                "✅ " // Synced
+                                "📁✅ " // Synced
                             } else if status.state.starts_with("sync") {
-                                "🔄 " // Any sync variant
+                                "📁🔄 " // Any sync variant
                             } else if status.state == "scanning" {
-                                "🔍 " // Scanning
+                                "📁🔍 " // Scanning
                             } else {
-                                "❓ " // Unknown state
+                                "📁❓ " // Unknown state
                             }
                         } else {
-                            "❌ " // Error fetching status
+                            "📁❌ " // Error fetching status
                         };
 
                         ListItem::new(Span::raw(format!("{}{}", icon, display_name)))
@@ -484,10 +536,53 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .items
                     .iter()
                     .map(|item| {
-                        let icon = match item.item_type.as_str() {
-                            "FILE_INFO_TYPE_DIRECTORY" => "📁 ",
-                            "FILE_INFO_TYPE_FILE" => "📄 ",
-                            _ => "❓ ",
+                        // Check for cached sync state
+                        let icon = if let Some(sync_state) = level.file_sync_states.get(&item.name) {
+                            match sync_state {
+                                SyncState::Synced => {
+                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                        "📁✅ "
+                                    } else {
+                                        "📄✅ "
+                                    }
+                                }
+                                SyncState::OutOfSync => {
+                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                        "📁⚠️ "
+                                    } else {
+                                        "📄⚠️ "
+                                    }
+                                }
+                                SyncState::LocalOnly => {
+                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                        "📁💻 "
+                                    } else {
+                                        "📄💻 "
+                                    }
+                                }
+                                SyncState::RemoteOnly => {
+                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                        "📁☁️ "
+                                    } else {
+                                        "📄☁️ "
+                                    }
+                                }
+                                SyncState::Ignored => "🚫.. ",
+                                SyncState::Unknown => {
+                                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                                        "📁❓ "
+                                    } else {
+                                        "📄❓ "
+                                    }
+                                }
+                            }
+                        } else {
+                            // No sync state cached yet, show default icons with placeholder for consistent spacing
+                            match item.item_type.as_str() {
+                                "FILE_INFO_TYPE_DIRECTORY" => "📁.. ",
+                                "FILE_INFO_TYPE_FILE" => "📄.. ",
+                                _ => "❓.. ",
+                            }
                         };
                         ListItem::new(Span::raw(format!("{}{}", icon, item.name)))
                     })
@@ -638,6 +733,9 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         // Check for periodic status updates
         app.check_and_update_statuses().await;
+
+        // Fetch sync state for selected item in breadcrumb trail
+        app.fetch_selected_item_sync_state().await;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {

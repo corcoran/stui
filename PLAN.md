@@ -59,7 +59,19 @@ Create a minimal working prototype that queries Syncthing’s REST API and lists
      - ☁️ remote-only
      - ⚠️ out-of-sync
 
-6. **Basic Error Handling**
+6. **Persistent cache**
+   - Improve the caching to include storage in a local database, possibly
+     sqlite. Caching should be done intelligently: 1) Current folders/files that
+     are displayed and cached 2) 1 level deeper is also fetched + cached.
+   - Caching should persist app restarts and should take into consideration
+     "last updated" timestamps to know when to invalidate and re-scan
+
+7. **Filtering**
+   - Add the ability to filter through each type of file by pressing "f". If a
+     file matches one of the filters and is nested, show the directory in order
+     for the user to be able to traverse this.
+
+8. **Basic Error Handling**
    - Graceful error display if API unavailable.
    - Handle timeouts and authentication errors.
 

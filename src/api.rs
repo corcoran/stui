@@ -23,6 +23,76 @@ pub struct BrowseItem {
     pub item_type: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncState {
+    Synced,       // ✅ Local matches global
+    OutOfSync,    // ⚠️ Local differs from global
+    LocalOnly,    // 💻 Only on this device
+    RemoteOnly,   // ☁️ Only on remote devices
+    Ignored,      // 🚫 In .stignore
+    Unknown,      // ❓ Not yet determined
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileInfo {
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub invalid: bool,
+    #[serde(default)]
+    pub sequence: u64,
+    #[serde(default)]
+    pub blocks_hash: Option<String>,
+    #[serde(default)]
+    pub version: Vec<String>,
+    // Additional fields that may be present
+    #[serde(default)]
+    pub modified: String,
+    #[serde(default)]
+    pub modified_by: String,
+    #[serde(default)]
+    pub inode_change: String,
+    #[serde(default)]
+    pub must_rescan: bool,
+    #[serde(default)]
+    pub no_permissions: bool,
+    #[serde(default)]
+    pub permissions: String,
+    #[serde(default)]
+    pub num_blocks: u64,
+    #[serde(default)]
+    pub local_flags: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub previous_blocks_hash: Option<String>,
+    #[serde(default, rename = "type")]
+    pub file_type: String,
+    // Platform is a complex object we don't need, just skip it
+    #[serde(default, skip_serializing)]
+    pub platform: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceAvailability {
+    pub id: String,
+    #[serde(rename = "fromTemporary")]
+    pub from_temporary: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileDetails {
+    pub local: Option<FileInfo>,
+    pub global: Option<FileInfo>,
+    #[serde(default)]
+    pub availability: Vec<DeviceAvailability>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderStatus {
@@ -166,5 +236,65 @@ impl SyncthingClient {
             .context("Failed to parse folder status")?;
 
         Ok(status)
+    }
+
+    pub async fn get_file_info(&self, folder_id: &str, file_path: &str) -> Result<FileDetails> {
+        let url = format!(
+            "{}/rest/db/file?folder={}&file={}",
+            self.base_url,
+            folder_id,
+            urlencoding::encode(file_path)
+        );
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch file info")?;
+
+        let details: FileDetails = response
+            .json()
+            .await
+            .context("Failed to parse file info")?;
+
+        Ok(details)
+    }
+}
+
+impl FileDetails {
+    pub fn determine_sync_state(&self) -> SyncState {
+        match (&self.local, &self.global) {
+            // Both local and global are present
+            (Some(local), Some(global)) => {
+                if local.ignored {
+                    SyncState::Ignored
+                } else if local.deleted && global.deleted {
+                    SyncState::Synced // Both deleted, in sync
+                } else if local.deleted && !global.deleted {
+                    SyncState::RemoteOnly // Local deleted but exists remotely
+                } else if !local.deleted && global.deleted {
+                    SyncState::LocalOnly // Exists locally but deleted remotely
+                } else if local.version != global.version || local.blocks_hash != global.blocks_hash {
+                    SyncState::OutOfSync // Different versions or content
+                } else {
+                    SyncState::Synced // Fully synced
+                }
+            }
+            // Only local present
+            (Some(local), None) => {
+                if local.ignored {
+                    SyncState::Ignored
+                } else if self.availability.is_empty() {
+                    SyncState::LocalOnly
+                } else {
+                    SyncState::OutOfSync
+                }
+            }
+            // Only global present
+            (None, Some(_global)) => SyncState::RemoteOnly,
+            // Neither present
+            (None, None) => SyncState::Unknown,
+        }
     }
 }
