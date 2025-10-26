@@ -275,6 +275,11 @@ impl App {
                         // Load sync states from cache
                         let sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
                         self.breadcrumb_trail[0].file_sync_states = sync_states;
+
+                        // If items just arrived and state has no selection, select first item
+                        if !items.is_empty() && self.breadcrumb_trail[0].state.selected().is_none() {
+                            self.breadcrumb_trail[0].state.select(Some(0));
+                        }
                     }
                 } else if let Some(ref target_prefix) = prefix {
                     // Load sync states first (before mutable borrow)
@@ -285,6 +290,11 @@ impl App {
                         if level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix) {
                             level.items = items.clone();
                             level.file_sync_states = sync_states.clone();
+
+                            // If items just arrived and state has no selection, select first item
+                            if !items.is_empty() && level.state.selected().is_none() {
+                                level.state.select(Some(0));
+                            }
                             break;
                         }
                     }
@@ -804,7 +814,7 @@ impl App {
                     // Mark as loading
                     self.loading_browse.insert(browse_key.clone());
 
-                    // Cache miss - fetch from API
+                    // Cache miss - fetch from API (BLOCKING for root level)
                     let items = self.client.browse_folder(&folder.id, None).await?;
                     let _ = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence);
 
@@ -881,13 +891,11 @@ impl App {
 
                 // Try cache first - show cached data immediately if available
                 let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
-                    // Have cached data - use it immediately
+                    // Have cached data - clear loading flag and use it immediately
+                    self.loading_browse.remove(&browse_key);
                     cached_items
-                } else if self.loading_browse.contains(&browse_key) {
-                    // Already loading this path, skip to avoid duplicate work
-                    return Ok(());
                 } else {
-                    // Cache miss - request fresh data via API service (non-blocking)
+                    // Cache miss or stale - always request fresh data
                     self.loading_browse.insert(browse_key.clone());
 
                     let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
@@ -896,7 +904,7 @@ impl App {
                         priority: api_service::Priority::High,
                     });
 
-                    // For now, return empty list - UI will update when response arrives
+                    // Show empty list for now - UI will update when response arrives
                     // TODO: Could show a loading indicator here
                     Vec::new()
                 };
