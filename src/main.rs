@@ -70,11 +70,12 @@ struct App {
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
+    ignore_next_sequence_change: HashSet<String>, // Folders where we should ignore the next sequence change (we triggered it)
     // Confirmation prompt state
     confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
-    pattern_selection: Option<(String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, patterns, selection_state)
+    pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
 }
 
 impl App {
@@ -168,6 +169,7 @@ impl App {
             loading_sync_states: HashSet::new(),
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
+            ignore_next_sequence_change: HashSet::new(),
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
@@ -204,9 +206,22 @@ impl App {
                         // Sequence changed! Invalidate cached data for this folder
                         let _ = self.cache.invalidate_folder(&folder.id);
 
-                        // Don't clear in-memory sync states immediately - let them be refreshed naturally
-                        // This prevents flickering when toggling ignore states
-                        // The background prefetching will update states as needed
+                        // Check if we triggered this change (from ignore toggle)
+                        if self.ignore_next_sequence_change.contains(&folder.id) {
+                            self.ignore_next_sequence_change.remove(&folder.id);
+                            // Don't clear states - we only changed ignore patterns
+                            // The single file refresh will handle updating the toggled item
+                        } else {
+                            // External change - clear states to refresh
+                            // This ensures files that changed (like finished downloading) get refreshed
+                            if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder.id {
+                                for level in &mut self.breadcrumb_trail {
+                                    if level.folder_id == folder.id {
+                                        level.file_sync_states.clear();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1069,6 +1084,9 @@ impl App {
                     .filter(|p| p != pattern_to_remove)
                     .collect();
 
+                // Mark that we're triggering this rescan so we don't clear all states
+                self.ignore_next_sequence_change.insert(folder_id.clone());
+
                 self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
                 self.client.rescan_folder(&folder_id).await?;
                 self.load_folder_statuses().await;
@@ -1079,7 +1097,7 @@ impl App {
                 // Multiple patterns match - show selection menu
                 let mut selection_state = ListState::default();
                 selection_state.select(Some(0));
-                self.pattern_selection = Some((folder_id, matching_patterns, selection_state));
+                self.pattern_selection = Some((folder_id, item_name, matching_patterns, selection_state));
             }
         } else {
             // File is not ignored - add it to ignore
@@ -1092,6 +1110,9 @@ impl App {
 
             let mut updated_patterns = patterns;
             updated_patterns.insert(0, new_pattern);
+
+            // Mark that we're triggering this rescan so we don't clear all states
+            self.ignore_next_sequence_change.insert(folder_id.clone());
 
             self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
             self.client.rescan_folder(&folder_id).await?;
@@ -1198,6 +1219,9 @@ impl App {
                 let mut updated_patterns = patterns;
                 updated_patterns.insert(0, new_pattern);
 
+                // Mark that we're triggering this rescan so we don't clear all states
+                self.ignore_next_sequence_change.insert(folder_id.clone());
+
                 self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
                 self.client.rescan_folder(&folder_id).await?;
                 self.load_folder_statuses().await;
@@ -1227,6 +1251,9 @@ impl App {
         };
 
         if delete_result.is_ok() {
+            // Mark that we're triggering this rescan so we don't clear all states
+            self.ignore_next_sequence_change.insert(folder_id.clone());
+
             // Trigger rescan after successful deletion
             self.client.rescan_folder(&folder_id).await?;
             self.load_folder_statuses().await;
@@ -1299,7 +1326,7 @@ impl App {
         }
 
         // Handle pattern selection menu
-        if let Some((folder_id, patterns, state)) = &mut self.pattern_selection {
+        if let Some((folder_id, item_name, patterns, state)) = &mut self.pattern_selection {
             match key.code {
                 KeyCode::Up => {
                     let selected = state.selected().unwrap_or(0);
@@ -1321,6 +1348,7 @@ impl App {
                     if selected < patterns.len() {
                         let pattern_to_remove = patterns[selected].clone();
                         let folder_id = folder_id.clone();
+                        let item_name = item_name.clone();
                         self.pattern_selection = None;
 
                         // Get all patterns and remove the selected one
@@ -1330,12 +1358,15 @@ impl App {
                             .filter(|p| p != &pattern_to_remove)
                             .collect();
 
+                        // Mark that we're triggering this rescan so we don't clear all states
+                        self.ignore_next_sequence_change.insert(folder_id.clone());
+
                         self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
                         self.client.rescan_folder(&folder_id).await?;
                         self.load_folder_statuses().await;
 
-                        // Refresh sync states for current level only
-                        self.refresh_current_level_states_background();
+                        // Refresh only the specific file's state
+                        self.refresh_single_file_state_background(&item_name);
                     }
                     return Ok(());
                 }
@@ -1824,7 +1855,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             }
 
             // Render pattern selection menu if active
-            if let Some((_folder_id, patterns, state)) = &mut app.pattern_selection {
+            if let Some((_folder_id, _item_name, patterns, state)) = &mut app.pattern_selection {
                 let menu_items: Vec<ListItem> = patterns
                     .iter()
                     .map(|pattern| {
