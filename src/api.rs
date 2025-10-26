@@ -309,6 +309,50 @@ impl SyncthingClient {
         // Extract just the filenames
         Ok(data.files.iter().map(|f| f.name.clone()).collect())
     }
+
+    pub async fn get_ignore_patterns(&self, folder_id: &str) -> Result<Vec<String>> {
+        let url = format!("{}/rest/db/ignores?folder={}", self.base_url, folder_id);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch ignore patterns")?;
+
+        #[derive(Deserialize)]
+        struct IgnoresResponse {
+            ignore: Option<Vec<String>>,
+        }
+
+        let data: IgnoresResponse = response
+            .json()
+            .await
+            .context("Failed to parse ignore patterns")?;
+
+        Ok(data.ignore.unwrap_or_default())
+    }
+
+    pub async fn set_ignore_patterns(&self, folder_id: &str, patterns: Vec<String>) -> Result<()> {
+        let url = format!("{}/rest/db/ignores?folder={}", self.base_url, folder_id);
+
+        #[derive(serde::Serialize)]
+        struct IgnoresRequest {
+            ignore: Vec<String>,
+        }
+
+        let request_body = IgnoresRequest { ignore: patterns };
+
+        self.client
+            .post(&url)
+            .header("X-API-Key", &self.api_key)
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to set ignore patterns")?;
+
+        Ok(())
+    }
 }
 
 impl FileDetails {

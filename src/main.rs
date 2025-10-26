@@ -73,6 +73,8 @@ struct App {
     // Confirmation prompt state
     confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
+    // Pattern selection menu for removing ignores
+    pattern_selection: Option<(String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, patterns, selection_state)
 }
 
 impl App {
@@ -90,6 +92,59 @@ impl App {
 
         // If no mapping found, return container path
         container_path
+    }
+
+    fn pattern_matches(&self, pattern: &str, file_path: &str) -> bool {
+        // Syncthing ignore patterns are similar to .gitignore
+        // Patterns starting with / are relative to folder root
+        // Patterns without / match anywhere in the path
+
+        let pattern = pattern.trim();
+
+        // Exact match
+        if pattern == file_path {
+            return true;
+        }
+
+        // Pattern starts with / - match from root
+        if let Some(pattern_without_slash) = pattern.strip_prefix('/') {
+            // Exact match without leading slash
+            if pattern_without_slash == file_path.trim_start_matches('/') {
+                return true;
+            }
+
+            // Try glob matching
+            if let Ok(pattern_obj) = glob::Pattern::new(pattern_without_slash) {
+                if pattern_obj.matches(file_path.trim_start_matches('/')) {
+                    return true;
+                }
+            }
+        } else {
+            // Pattern without / - match anywhere
+            // Try matching the full path
+            if let Ok(pattern_obj) = glob::Pattern::new(pattern) {
+                if pattern_obj.matches(file_path.trim_start_matches('/')) {
+                    return true;
+                }
+
+                // Also try matching just the filename
+                if let Some(filename) = file_path.split('/').last() {
+                    if pattern_obj.matches(filename) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn find_matching_patterns(&self, patterns: &[String], file_path: &str) -> Vec<String> {
+        patterns
+            .iter()
+            .filter(|p| self.pattern_matches(p, file_path))
+            .cloned()
+            .collect()
     }
 
     async fn new(config: Config) -> Result<Self> {
@@ -115,6 +170,7 @@ impl App {
             last_known_sequences: HashMap::new(),
             confirm_revert: None,
             confirm_delete: None,
+            pattern_selection: None,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -145,15 +201,12 @@ impl App {
                 // Check if sequence changed from last known value
                 if let Some(&last_seq) = self.last_known_sequences.get(&folder.id) {
                     if last_seq != sequence {
-                        // Sequence changed! Invalidate all cached data for this folder
+                        // Sequence changed! Invalidate cached data for this folder
                         let _ = self.cache.invalidate_folder(&folder.id);
 
-                        // Clear in-memory sync states for this folder from breadcrumb trail
-                        for level in &mut self.breadcrumb_trail {
-                            if level.folder_id == folder.id {
-                                level.file_sync_states.clear();
-                            }
-                        }
+                        // Don't clear in-memory sync states immediately - let them be refreshed naturally
+                        // This prevents flickering when toggling ignore states
+                        // The background prefetching will update states as needed
                     }
                 }
 
@@ -256,19 +309,14 @@ impl App {
                         .map(|f| f.sequence)
                         .unwrap_or(0);
 
-                    // Check cache first
-                    let sync_state = if let Ok(Some(cached_state)) = self.cache.get_sync_state(&folder_id, &file_path, file_sequence) {
-                        cached_state
-                    } else {
-                        // Cache miss - determine state and save
-                        let state = file_details.determine_sync_state();
-                        let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
-                        state
-                    };
+                    // Always determine fresh state from API response
+                    // Don't use cache here since we're specifically refreshing
+                    let state = file_details.determine_sync_state();
+                    let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
 
                     // Update the sync state in the current level
                     if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                        level.file_sync_states.insert(item_name.clone(), sync_state);
+                        level.file_sync_states.insert(item_name.clone(), state);
                     }
                 }
                 Err(_e) => {
@@ -872,6 +920,11 @@ impl App {
         // Immediately refresh folder statuses to pick up the sequence change
         self.load_folder_statuses().await;
 
+        // Refresh sync states for current level if we're in a breadcrumb
+        if self.focus_level > 0 {
+            self.refresh_current_level_states_background();
+        }
+
         Ok(())
     }
 
@@ -961,6 +1014,230 @@ impl App {
         Ok(())
     }
 
+    async fn toggle_ignore(&mut self) -> Result<()> {
+        // Only works when focused on a breadcrumb level (not folder list)
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return Ok(());
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return Ok(());
+        }
+
+        let level = &self.breadcrumb_trail[level_idx];
+        let folder_id = level.folder_id.clone();
+
+        // Get selected item
+        let selected = match level.state.selected() {
+            Some(idx) => idx,
+            None => return Ok(()),
+        };
+
+        if selected >= level.items.len() {
+            return Ok(());
+        }
+
+        let item = &level.items[selected];
+        let item_name = item.name.clone(); // Clone for later use
+        let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
+
+        // Build the relative path from folder root
+        let relative_path = if let Some(ref prefix) = level.prefix {
+            format!("{}/{}", prefix, item.name)
+        } else {
+            item.name.clone()
+        };
+
+        // Get current ignore patterns
+        let patterns = self.client.get_ignore_patterns(&folder_id).await?;
+
+        if sync_state == SyncState::Ignored {
+            // File is ignored - find matching patterns and remove them
+            let file_path = format!("/{}", relative_path);
+            let matching_patterns = self.find_matching_patterns(&patterns, &file_path);
+
+            if matching_patterns.is_empty() {
+                return Ok(()); // No patterns match (shouldn't happen)
+            }
+
+            if matching_patterns.len() == 1 {
+                // Only one pattern - remove it directly
+                let pattern_to_remove = &matching_patterns[0];
+                let updated_patterns: Vec<String> = patterns
+                    .into_iter()
+                    .filter(|p| p != pattern_to_remove)
+                    .collect();
+
+                self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
+                self.client.rescan_folder(&folder_id).await?;
+                self.load_folder_statuses().await;
+
+                // Refresh only this file's state
+                self.refresh_single_file_state_background(&item_name);
+            } else {
+                // Multiple patterns match - show selection menu
+                let mut selection_state = ListState::default();
+                selection_state.select(Some(0));
+                self.pattern_selection = Some((folder_id, matching_patterns, selection_state));
+            }
+        } else {
+            // File is not ignored - add it to ignore
+            let new_pattern = format!("/{}", relative_path);
+
+            // Check if pattern already exists
+            if patterns.contains(&new_pattern) {
+                return Ok(());
+            }
+
+            let mut updated_patterns = patterns;
+            updated_patterns.insert(0, new_pattern);
+
+            self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
+            self.client.rescan_folder(&folder_id).await?;
+            self.load_folder_statuses().await;
+
+            // Refresh only this file's state
+            self.refresh_single_file_state_background(&item_name);
+        }
+
+        Ok(())
+    }
+
+    fn refresh_single_file_state_background(&mut self, file_name: &str) {
+        // Clear just the specific file's state to force a refresh
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        // Build the file path to clear from cache
+        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+        let file_path = if let Some(ref prefix) = self.breadcrumb_trail[level_idx].prefix {
+            format!("{}{}", prefix, file_name)
+        } else {
+            file_name.to_string()
+        };
+
+        // Clear the cached state so background fetch gets fresh data from API
+        // Note: We can't easily delete from cache DB, but we can clear in-memory state
+        // The background fetch will get fresh data and update the cache
+
+        // Clear only the specific file's state
+        // The background prefetching will naturally update it
+        if level_idx < self.breadcrumb_trail.len() {
+            self.breadcrumb_trail[level_idx].file_sync_states.remove(file_name);
+        }
+    }
+
+    fn refresh_current_level_states_background(&mut self) {
+        // Clear all states in the level to force a refresh
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return;
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        // Clear current states to force a refresh
+        // The background prefetching will naturally update them
+        if level_idx < self.breadcrumb_trail.len() {
+            self.breadcrumb_trail[level_idx].file_sync_states.clear();
+        }
+    }
+
+    async fn ignore_and_delete(&mut self) -> Result<()> {
+        // Only works when focused on a breadcrumb level (not folder list)
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return Ok(());
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return Ok(());
+        }
+
+        let level = &self.breadcrumb_trail[level_idx];
+        let folder_id = level.folder_id.clone();
+
+        // Get selected item
+        let selected = match level.state.selected() {
+            Some(idx) => idx,
+            None => return Ok(()),
+        };
+
+        if selected >= level.items.len() {
+            return Ok(());
+        }
+
+        let item = &level.items[selected];
+        let item_name = item.name.clone(); // Clone for later use
+
+        // Build paths
+        let relative_path = if let Some(ref prefix) = level.prefix {
+            format!("{}/{}", prefix, item.name)
+        } else {
+            item.name.clone()
+        };
+
+        let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+
+        // Check if file exists on disk
+        if !std::path::Path::new(&host_path).exists() {
+            // File doesn't exist, just add to ignore
+            let patterns = self.client.get_ignore_patterns(&folder_id).await?;
+            let new_pattern = format!("/{}", relative_path);
+
+            if !patterns.contains(&new_pattern) {
+                let mut updated_patterns = patterns;
+                updated_patterns.insert(0, new_pattern);
+
+                self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
+                self.client.rescan_folder(&folder_id).await?;
+                self.load_folder_statuses().await;
+
+                // Refresh only this file's state
+                self.refresh_single_file_state_background(&item_name);
+            }
+            return Ok(());
+        }
+
+        // File exists - add to ignore first, then delete
+        let patterns = self.client.get_ignore_patterns(&folder_id).await?;
+        let new_pattern = format!("/{}", relative_path);
+
+        if !patterns.contains(&new_pattern) {
+            let mut updated_patterns = patterns;
+            updated_patterns.insert(0, new_pattern);
+            self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
+        }
+
+        // Now delete the file
+        let is_dir = std::path::Path::new(&host_path).is_dir();
+        let delete_result = if is_dir {
+            std::fs::remove_dir_all(&host_path)
+        } else {
+            std::fs::remove_file(&host_path)
+        };
+
+        if delete_result.is_ok() {
+            // Trigger rescan after successful deletion
+            self.client.rescan_folder(&folder_id).await?;
+            self.load_folder_statuses().await;
+
+            // Refresh only this file's state
+            self.refresh_single_file_state_background(&item_name);
+        }
+
+        Ok(())
+    }
+
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         // Handle confirmation prompts first
         if let Some((folder_id, _)) = &self.confirm_revert {
@@ -1021,6 +1298,59 @@ impl App {
             }
         }
 
+        // Handle pattern selection menu
+        if let Some((folder_id, patterns, state)) = &mut self.pattern_selection {
+            match key.code {
+                KeyCode::Up => {
+                    let selected = state.selected().unwrap_or(0);
+                    if selected > 0 {
+                        state.select(Some(selected - 1));
+                    }
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    let selected = state.selected().unwrap_or(0);
+                    if selected < patterns.len() - 1 {
+                        state.select(Some(selected + 1));
+                    }
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    // Remove the selected pattern
+                    let selected = state.selected().unwrap_or(0);
+                    if selected < patterns.len() {
+                        let pattern_to_remove = patterns[selected].clone();
+                        let folder_id = folder_id.clone();
+                        self.pattern_selection = None;
+
+                        // Get all patterns and remove the selected one
+                        let all_patterns = self.client.get_ignore_patterns(&folder_id).await?;
+                        let updated_patterns: Vec<String> = all_patterns
+                            .into_iter()
+                            .filter(|p| p != &pattern_to_remove)
+                            .collect();
+
+                        self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
+                        self.client.rescan_folder(&folder_id).await?;
+                        self.load_folder_statuses().await;
+
+                        // Refresh sync states for current level only
+                        self.refresh_current_level_states_background();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Esc => {
+                    // Cancel
+                    self.pattern_selection = None;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while menu is showing
+                    return Ok(());
+                }
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
@@ -1034,6 +1364,14 @@ impl App {
             KeyCode::Char('d') => {
                 // Delete ignored file from disk (with confirmation)
                 let _ = self.delete_ignored_file().await;
+            }
+            KeyCode::Char('i') => {
+                // Toggle ignore state (add or remove from .stignore)
+                let _ = self.toggle_ignore().await;
+            }
+            KeyCode::Char('I') => {
+                // Ignore file AND delete from disk
+                let _ = self.ignore_and_delete().await;
             }
             KeyCode::Left | KeyCode::Backspace => {
                 self.go_back();
@@ -1483,6 +1821,41 @@ async fn run_app<B: ratatui::backend::Backend>(
 
                 f.render_widget(ratatui::widgets::Clear, prompt_area);
                 f.render_widget(prompt, prompt_area);
+            }
+
+            // Render pattern selection menu if active
+            if let Some((_folder_id, patterns, state)) = &mut app.pattern_selection {
+                let menu_items: Vec<ListItem> = patterns
+                    .iter()
+                    .map(|pattern| {
+                        ListItem::new(Span::raw(pattern.clone()))
+                            .style(Style::default().fg(Color::White))
+                    })
+                    .collect();
+
+                // Center the menu
+                let area = f.size();
+                let menu_width = 60;
+                let menu_height = (patterns.len() as u16 + 6).min(20); // +6 for borders and instructions
+                let menu_area = ratatui::layout::Rect {
+                    x: (area.width.saturating_sub(menu_width)) / 2,
+                    y: (area.height.saturating_sub(menu_height)) / 2,
+                    width: menu_width,
+                    height: menu_height,
+                };
+
+                let menu = List::new(menu_items)
+                    .block(Block::default()
+                        .borders(Borders::ALL)
+                        .title("Select Pattern to Remove (↑↓ to navigate, Enter to remove, Esc to cancel)")
+                        .border_style(Style::default().fg(Color::Yellow)))
+                    .highlight_style(Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD))
+                    .highlight_symbol("► ");
+
+                f.render_widget(ratatui::widgets::Clear, menu_area);
+                f.render_stateful_widget(menu, menu_area, state);
             }
         })?;
 
