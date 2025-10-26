@@ -55,14 +55,31 @@ struct App {
     folder_statuses: HashMap<String, FolderStatus>,
     statuses_loaded: bool,
     last_status_update: Instant,
+    path_map: HashMap<String, String>,
     breadcrumb_trail: Vec<BreadcrumbLevel>,
     focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
     should_quit: bool,
 }
 
 impl App {
+    fn translate_path(&self, folder: &Folder, relative_path: &str) -> String {
+        // Get the full container path
+        let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
+
+        // Try to map container path to host path using path_map
+        for (container_prefix, host_prefix) in &self.path_map {
+            if container_path.starts_with(container_prefix) {
+                let remainder = container_path.strip_prefix(container_prefix).unwrap_or("");
+                return format!("{}{}", host_prefix.trim_end_matches('/'), remainder);
+            }
+        }
+
+        // If no mapping found, return container path
+        container_path
+    }
+
     async fn new(config: Config) -> Result<Self> {
-        let client = SyncthingClient::new(config.base_url, config.api_key);
+        let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
         let folders = client.get_folders().await?;
 
         let mut app = App {
@@ -72,6 +89,7 @@ impl App {
             folder_statuses: HashMap::new(),
             statuses_loaded: false,
             last_status_update: Instant::now(),
+            path_map: config.path_map,
             breadcrumb_trail: Vec::new(),
             focus_level: 0,
             should_quit: false,
@@ -480,55 +498,51 @@ async fn run_app<B: ratatui::backend::Backend>(
                 }
             }
 
-            // Render status bar at the bottom
-            let status_spans = if app.focus_level == 0 {
+            // Render status bar at the bottom with columns
+            let status_line = if app.focus_level == 0 {
                 // Show selected folder status
                 if let Some(selected) = app.folders_state.selected() {
                     if let Some(folder) = app.folders.get(selected) {
                         let folder_name = folder.label.as_ref().unwrap_or(&folder.id);
                         if folder.paused {
-                            vec![
-                                Span::raw(format!("Folder: {}", folder_name)),
-                                Span::raw("    "),
-                                Span::styled("Status: Paused", Style::default().fg(Color::Yellow)),
-                            ]
+                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                                format!("Folder: {}", folder_name),
+                                "Paused",
+                                "-",
+                                "-",
+                                "-"
+                            )
                         } else if let Some(status) = app.folder_statuses.get(&folder.id) {
-                            vec![
-                                Span::raw(format!("Folder: {}", folder_name)),
-                                Span::raw("    "),
-                                Span::raw(format!("State: {}", status.state)),
-                                Span::raw("    "),
-                                Span::raw(format!("Size: {}", format_bytes(status.global_bytes))),
-                                Span::raw("    "),
-                                Span::raw(format!("Items: {}/{}",
-                                    status.global_total_items.saturating_sub(status.need_total_items),
-                                    status.global_total_items
-                                )),
-                                Span::raw("    "),
-                                Span::styled(
-                                    format!("Need: {} items ({})",
-                                        status.need_total_items,
-                                        format_bytes(status.need_bytes)
-                                    ),
-                                    if status.need_total_items > 0 {
-                                        Style::default().fg(Color::Yellow)
-                                    } else {
-                                        Style::default().fg(Color::Green)
-                                    }
-                                ),
-                            ]
+                            let state_display = if status.state.is_empty() { "paused" } else { &status.state };
+                            let in_sync = status.global_total_items.saturating_sub(status.need_total_items);
+                            let items_display = format!("{}/{}", in_sync, status.global_total_items);
+                            let need_display = if status.need_total_items > 0 {
+                                format!("{} items ({})", status.need_total_items, format_bytes(status.need_bytes))
+                            } else {
+                                "Up to date".to_string()
+                            };
+
+                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                                format!("Folder: {}", folder_name),
+                                state_display,
+                                format_bytes(status.global_bytes),
+                                items_display,
+                                need_display
+                            )
                         } else {
-                            vec![
-                                Span::raw(format!("Folder: {}", folder_name)),
-                                Span::raw("    "),
-                                Span::styled("Status: Loading...", Style::default().fg(Color::Gray)),
-                            ]
+                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                                format!("Folder: {}", folder_name),
+                                "Loading...",
+                                "-",
+                                "-",
+                                "-"
+                            )
                         }
                     } else {
-                        vec![Span::raw("No folder selected")]
+                        "No folder selected".to_string()
                     }
                 } else {
-                    vec![Span::raw("No folder selected")]
+                    "No folder selected".to_string()
                 }
             } else {
                 // Show current item in breadcrumb trail
@@ -541,28 +555,36 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 "FILE_INFO_TYPE_FILE" => "File",
                                 _ => "Item",
                             };
-                            vec![
-                                Span::styled(format!("{}: ", item_type), Style::default().fg(Color::Cyan)),
-                                Span::raw(&item.name),
-                                Span::raw("    "),
-                                Span::styled("Path: ", Style::default().fg(Color::Gray)),
-                                Span::raw(format!("{}{}",
-                                    level.prefix.as_deref().unwrap_or(""),
-                                    item.name
-                                )),
-                            ]
+
+                            // Build relative path
+                            let relative_path = format!("{}{}",
+                                level.prefix.as_deref().unwrap_or(""),
+                                item.name
+                            );
+
+                            // Find the folder to translate path
+                            let translated_path = app.folders.iter()
+                                .find(|f| f.id == level.folder_id)
+                                .map(|folder| app.translate_path(folder, &relative_path))
+                                .unwrap_or_else(|| relative_path.clone());
+
+                            format!("{}: {}  |  Path: {}",
+                                item_type,
+                                item.name,
+                                translated_path
+                            )
                         } else {
-                            vec![Span::raw("No item selected")]
+                            "No item selected".to_string()
                         }
                     } else {
-                        vec![Span::raw("No item selected")]
+                        "No item selected".to_string()
                     }
                 } else {
-                    vec![Span::raw("")]
+                    "".to_string()
                 }
             };
 
-            let status_bar = Paragraph::new(Line::from(status_spans))
+            let status_bar = Paragraph::new(Line::from(Span::raw(status_line)))
                 .block(Block::default().borders(Borders::ALL).title("Status"))
                 .style(Style::default().fg(Color::White));
 
