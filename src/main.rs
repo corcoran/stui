@@ -342,6 +342,7 @@ impl App {
                 self.loading_sync_states.remove(&sync_key);
 
                 let Ok(file_details) = details else {
+                    log_debug(&format!("DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}", folder_id, file_path, details.err()));
                     return; // Silently ignore errors
                 };
 
@@ -351,18 +352,28 @@ impl App {
                     .unwrap_or(0);
 
                 let state = file_details.determine_sync_state();
+                log_debug(&format!("DEBUG [FileInfoResult]: folder={} path={} state={:?} seq={}", folder_id, file_path, state, file_sequence));
                 let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
 
                 // Update UI if this file is visible in current level
+                let mut updated = false;
                 for level in &mut self.breadcrumb_trail {
                     if level.folder_id == folder_id {
                         // Check if this file path belongs to this level
                         let level_prefix = level.prefix.as_deref().unwrap_or("");
+                        log_debug(&format!("DEBUG [FileInfoResult UI update]: checking level with prefix={:?}", level_prefix));
                         if file_path.starts_with(level_prefix) {
                             let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
+                            log_debug(&format!("DEBUG [FileInfoResult UI update]: MATCH! Updating item_name={} to state={:?}", item_name, state));
                             level.file_sync_states.insert(item_name.to_string(), state);
+                            updated = true;
+                        } else {
+                            log_debug(&format!("DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}", file_path, level_prefix));
                         }
                     }
+                }
+                if !updated {
+                    log_debug(&format!("DEBUG [FileInfoResult UI update]: WARNING - No matching level found for folder={} path={}", folder_id, file_path));
                 }
             }
 
@@ -406,6 +417,7 @@ impl App {
     }
 
     fn load_sync_states_from_cache(&self, folder_id: &str, items: &[BrowseItem], prefix: Option<&str>) -> HashMap<String, SyncState> {
+        log_debug(&format!("DEBUG [load_sync_states_from_cache]: START folder={} prefix={:?} item_count={}", folder_id, prefix, items.len()));
         let mut sync_states = HashMap::new();
 
         for item in items {
@@ -416,17 +428,28 @@ impl App {
                 item.name.clone()
             };
 
+            log_debug(&format!("DEBUG [load_sync_states_from_cache]: Querying cache for file_path={}", file_path));
+
             // Load from cache without validation (will be validated on next fetch if needed)
-            if let Ok(Some(state)) = self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
-                sync_states.insert(item.name.clone(), state);
+            match self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
+                Ok(Some(state)) => {
+                    log_debug(&format!("DEBUG [load_sync_states_from_cache]: FOUND state={:?} for file_path={}", state, file_path));
+                    sync_states.insert(item.name.clone(), state);
+                }
+                Ok(None) => {
+                    log_debug(&format!("DEBUG [load_sync_states_from_cache]: NOT FOUND in cache for file_path={}", file_path));
+                }
+                Err(e) => {
+                    log_debug(&format!("DEBUG [load_sync_states_from_cache]: ERROR querying cache for file_path={}: {}", file_path, e));
+                }
             }
         }
 
+        log_debug(&format!("DEBUG [load_sync_states_from_cache]: END returning {} states", sync_states.len()));
         sync_states
     }
 
-
-    async fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
+    fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
@@ -463,7 +486,7 @@ impl App {
             .map(|item| item.name.clone())
             .collect();
 
-        // Spawn concurrent fetches
+        // Send non-blocking requests via channel
         for item_name in items_to_fetch {
             let file_path = if let Some(ref prefix) = prefix {
                 format!("{}{}", prefix, item_name)
@@ -473,34 +496,22 @@ impl App {
 
             let sync_key = format!("{}:{}", folder_id, file_path);
 
+            // Skip if already loading
+            if self.loading_sync_states.contains(&sync_key) {
+                continue;
+            }
+
             // Mark as loading
             self.loading_sync_states.insert(sync_key.clone());
 
-            // Fetch file info from API
-            match self.client.get_file_info(&folder_id, &file_path).await {
-                Ok(file_details) => {
-                    let file_sequence = file_details.local.as_ref()
-                        .or(file_details.global.as_ref())
-                        .map(|f| f.sequence)
-                        .unwrap_or(0);
+            log_debug(&format!("DEBUG [batch_fetch]: Requesting file_path={} for folder={}", file_path, folder_id));
 
-                    // Always determine fresh state from API response
-                    // Don't use cache here since we're specifically refreshing
-                    let state = file_details.determine_sync_state();
-                    let _ = self.cache.save_sync_state(&folder_id, &file_path, state, file_sequence);
-
-                    // Update the sync state in the current level
-                    if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                        level.file_sync_states.insert(item_name.clone(), state);
-                    }
-                }
-                Err(_e) => {
-                    // Silently ignore errors
-                }
-            }
-
-            // Done loading
-            self.loading_sync_states.remove(&sync_key);
+            // Send non-blocking request via channel
+            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                folder_id: folder_id.clone(),
+                file_path: file_path.clone(),
+                priority: api_service::Priority::Medium,
+            });
         }
     }
 
@@ -898,7 +909,7 @@ impl App {
         Ok(())
     }
 
-    fn enter_directory(&mut self) -> Result<()> {
+    async fn enter_directory(&mut self) -> Result<()> {
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
@@ -939,26 +950,26 @@ impl App {
                 // Create key for tracking in-flight operations
                 let browse_key = format!("{}:{}", folder_id, new_prefix);
 
-                // Try cache first - show cached data immediately if available
+                // Try cache first
                 let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
-                    // Have cached data - clear loading flag and use it immediately
-                    self.loading_browse.remove(&browse_key);
                     self.cache_hit = Some(true);
                     cached_items
+                } else if self.loading_browse.contains(&browse_key) {
+                    // Already loading this path, skip to avoid duplicate work
+                    return Ok(());
                 } else {
-                    // Cache miss or stale - always request fresh data
+                    // Mark as loading
                     self.loading_browse.insert(browse_key.clone());
                     self.cache_hit = Some(false);
 
-                    let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
-                        folder_id: folder_id.clone(),
-                        prefix: Some(new_prefix.clone()),
-                        priority: api_service::Priority::High,
-                    });
+                    // Cache miss - fetch from API (BLOCKING)
+                    let items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
+                    let _ = self.cache.save_browse_items(&folder_id, Some(&new_prefix), &items, folder_sequence);
 
-                    // Show empty list for now - UI will update when response arrives
-                    // TODO: Could show a loading indicator here
-                    Vec::new()
+                    // Done loading
+                    self.loading_browse.remove(&browse_key);
+
+                    items
                 };
 
                 // Record load time
@@ -986,6 +997,7 @@ impl App {
 
                 // Load cached sync states for items
                 let file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(&new_prefix));
+                log_debug(&format!("DEBUG [enter_directory]: Loaded {} cached states for new level with prefix={}", file_sync_states.len(), new_prefix));
 
                 // Add new level
                 self.breadcrumb_trail.push(BreadcrumbLevel {
@@ -1591,7 +1603,7 @@ impl App {
                 if self.focus_level == 0 {
                     self.load_root_level().await?;
                 } else {
-                    self.enter_directory()?;
+                    self.enter_directory().await?;
                 }
             }
             KeyCode::Up => {
@@ -2107,7 +2119,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         app.fetch_selected_item_sync_state().await;
 
         // LOWEST PRIORITY: Batch fetch file sync states for visible files
-        app.batch_fetch_visible_sync_states(5).await;
+        app.batch_fetch_visible_sync_states(5);
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {

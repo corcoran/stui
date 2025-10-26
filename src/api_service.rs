@@ -1,9 +1,27 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 use crate::api::{BrowseItem, FileDetails, Folder, FolderStatus, SyncthingClient};
+
+fn log_debug(msg: &str) {
+    // Only log if debug mode is enabled
+    if !crate::DEBUG_MODE.load(Ordering::Relaxed) {
+        return;
+    }
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-debug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
 
 /// Priority level for API requests
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,12 +183,18 @@ pub enum ApiResponse {
     },
 }
 
+/// Internal message for tracking completed requests
+enum InternalMessage {
+    Completed(RequestKey),
+}
+
 /// API service worker that processes requests in the background
 pub struct ApiService {
     client: SyncthingClient,
     request_queue: VecDeque<(ApiRequest, Priority)>,
     in_flight: HashSet<RequestKey>,
     response_tx: mpsc::UnboundedSender<ApiResponse>,
+    completion_tx: mpsc::UnboundedSender<InternalMessage>,
     max_concurrent: usize,
 }
 
@@ -178,24 +202,23 @@ impl ApiService {
     pub fn new(
         client: SyncthingClient,
         response_tx: mpsc::UnboundedSender<ApiResponse>,
+        completion_tx: mpsc::UnboundedSender<InternalMessage>,
     ) -> Self {
         Self {
             client,
             request_queue: VecDeque::new(),
             in_flight: HashSet::new(),
             response_tx,
+            completion_tx,
             max_concurrent: 10, // Limit concurrent API calls
         }
     }
 
     /// Add a request to the queue
     fn enqueue(&mut self, request: ApiRequest) {
-        let key = request.key();
-
-        // Don't queue if already in flight (deduplication)
-        if self.in_flight.contains(&key) {
-            return;
-        }
+        // NOTE: We removed in_flight deduplication because it was never being cleared
+        // when responses completed. Deduplication is now handled by loading_sync_states
+        // in main.rs before requests are even sent.
 
         let priority = request.priority();
 
@@ -218,21 +241,33 @@ impl ApiService {
             return; // Queue is empty
         };
 
+        // Track in-flight for concurrency limiting
         let key = request.key();
         self.in_flight.insert(key.clone());
 
         // Clone what we need for the async task
         let client = self.client.clone();
         let response_tx = self.response_tx.clone();
+        let completion_tx = self.completion_tx.clone();
+        let completion_key = key.clone();
 
         // Spawn task to handle this request
         tokio::spawn(async move {
             let response = Self::execute_request(&client, request).await;
-            let _ = response_tx.send(response);
-        });
 
-        // Note: We remove from in_flight when the UI receives the response
-        // This is handled by the main app loop
+            // Log before sending response
+            match &response {
+                ApiResponse::FileInfoResult { folder_id, file_path, .. } => {
+                    log_debug(&format!("DEBUG [API Service]: Sending FileInfoResult for folder={} path={}", folder_id, file_path));
+                }
+                _ => {}
+            }
+
+            let _ = response_tx.send(response);
+
+            // Notify service that this request is complete
+            let _ = completion_tx.send(InternalMessage::Completed(completion_key));
+        });
     }
 
     /// Execute an API request and return the response
@@ -250,8 +285,14 @@ impl ApiService {
             }
 
             ApiRequest::GetFileInfo { folder_id, file_path, .. } => {
+                log_debug(&format!("DEBUG [API Service GetFileInfo]: START folder={} path={}", folder_id, file_path));
                 let details = client.get_file_info(&folder_id, &file_path).await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| {
+                        log_debug(&format!("DEBUG [API Service GetFileInfo]: ERROR folder={} path={} error={}", folder_id, file_path, e));
+                        e.to_string()
+                    });
+
+                log_debug(&format!("DEBUG [API Service GetFileInfo]: END folder={} path={} success={}", folder_id, file_path, details.is_ok()));
 
                 ApiResponse::FileInfoResult {
                     folder_id,
@@ -376,9 +417,10 @@ pub fn spawn_api_service(
 ) -> (mpsc::UnboundedSender<ApiRequest>, mpsc::UnboundedReceiver<ApiResponse>) {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<ApiRequest>();
     let (response_tx, response_rx) = mpsc::unbounded_channel::<ApiResponse>();
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<InternalMessage>();
 
     tokio::spawn(async move {
-        let mut service = ApiService::new(client, response_tx);
+        let mut service = ApiService::new(client, response_tx, completion_tx);
 
         // Ticker for processing queue
         let mut tick = interval(Duration::from_millis(10));
@@ -388,6 +430,12 @@ pub fn spawn_api_service(
                 // Receive new requests
                 Some(request) = request_rx.recv() => {
                     service.enqueue(request);
+                }
+
+                // Handle completion notifications
+                Some(InternalMessage::Completed(key)) = completion_rx.recv() => {
+                    service.in_flight.remove(&key);
+                    log_debug(&format!("DEBUG [API Service]: Removed from in_flight, now {} in flight", service.in_flight.len()));
                 }
 
                 // Process queue at regular intervals
