@@ -149,6 +149,7 @@ pub struct FolderStatus {
     pub receive_only_total_items: u64,
 }
 
+#[derive(Clone)]
 pub struct SyncthingClient {
     base_url: String,
     api_key: String,

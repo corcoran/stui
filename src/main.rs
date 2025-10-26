@@ -70,7 +70,6 @@ struct App {
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
-    ignore_next_sequence_change: HashSet<String>, // Folders where we should ignore the next sequence change (we triggered it)
     // Confirmation prompt state
     confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
@@ -169,7 +168,6 @@ impl App {
             loading_sync_states: HashSet::new(),
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
-            ignore_next_sequence_change: HashSet::new(),
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
@@ -206,19 +204,12 @@ impl App {
                         // Sequence changed! Invalidate cached data for this folder
                         let _ = self.cache.invalidate_folder(&folder.id);
 
-                        // Check if we triggered this change (from ignore toggle)
-                        if self.ignore_next_sequence_change.contains(&folder.id) {
-                            self.ignore_next_sequence_change.remove(&folder.id);
-                            // Don't clear states - we only changed ignore patterns
-                            // The single file refresh will handle updating the toggled item
-                        } else {
-                            // External change - clear states to refresh
-                            // This ensures files that changed (like finished downloading) get refreshed
-                            if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder.id {
-                                for level in &mut self.breadcrumb_trail {
-                                    if level.folder_id == folder.id {
-                                        level.file_sync_states.clear();
-                                    }
+                        // Clear in-memory sync states for this folder if we're currently viewing it
+                        // This ensures files that changed get refreshed
+                        if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder.id {
+                            for level in &mut self.breadcrumb_trail {
+                                if level.folder_id == folder.id {
+                                    level.file_sync_states.clear();
                                 }
                             }
                         }
@@ -933,12 +924,8 @@ impl App {
         self.client.rescan_folder(&folder_id).await?;
 
         // Immediately refresh folder statuses to pick up the sequence change
+        // This will detect the sequence change and clear states automatically
         self.load_folder_statuses().await;
-
-        // Refresh sync states for current level if we're in a breadcrumb
-        if self.focus_level > 0 {
-            self.refresh_current_level_states_background();
-        }
 
         Ok(())
     }
@@ -1084,15 +1071,19 @@ impl App {
                     .filter(|p| p != pattern_to_remove)
                     .collect();
 
-                // Mark that we're triggering this rescan so we don't clear all states
-                self.ignore_next_sequence_change.insert(folder_id.clone());
-
                 self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
-                self.client.rescan_folder(&folder_id).await?;
-                self.load_folder_statuses().await;
 
-                // Refresh only this file's state
-                self.refresh_single_file_state_background(&item_name);
+                // Clear the state so background prefetch will fetch it fresh
+                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                    level.file_sync_states.remove(&item_name);
+                }
+
+                // Trigger rescan in background
+                let client = self.client.clone();
+                let folder_id_clone = folder_id.clone();
+                tokio::spawn(async move {
+                    let _ = client.rescan_folder(&folder_id_clone).await;
+                });
             } else {
                 // Multiple patterns match - show selection menu
                 let mut selection_state = ListState::default();
@@ -1111,67 +1102,24 @@ impl App {
             let mut updated_patterns = patterns;
             updated_patterns.insert(0, new_pattern);
 
-            // Mark that we're triggering this rescan so we don't clear all states
-            self.ignore_next_sequence_change.insert(folder_id.clone());
-
             self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
-            self.client.rescan_folder(&folder_id).await?;
-            self.load_folder_statuses().await;
 
-            // Refresh only this file's state
-            self.refresh_single_file_state_background(&item_name);
+            // Immediately mark as ignored in UI
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+            }
+
+            // Trigger rescan in background
+            let client = self.client.clone();
+            let folder_id_clone = folder_id.clone();
+            tokio::spawn(async move {
+                let _ = client.rescan_folder(&folder_id_clone).await;
+            });
         }
 
         Ok(())
     }
 
-    fn refresh_single_file_state_background(&mut self, file_name: &str) {
-        // Clear just the specific file's state to force a refresh
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
-            return;
-        }
-
-        let level_idx = self.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
-            return;
-        }
-
-        // Build the file path to clear from cache
-        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
-        let file_path = if let Some(ref prefix) = self.breadcrumb_trail[level_idx].prefix {
-            format!("{}{}", prefix, file_name)
-        } else {
-            file_name.to_string()
-        };
-
-        // Clear the cached state so background fetch gets fresh data from API
-        // Note: We can't easily delete from cache DB, but we can clear in-memory state
-        // The background fetch will get fresh data and update the cache
-
-        // Clear only the specific file's state
-        // The background prefetching will naturally update it
-        if level_idx < self.breadcrumb_trail.len() {
-            self.breadcrumb_trail[level_idx].file_sync_states.remove(file_name);
-        }
-    }
-
-    fn refresh_current_level_states_background(&mut self) {
-        // Clear all states in the level to force a refresh
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
-            return;
-        }
-
-        let level_idx = self.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
-            return;
-        }
-
-        // Clear current states to force a refresh
-        // The background prefetching will naturally update them
-        if level_idx < self.breadcrumb_trail.len() {
-            self.breadcrumb_trail[level_idx].file_sync_states.clear();
-        }
-    }
 
     async fn ignore_and_delete(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
@@ -1219,15 +1167,19 @@ impl App {
                 let mut updated_patterns = patterns;
                 updated_patterns.insert(0, new_pattern);
 
-                // Mark that we're triggering this rescan so we don't clear all states
-                self.ignore_next_sequence_change.insert(folder_id.clone());
-
                 self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
-                self.client.rescan_folder(&folder_id).await?;
-                self.load_folder_statuses().await;
 
-                // Refresh only this file's state
-                self.refresh_single_file_state_background(&item_name);
+                // Immediately mark as ignored in UI
+                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                    level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+                }
+
+                // Trigger rescan in background
+                let client = self.client.clone();
+                let folder_id_clone = folder_id.clone();
+                tokio::spawn(async move {
+                    let _ = client.rescan_folder(&folder_id_clone).await;
+                });
             }
             return Ok(());
         }
@@ -1251,15 +1203,16 @@ impl App {
         };
 
         if delete_result.is_ok() {
-            // Mark that we're triggering this rescan so we don't clear all states
-            self.ignore_next_sequence_change.insert(folder_id.clone());
+            // Immediately mark as ignored in UI
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+            }
 
-            // Trigger rescan after successful deletion
-            self.client.rescan_folder(&folder_id).await?;
-            self.load_folder_statuses().await;
-
-            // Refresh only this file's state
-            self.refresh_single_file_state_background(&item_name);
+            // Trigger rescan in background
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let _ = client.rescan_folder(&folder_id).await;
+            });
         }
 
         Ok(())
@@ -1358,15 +1311,21 @@ impl App {
                             .filter(|p| p != &pattern_to_remove)
                             .collect();
 
-                        // Mark that we're triggering this rescan so we don't clear all states
-                        self.ignore_next_sequence_change.insert(folder_id.clone());
-
                         self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
-                        self.client.rescan_folder(&folder_id).await?;
-                        self.load_folder_statuses().await;
 
-                        // Refresh only the specific file's state
-                        self.refresh_single_file_state_background(&item_name);
+                        // Clear the state so background prefetch will fetch it fresh
+                        if self.focus_level > 0 && self.focus_level <= self.breadcrumb_trail.len() {
+                            let level_idx = self.focus_level - 1;
+                            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                                level.file_sync_states.remove(&item_name);
+                            }
+                        }
+
+                        // Trigger rescan in background
+                        let client = self.client.clone();
+                        tokio::spawn(async move {
+                            let _ = client.rescan_folder(&folder_id).await;
+                        });
                     }
                     return Ok(());
                 }
