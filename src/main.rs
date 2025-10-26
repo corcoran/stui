@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
     execute,
@@ -12,7 +13,19 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
-use std::{collections::{HashMap, HashSet}, fs, io, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, fs, io, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+
+/// Syncthing TUI Manager
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Enable debug logging to /tmp/synctui-debug.log
+    #[arg(short, long)]
+    debug: bool,
+}
+
+// Global flag for debug mode
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
 
 mod api;
 mod api_service;
@@ -24,6 +37,11 @@ use cache::CacheDb;
 use config::Config;
 
 fn log_debug(msg: &str) {
+    // Only log if debug mode is enabled
+    if !DEBUG_MODE.load(Ordering::Relaxed) {
+        return;
+    }
+
     use std::fs::OpenOptions;
     use std::io::Write;
     if let Ok(mut file) = OpenOptions::new()
@@ -1590,6 +1608,16 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command-line arguments
+    let args = Args::parse();
+
+    // Set debug mode
+    DEBUG_MODE.store(args.debug, Ordering::Relaxed);
+
+    if args.debug {
+        log_debug("Debug mode enabled");
+    }
+
     // Load configuration
     let config_str = fs::read_to_string("config.yaml")?;
     let config: Config = serde_yaml::from_str(&config_str)?;

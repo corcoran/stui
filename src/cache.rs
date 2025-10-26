@@ -3,10 +3,16 @@ use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::Ordering;
 
 use crate::api::{BrowseItem, FolderStatus, SyncState};
 
 fn log_debug(msg: &str) {
+    // Only log if debug mode is enabled
+    if !crate::DEBUG_MODE.load(Ordering::Relaxed) {
+        return;
+    }
+
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
