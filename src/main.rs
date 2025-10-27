@@ -227,6 +227,7 @@ struct App {
     display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
     vim_mode: bool, // Enable vim keybindings
     last_key_was_g: bool, // Track 'g' key for 'gg' command
+    last_user_action: Instant, // Track last user interaction for idle detection
     // Track in-flight operations to prevent duplicate fetches
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
@@ -360,6 +361,7 @@ impl App {
             display_mode: DisplayMode::TimestampAndSize, // Start with most info
             vim_mode: config.vim_mode,
             last_key_was_g: false,
+            last_user_action: Instant::now(),
             loading_browse: HashSet::new(),
             loading_sync_states: HashSet::new(),
             discovered_dirs: HashSet::new(),
@@ -841,7 +843,7 @@ impl App {
 
     // Recursively discover and fetch states for subdirectories when hovering over a directory
     // This ensures we have complete subdirectory information for deep trees
-    async fn prefetch_hovered_subdirectories(&mut self, max_depth: usize, max_dirs_per_frame: usize) {
+    fn prefetch_hovered_subdirectories(&mut self, max_depth: usize, max_dirs_per_frame: usize) {
         if !self.prefetch_enabled {
             return;
         }
@@ -892,16 +894,16 @@ impl App {
             format!("{}/", selected_item.name)
         };
 
-        // Recursively discover subdirectories
+        // Recursively discover subdirectories (non-blocking, uses cache only)
         let mut dirs_to_fetch = Vec::new();
-        self.discover_subdirectories_recursive(
+        self.discover_subdirectories_sync(
             &folder_id,
             &hovered_dir_path,
             folder_sequence,
             0,
             max_depth,
             &mut dirs_to_fetch,
-        ).await;
+        );
 
         // Fetch states for discovered subdirectories (limit per frame)
         for dir_path in dirs_to_fetch.iter().take(max_dirs_per_frame) {
@@ -930,7 +932,8 @@ impl App {
     }
 
     // Helper to recursively discover subdirectories (browse only, no state fetching)
-    async fn discover_subdirectories_recursive(
+    // This is synchronous and only uses cached data - no blocking API calls
+    fn discover_subdirectories_sync(
         &mut self,
         folder_id: &str,
         dir_path: &str,
@@ -983,16 +986,16 @@ impl App {
                 let subdir_path = format!("{}{}", dir_path, item.name);
                 result.push(subdir_path.clone());
 
-                // Recursively discover deeper
+                // Recursively discover deeper (synchronous, no blocking)
                 let nested_path = format!("{}/", subdir_path);
-                Box::pin(self.discover_subdirectories_recursive(
+                self.discover_subdirectories_sync(
                     folder_id,
                     &nested_path,
                     folder_sequence,
                     current_depth + 1,
                     max_depth,
                     result,
-                )).await;
+                );
             }
         }
     }
@@ -1904,6 +1907,9 @@ impl App {
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Update last user action timestamp for idle detection
+        self.last_user_action = Instant::now();
+
         // Handle confirmation prompts first
         if let Some((folder_id, _)) = &self.confirm_revert {
             match key.code {
@@ -3047,20 +3053,26 @@ async fn run_app<B: ratatui::backend::Backend>(
         // 1. On app startup (initial load)
         // 2. After user-initiated rescan (to get updated sequence)
 
-        // HIGHEST PRIORITY: If hovering over a directory, recursively discover all subdirectories
-        // and fetch their states (goes as deep as possible, depth=10, fetch 15 dirs per frame)
-        app.prefetch_hovered_subdirectories(10, 15).await;
+        // Only run prefetch operations when user has been idle for 300ms
+        // This prevents blocking keyboard input and reduces CPU usage
+        let idle_time = app.last_user_action.elapsed();
+        if idle_time >= std::time::Duration::from_millis(300) {
+            // HIGHEST PRIORITY: If hovering over a directory, recursively discover all subdirectories
+            // and fetch their states (non-blocking, uses cache only)
+            app.prefetch_hovered_subdirectories(10, 15);
 
-        // Fetch directory metadata states for visible directories in current level
-        app.fetch_directory_states(10);
+            // Fetch directory metadata states for visible directories in current level
+            app.fetch_directory_states(10);
 
-        // Fetch selected item specifically (high priority for user interaction)
-        app.fetch_selected_item_sync_state();
+            // Fetch selected item specifically (high priority for user interaction)
+            app.fetch_selected_item_sync_state();
 
-        // LOWEST PRIORITY: Batch fetch file sync states for visible files
-        app.batch_fetch_visible_sync_states(5);
+            // LOWEST PRIORITY: Batch fetch file sync states for visible files
+            app.batch_fetch_visible_sync_states(5);
+        }
 
-        if event::poll(std::time::Duration::from_millis(100))? {
+        // Increased poll timeout from 100ms to 250ms to reduce CPU usage when idle
+        if event::poll(std::time::Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
                 app.handle_key(key).await?;
             }
