@@ -49,17 +49,19 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 - ✅ Instant keyboard responsiveness even during background caching
 
 **Next steps:**
-1. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
-2. Add config file location support (`~/.config/synctui/config.yaml` with CLI override)
-3. Pause / Resume folder toggle hotkey + status (with confirmation)
-4. Change Folder Type toggle hotkey + status (with confirmation)
+1. Status bar at top that shows: Device name, Download / Upload rate, Local State (num files, folders, size), Uptime, Version
+2. Pause / Resume folder toggle hotkey + status (with confirmation)
+3. Change Folder Type toggle hotkey + status (with confirmation)
+4. Remote Devices (Name, Download / Upload rate, Folders)
+5. Dynamic sizing (first panel is 25% width, 75% for right panels, keeps
+   shrinking proprotionally)
+4. Add event history viewer with persistent logging
 5. Add filtering functionality (show only ignored files, by type, etc.)
-6. Add event history viewer with persistent logging
-7. Add file preview system (text and images)
-8. Build comprehensive test suite
-9. Improve error handling, display, and timeouts
-10. Refactor code to be more modular and readable
-
+6. Add file preview system (text and images)
+7. Build comprehensive test suite
+8. Improve error handling, display, and timeouts
+9. Refactor code to be more modular and readable
+10. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
 
 
 ## Polishing and Extensions
