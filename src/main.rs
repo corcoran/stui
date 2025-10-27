@@ -1382,6 +1382,9 @@ impl App {
                 // Create key for tracking in-flight operations
                 let browse_key = format!("{}:", folder.id); // Empty prefix for root
 
+                // Remove from loading_browse set if it's there (cleanup from previous attempts)
+                self.loading_browse.remove(&browse_key);
+
                 // Try cache first
                 let (items, local_items) = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder.id, None, folder_sequence) {
                     self.cache_hit = Some(true);
@@ -1389,9 +1392,6 @@ impl App {
                     // Merge local files even from cache
                     let local_items = self.merge_local_only_files(&folder.id, &mut items, None).await;
                     (items, local_items)
-                } else if self.loading_browse.contains(&browse_key) {
-                    // Already loading this path, skip to avoid duplicate work
-                    return Ok(());
                 } else {
                     // Mark as loading
                     self.loading_browse.insert(browse_key.clone());
@@ -1494,6 +1494,9 @@ impl App {
                 // Create key for tracking in-flight operations
                 let browse_key = format!("{}:{}", folder_id, new_prefix);
 
+                // Remove from loading_browse set if it's there (cleanup from previous attempts)
+                self.loading_browse.remove(&browse_key);
+
                 // Try cache first
                 let (items, local_items) = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
                     self.cache_hit = Some(true);
@@ -1501,9 +1504,6 @@ impl App {
                     // Merge local files even from cache
                     let local_items = self.merge_local_only_files(&folder_id, &mut items, Some(&new_prefix)).await;
                     (items, local_items)
-                } else if self.loading_browse.contains(&browse_key) {
-                    // Already loading this path, skip to avoid duplicate work
-                    return Ok(());
                 } else {
                     // Mark as loading
                     self.loading_browse.insert(browse_key.clone());
@@ -2756,7 +2756,6 @@ async fn run_app<B: ratatui::backend::Backend>(
 
                     // Calculate local state summary
                     let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
-                    log_debug(&format!("DEBUG [DeviceStatusBar]: local_state - files={} dirs={} bytes={}", total_files, total_dirs, total_bytes));
 
                     let mut spans = vec![
                         Span::raw(app.device_name.as_deref().unwrap_or("Unknown")),
@@ -2788,10 +2787,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                         }
                     }
 
-                    log_debug(&format!("DEBUG [DeviceStatusBar]: {} spans", spans.len()));
                     Line::from(spans)
                 } else {
-                    log_debug("DEBUG [DeviceStatusBar]: system_status not available");
                     Line::from(Span::raw("Device: Loading..."))
                 };
 
