@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -14,6 +14,7 @@ use ratatui::{
     Terminal,
 };
 use std::{collections::{HashMap, HashSet}, fs, io, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use unicode_width::UnicodeWidthStr;
 
 /// Syncthing TUI Manager
 #[derive(Parser, Debug)]
@@ -22,6 +23,10 @@ struct Args {
     /// Enable debug logging to /tmp/synctui-debug.log
     #[arg(short, long)]
     debug: bool,
+
+    /// Enable vim keybindings (hjkl, ^D/U, ^F/B, gg/G)
+    #[arg(long)]
+    vim: bool,
 }
 
 // Global flag for debug mode
@@ -73,6 +78,66 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn sync_state_priority(state: SyncState) -> u8 {
+    // Lower number = higher priority (displayed first)
+    match state {
+        SyncState::OutOfSync => 0,   // ⚠️ Most important
+        SyncState::RemoteOnly => 1,  // ☁️
+        SyncState::LocalOnly => 2,   // 💻
+        SyncState::Ignored => 3,     // 🚫
+        SyncState::Unknown => 4,     // ❓
+        SyncState::Synced => 5,      // ✅ Least important
+    }
+}
+
+fn format_timestamp(timestamp: &str) -> String {
+    // Parse ISO timestamp and format as human-readable
+    // Input format: "2025-10-26T20:58:21.580021398Z"
+    // Output format: "2025-10-26 20:58"
+    if timestamp.is_empty() {
+        return String::new();
+    }
+
+    // Try to parse and format
+    if let Some(datetime_part) = timestamp.split('T').next() {
+        if let Some(time_part) = timestamp.split('T').nth(1) {
+            let time = time_part.split(':').take(2).collect::<Vec<_>>().join(":");
+            return format!("{} {}", datetime_part, time);
+        }
+        return datetime_part.to_string();
+    }
+
+    timestamp.to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortMode {
+    VisualIndicator, // Sort by sync state icon (directories first, then by state priority)
+    Alphabetical,    // Sort alphabetically
+    LastModified,    // Sort by last modified time (if available)
+    FileSize,        // Sort by file size
+}
+
+impl SortMode {
+    fn next(&self) -> Self {
+        match self {
+            SortMode::VisualIndicator => SortMode::Alphabetical,
+            SortMode::Alphabetical => SortMode::LastModified,
+            SortMode::LastModified => SortMode::FileSize,
+            SortMode::FileSize => SortMode::VisualIndicator,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            SortMode::VisualIndicator => "Icon",
+            SortMode::Alphabetical => "A-Z",
+            SortMode::LastModified => "Timestamp",
+            SortMode::FileSize => "Size",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct BreadcrumbLevel {
     folder_id: String,
@@ -83,6 +148,8 @@ struct BreadcrumbLevel {
     state: ListState,
     translated_base_path: String,  // Cached translated base path for this level
     file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
+    sort_mode: SortMode,     // Current sort mode for this level
+    sort_reverse: bool,      // Whether to reverse sort order
 }
 
 struct App {
@@ -97,6 +164,9 @@ struct App {
     breadcrumb_trail: Vec<BreadcrumbLevel>,
     focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
     should_quit: bool,
+    show_timestamps: bool, // Toggle for displaying timestamps
+    vim_mode: bool, // Enable vim keybindings
+    last_key_was_g: bool, // Track 'g' key for 'gg' command
     // Track in-flight operations to prevent duplicate fetches
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
@@ -227,6 +297,9 @@ impl App {
             breadcrumb_trail: Vec::new(),
             focus_level: 0,
             should_quit: false,
+            show_timestamps: true,
+            vim_mode: config.vim_mode,
+            last_key_was_g: false,
             loading_browse: HashSet::new(),
             loading_sync_states: HashSet::new(),
             discovered_dirs: HashSet::new(),
@@ -1048,8 +1121,13 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
+                    sort_mode: SortMode::VisualIndicator,
+                    sort_reverse: false,
                 }];
                 self.focus_level = 1;
+
+                // Apply initial sorting
+                self.sort_current_level();
             }
         }
         Ok(())
@@ -1155,9 +1233,14 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
+                    sort_mode: SortMode::VisualIndicator,
+                    sort_reverse: false,
                 });
 
                 self.focus_level += 1;
+
+                // Apply initial sorting
+                self.sort_current_level();
             }
         }
 
@@ -1171,6 +1254,105 @@ impl App {
         } else if self.focus_level == 1 {
             self.focus_level = 0;
         }
+    }
+
+    fn sort_current_level(&mut self) {
+        if self.focus_level == 0 {
+            return; // No sorting for folders list
+        }
+
+        let level_idx = self.focus_level - 1;
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            let sort_mode = level.sort_mode;
+            let reverse = level.sort_reverse;
+
+            // Remember the currently selected item name
+            let selected_name = level.state.selected()
+                .and_then(|idx| level.items.get(idx))
+                .map(|item| item.name.clone());
+
+            // Sort items
+            level.items.sort_by(|a, b| {
+                use std::cmp::Ordering;
+
+                // Always prioritize directories first
+                let a_is_dir = a.item_type == "FILE_INFO_TYPE_DIRECTORY";
+                let b_is_dir = b.item_type == "FILE_INFO_TYPE_DIRECTORY";
+
+                if a_is_dir != b_is_dir {
+                    return if a_is_dir { Ordering::Less } else { Ordering::Greater };
+                }
+
+                let result = match sort_mode {
+                    SortMode::VisualIndicator => {
+                        // Sort by sync state priority
+                        let a_state = level.file_sync_states.get(&a.name).copied().unwrap_or(SyncState::Unknown);
+                        let b_state = level.file_sync_states.get(&b.name).copied().unwrap_or(SyncState::Unknown);
+
+                        let a_priority = sync_state_priority(a_state);
+                        let b_priority = sync_state_priority(b_state);
+
+                        a_priority.cmp(&b_priority)
+                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    },
+                    SortMode::Alphabetical => {
+                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                    },
+                    SortMode::LastModified => {
+                        // Reverse order for modified time (newest first)
+                        // Use mod_time from BrowseItem directly
+                        b.mod_time.cmp(&a.mod_time)
+                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    },
+                    SortMode::FileSize => {
+                        // Reverse order for size (largest first)
+                        // Use size from BrowseItem directly
+                        b.size.cmp(&a.size)
+                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    },
+                };
+
+                if reverse {
+                    result.reverse()
+                } else {
+                    result
+                }
+            });
+
+            // Restore selection to the same item
+            if let Some(name) = selected_name {
+                let new_idx = level.items.iter().position(|item| item.name == name);
+                level.state.select(new_idx.or(Some(0))); // Default to first item if not found
+            } else if !level.items.is_empty() {
+                // No previous selection, select first item
+                level.state.select(Some(0));
+            }
+        }
+    }
+
+    fn cycle_sort_mode(&mut self) {
+        if self.focus_level == 0 {
+            return; // No sorting for folders list
+        }
+
+        let level_idx = self.focus_level - 1;
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            level.sort_mode = level.sort_mode.next();
+            level.sort_reverse = false; // Reset reverse when changing mode
+        }
+        self.sort_current_level();
+    }
+
+    fn toggle_sort_reverse(&mut self) {
+        if self.focus_level == 0 {
+            return; // No sorting for folders list
+        }
+
+        let level_idx = self.focus_level - 1;
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            level.sort_reverse = !level.sort_reverse;
+        }
+        self.sort_current_level();
     }
 
     fn next_item(&mut self) {
@@ -1243,6 +1425,94 @@ impl App {
                 level.state.select(Some(i));
             }
         }
+    }
+
+    fn jump_to_first(&mut self) {
+        if self.focus_level == 0 {
+            if !self.folders.is_empty() {
+                self.folders_state.select(Some(0));
+            }
+        } else {
+            let level_idx = self.focus_level - 1;
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if !level.items.is_empty() {
+                    level.state.select(Some(0));
+                }
+            }
+        }
+    }
+
+    fn jump_to_last(&mut self) {
+        if self.focus_level == 0 {
+            if !self.folders.is_empty() {
+                self.folders_state.select(Some(self.folders.len() - 1));
+            }
+        } else {
+            let level_idx = self.focus_level - 1;
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if !level.items.is_empty() {
+                    level.state.select(Some(level.items.len() - 1));
+                }
+            }
+        }
+    }
+
+    fn page_down(&mut self, page_size: usize) {
+        if self.focus_level == 0 {
+            if self.folders.is_empty() {
+                return;
+            }
+            let i = match self.folders_state.selected() {
+                Some(i) => (i + page_size).min(self.folders.len() - 1),
+                None => 0,
+            };
+            self.folders_state.select(Some(i));
+        } else {
+            let level_idx = self.focus_level - 1;
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if level.items.is_empty() {
+                    return;
+                }
+                let i = match level.state.selected() {
+                    Some(i) => (i + page_size).min(level.items.len() - 1),
+                    None => 0,
+                };
+                level.state.select(Some(i));
+            }
+        }
+    }
+
+    fn page_up(&mut self, page_size: usize) {
+        if self.focus_level == 0 {
+            if self.folders.is_empty() {
+                return;
+            }
+            let i = match self.folders_state.selected() {
+                Some(i) => i.saturating_sub(page_size),
+                None => 0,
+            };
+            self.folders_state.select(Some(i));
+        } else {
+            let level_idx = self.focus_level - 1;
+            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if level.items.is_empty() {
+                    return;
+                }
+                let i = match level.state.selected() {
+                    Some(i) => i.saturating_sub(page_size),
+                    None => 0,
+                };
+                level.state.select(Some(i));
+            }
+        }
+    }
+
+    fn half_page_down(&mut self, visible_height: usize) {
+        self.page_down(visible_height / 2);
+    }
+
+    fn half_page_up(&mut self, visible_height: usize) {
+        self.page_up(visible_height / 2);
     }
 
     fn rescan_selected_folder(&mut self) -> Result<()> {
@@ -1729,6 +1999,23 @@ impl App {
                 // Restore selected file (if remote-only/deleted locally)
                 let _ = self.restore_selected_file().await;
             }
+            // Vim keybindings with Ctrl modifiers (check before 'd' and other letters)
+            KeyCode::Char('d') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_key_was_g = false;
+                self.half_page_down(20); // Use reasonable default, will be more precise with frame height
+            }
+            KeyCode::Char('u') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_key_was_g = false;
+                self.half_page_up(20);
+            }
+            KeyCode::Char('f') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_key_was_g = false;
+                self.page_down(40);
+            }
+            KeyCode::Char('b') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_key_was_g = false;
+                self.page_up(40);
+            }
             KeyCode::Char('d') => {
                 // Delete file from disk (with confirmation)
                 let _ = self.delete_file().await;
@@ -1741,10 +2028,88 @@ impl App {
                 // Ignore file AND delete from disk
                 let _ = self.ignore_and_delete().await;
             }
+            KeyCode::Char('s') => {
+                // Cycle through sort modes
+                self.cycle_sort_mode();
+            }
+            KeyCode::Char('S') => {
+                // Toggle reverse sort order
+                self.toggle_sort_reverse();
+            }
+            KeyCode::Char('t') => {
+                // Toggle timestamp display
+                self.show_timestamps = !self.show_timestamps;
+            }
+            // Vim keybindings
+            KeyCode::Char('h') if self.vim_mode => {
+                self.last_key_was_g = false;
+                self.go_back();
+            }
+            KeyCode::Char('j') if self.vim_mode => {
+                self.last_key_was_g = false;
+                self.next_item();
+            }
+            KeyCode::Char('k') if self.vim_mode => {
+                self.last_key_was_g = false;
+                self.previous_item();
+            }
+            KeyCode::Char('l') if self.vim_mode => {
+                self.last_key_was_g = false;
+                if self.focus_level == 0 {
+                    self.load_root_level().await?;
+                } else {
+                    self.enter_directory().await?;
+                }
+            }
+            KeyCode::Char('g') if self.vim_mode => {
+                if self.last_key_was_g {
+                    // gg - jump to first
+                    self.jump_to_first();
+                    self.last_key_was_g = false;
+                } else {
+                    // First 'g' press
+                    self.last_key_was_g = true;
+                }
+            }
+            KeyCode::Char('G') if self.vim_mode => {
+                self.last_key_was_g = false;
+                self.jump_to_last();
+            }
+            // Standard navigation keys (not advertised)
+            KeyCode::PageDown => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
+                self.page_down(40);
+            }
+            KeyCode::PageUp => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
+                self.page_up(40);
+            }
+            KeyCode::Home => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
+                self.jump_to_first();
+            }
+            KeyCode::End => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
+                self.jump_to_last();
+            }
             KeyCode::Left | KeyCode::Backspace => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
                 self.go_back();
             }
             KeyCode::Right | KeyCode::Enter => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
                 if self.focus_level == 0 {
                     self.load_root_level().await?;
                 } else {
@@ -1752,12 +2117,23 @@ impl App {
                 }
             }
             KeyCode::Up => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
                 self.previous_item();
             }
             KeyCode::Down => {
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
                 self.next_item();
             }
-            _ => {}
+            _ => {
+                // Reset last_key_was_g on any other key
+                if self.vim_mode {
+                    self.last_key_was_g = false;
+                }
+            }
         }
         Ok(())
     }
@@ -1777,7 +2153,12 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config_str = fs::read_to_string("config.yaml")?;
-    let config: Config = serde_yaml::from_str(&config_str)?;
+    let mut config: Config = serde_yaml::from_str(&config_str)?;
+
+    // Override config with CLI flags
+    if args.vim {
+        config.vim_mode = true;
+    }
 
     // Initialize app
     let mut app = App::new(config).await?;
@@ -2009,6 +2390,19 @@ async fn run_app<B: ratatui::backend::Backend>(
                     continue; // Skip panes that are off-screen to the left
                 }
 
+                // Get panel width for truncation
+                let panel_width = if let Some(ref bc) = breadcrumb_chunks {
+                    if breadcrumb_idx < bc.len() {
+                        bc[breadcrumb_idx].width
+                    } else {
+                        60 // fallback
+                    }
+                } else if chunk_idx < chunks.len() {
+                    chunks[chunk_idx].width
+                } else {
+                    60 // fallback
+                };
+
                 let items: Vec<ListItem> = level
                     .items
                     .iter()
@@ -2068,7 +2462,117 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                         };
-                        ListItem::new(Span::raw(format!("{}{}", icon, item.name)))
+
+                        // Build display string with optional timestamp
+                        let display_str = if app.show_timestamps && !item.mod_time.is_empty() {
+                            let full_timestamp = format_timestamp(&item.mod_time);
+                            let icon_and_name = format!("{}{}", icon, item.name);
+
+                            // Calculate available space: panel_width - borders(2) - highlight(2) - padding(2)
+                            let available_width = panel_width.saturating_sub(6) as usize;
+                            let spacing = 2; // Minimum spacing between name and timestamp
+
+                            // Use unicode width for proper emoji handling
+                            let name_width = icon_and_name.width();
+                            let timestamp_width = full_timestamp.width();
+
+                            // If everything fits, show it all
+                            if name_width + spacing + timestamp_width <= available_width {
+                                let padding = available_width - name_width - timestamp_width;
+                                format!("{}{}{}", icon_and_name, " ".repeat(padding), full_timestamp)
+                            } else {
+                                // Truncate timestamp to make room for name
+                                let space_left = available_width.saturating_sub(name_width + spacing);
+
+                                if space_left >= 5 {
+                                    // Show truncated timestamp (prioritize time over date)
+                                    // Format: "2025-10-26 20:58" -> "20:58" (5 chars) or "10-26" (5 chars)
+                                    let truncated_timestamp = if space_left >= 16 {
+                                        // Full timestamp fits
+                                        full_timestamp
+                                    } else if space_left >= 10 {
+                                        // Show "MM-DD HH:MM" (10 chars)
+                                        if full_timestamp.len() >= 16 {
+                                            full_timestamp[5..16].to_string()
+                                        } else {
+                                            full_timestamp
+                                        }
+                                    } else if space_left >= 5 {
+                                        // Show just time "HH:MM" (5 chars)
+                                        if full_timestamp.len() >= 16 {
+                                            full_timestamp[11..16].to_string()
+                                        } else {
+                                            full_timestamp
+                                        }
+                                    } else {
+                                        // Not enough room even for time
+                                        String::new()
+                                    };
+
+                                    if !truncated_timestamp.is_empty() {
+                                        let ts_width = truncated_timestamp.width();
+                                        let padding = available_width - name_width - ts_width;
+                                        format!("{}{}{}", icon_and_name, " ".repeat(padding), truncated_timestamp)
+                                    } else {
+                                        icon_and_name
+                                    }
+                                } else {
+                                    // Not enough room for timestamp, just show name
+                                    icon_and_name
+                                }
+                            }
+                        } else {
+                            format!("{}{}", icon, item.name)
+                        };
+
+                        // Create ListItem with styled timestamp
+                        if app.show_timestamps && !item.mod_time.is_empty() {
+                            // Parse the display_str to separate name and timestamp
+                            let full_timestamp = format_timestamp(&item.mod_time);
+                            let icon_and_name = format!("{}{}", icon, item.name);
+
+                            // Calculate available space
+                            let available_width = panel_width.saturating_sub(6) as usize;
+                            let spacing = 2;
+                            let name_width = icon_and_name.width();
+                            let timestamp_width = full_timestamp.width();
+
+                            if name_width + spacing + timestamp_width <= available_width {
+                                // Everything fits - use styled spans
+                                let padding = available_width - name_width - timestamp_width;
+                                ListItem::new(Line::from(vec![
+                                    Span::raw(icon_and_name),
+                                    Span::raw(" ".repeat(padding)),
+                                    Span::styled(full_timestamp, Style::default().fg(Color::Rgb(120, 120, 120))),
+                                ]))
+                            } else {
+                                // Truncated timestamp - calculate which one
+                                let space_left = available_width.saturating_sub(name_width + spacing);
+                                let truncated_timestamp = if space_left >= 16 {
+                                    full_timestamp
+                                } else if space_left >= 10 && full_timestamp.len() >= 16 {
+                                    full_timestamp[5..16].to_string()
+                                } else if space_left >= 5 && full_timestamp.len() >= 16 {
+                                    full_timestamp[11..16].to_string()
+                                } else {
+                                    String::new()
+                                };
+
+                                if !truncated_timestamp.is_empty() {
+                                    let ts_width = truncated_timestamp.width();
+                                    let padding = available_width - name_width - ts_width;
+                                    ListItem::new(Line::from(vec![
+                                        Span::raw(icon_and_name),
+                                        Span::raw(" ".repeat(padding)),
+                                        Span::styled(truncated_timestamp, Style::default().fg(Color::Rgb(120, 120, 120))),
+                                    ]))
+                                } else {
+                                    ListItem::new(Span::raw(icon_and_name))
+                                }
+                            }
+                        } else {
+                            ListItem::new(Span::raw(display_str))
+                        }
                     })
                     .collect();
 
@@ -2113,34 +2617,60 @@ async fn run_app<B: ratatui::backend::Backend>(
 
             // Render hotkey legend spanning across breadcrumb panels
             if let Some(legend_rect) = legend_area {
-                let hotkeys = vec![
-                    Line::from(vec![
+                // Build a single line with all hotkeys that will wrap automatically
+                let mut hotkey_spans = vec![];
+
+                // Navigation keys
+                if app.vim_mode {
+                    hotkey_spans.extend(vec![
+                        Span::styled("hjkl", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Nav  "),
+                        Span::styled("gg/G", Style::default().fg(Color::Yellow)),
+                        Span::raw(":First/Last  "),
+                        Span::styled("^d/^u", Style::default().fg(Color::Yellow)),
+                        Span::raw(":½Page  "),
+                        Span::styled("^f/^b", Style::default().fg(Color::Yellow)),
+                        Span::raw(":FullPage  "),
+                    ]);
+                } else {
+                    hotkey_spans.extend(vec![
                         Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
                         Span::raw(":Nav  "),
                         Span::styled("Enter", Style::default().fg(Color::Yellow)),
                         Span::raw(":Open  "),
                         Span::styled("←", Style::default().fg(Color::Yellow)),
                         Span::raw(":Back  "),
-                        Span::styled("i", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Ignore  "),
-                        Span::styled("I", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Ignore+Del  "),
-                        Span::styled("d", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Delete"),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("r", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Rescan  "),
-                        Span::styled("R", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Restore  "),
-                        Span::styled("q", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Quit"),
-                    ]),
-                ];
+                    ]);
+                }
 
-                let legend = Paragraph::new(hotkeys)
+                // Common actions
+                hotkey_spans.extend(vec![
+                    Span::styled("s", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Sort  "),
+                    Span::styled("S", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Reverse  "),
+                    Span::styled("t", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Timestamp  "),
+                    Span::styled("i", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Ignore  "),
+                    Span::styled("I", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Ign+Del  "),
+                    Span::styled("d", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Delete  "),
+                    Span::styled("r", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Rescan  "),
+                    Span::styled("R", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Restore  "),
+                    Span::styled("q", Style::default().fg(Color::Yellow)),
+                    Span::raw(":Quit"),
+                ]);
+
+                let hotkey_line = Line::from(hotkey_spans);
+
+                let legend = Paragraph::new(vec![hotkey_line])
                     .block(Block::default().borders(Borders::ALL).title("Hotkeys"))
-                    .style(Style::default().fg(Color::Gray));
+                    .style(Style::default().fg(Color::Gray))
+                    .wrap(ratatui::widgets::Wrap { trim: false });
 
                 f.render_widget(legend, legend_rect);
             }
@@ -2221,6 +2751,13 @@ async fn run_app<B: ratatui::backend::Backend>(
                     let mut metrics = Vec::new();
                     metrics.push(format!("Folder: {}", folder_name));
                     metrics.push(format!("{} items", item_count));
+
+                    // Show sort mode
+                    let sort_display = format!("Sort: {}{}",
+                        level.sort_mode.as_str(),
+                        if level.sort_reverse { "↓" } else { "↑" }
+                    );
+                    metrics.push(sort_display);
 
                     if let Some(load_time) = app.last_load_time_ms {
                         metrics.push(format!("Load: {}ms", load_time));

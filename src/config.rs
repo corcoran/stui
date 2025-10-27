@@ -7,4 +7,6 @@ pub struct Config {
     pub base_url: String,
     #[allow(dead_code)]
     pub path_map: HashMap<String, String>,
+    #[serde(default)]
+    pub vim_mode: bool,
 }

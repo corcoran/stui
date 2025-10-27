@@ -52,14 +52,19 @@ Display visual indicators for file/folder states:
 - `d`: Delete file/directory from disk (with confirmation prompt)
 - `r`: Rescan folder via `POST /rest/db/scan`
 - `R`: Restore deleted files (revert receive-only folder)
+- `s`: Cycle sort mode (Icon → A-Z → DateTime → Size)
+- `S`: Toggle reverse sort order
+- `t`: Toggle timestamp display
 - `p`: Pause/resume folder (planned)
 
 ### Status Bar & UI Elements
 
-- **Status Bar**: Shows folder state, data sizes, sync progress, in_sync/total items
+- **Status Bar**: Shows folder state, data sizes, sync progress, in_sync/total items, current sort mode
 - **Last Update Display**: Shows timestamp and filename of most recent change per folder
-- **Hotkey Legend**: Spanning legend at bottom of breadcrumb panels showing all available keys
+- **Timestamp Display**: Modification time shown on right side (dark gray), toggleable with `t` key
+- **Hotkey Legend**: Wrapping legend at bottom of breadcrumb panels showing all available keys
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
+- **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar
 
 ### Configuration
 
@@ -107,10 +112,11 @@ YAML config file containing:
 
 ### Caching Strategy
 - **SQLite database**: `~/.cache/synctui/cache.db` (Linux) or `/tmp/synctui-cache` (fallback)
-- **Browse cache**: Directory listings with folder sequence validation
+- **Browse cache**: Directory listings with folder sequence validation, includes `mod_time` and `size` fields
 - **Sync state cache**: Per-file sync states with file sequence validation
 - **Folder status cache**: Status with sequence, displayed stats (in_sync/total items)
 - **Event ID persistence**: Survives app restarts
+- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/synctui/cache.db`)
 
 ## Current Limitations & Future Goals
 
@@ -119,9 +125,13 @@ YAML config file containing:
 - No async loading spinners (planned)
 - No filtering by file type or name (planned)
 - No batch operations for multi-select
+- Config file location hardcoded to `./config.yaml` (needs `~/.config/synctui/` support)
 
 ### Planned Features
-- File type filtering (press `f`)
+- Config file at `~/.config/synctui/config.yaml` with CLI override
+- File type filtering and ignored-only view
+- Event history viewer with persistent logging
+- File preview (text files and CLI image rendering)
 - Optional filesystem diff view
 - Batch operations (multi-select for ignore/delete/rescan)
 - Configurable keybindings via YAML/TOML

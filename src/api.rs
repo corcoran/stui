@@ -21,6 +21,10 @@ pub struct BrowseItem {
     pub name: String,
     #[serde(rename = "type")]
     pub item_type: String,
+    #[serde(rename = "modTime", default)]
+    pub mod_time: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

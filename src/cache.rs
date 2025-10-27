@@ -71,6 +71,8 @@ impl CacheDb {
                 prefix TEXT,
                 name TEXT NOT NULL,
                 item_type TEXT NOT NULL,
+                mod_time TEXT NOT NULL DEFAULT '',
+                size INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (folder_id, prefix, name)
             ) WITHOUT ROWID;
 
@@ -202,7 +204,7 @@ impl CacheDb {
 
         // Fetch cached items
         let mut stmt = self.conn.prepare(
-            "SELECT name, item_type FROM browse_cache
+            "SELECT name, item_type, mod_time, size FROM browse_cache
              WHERE folder_id = ?1 AND prefix = ?2"
         )?;
 
@@ -210,6 +212,8 @@ impl CacheDb {
             Ok(BrowseItem {
                 name: row.get(0)?,
                 item_type: row.get(1)?,
+                mod_time: row.get(2)?,
+                size: row.get(3)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -237,8 +241,8 @@ impl CacheDb {
         // Insert new entries
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO browse_cache (folder_id, folder_sequence, prefix, name, item_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5)"
+                "INSERT INTO browse_cache (folder_id, folder_sequence, prefix, name, item_type, mod_time, size)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
             )?;
 
             log_debug(&format!("DEBUG [save_browse_items]: Starting insert loop for {} items", items.len()));
@@ -249,6 +253,8 @@ impl CacheDb {
                     prefix_str,
                     &item.name,
                     &item.item_type,
+                    &item.mod_time,
+                    item.size as i64,
                 ]) {
                     Ok(_) => {},
                     Err(e) => {
