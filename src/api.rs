@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Folder {
@@ -91,11 +91,21 @@ pub struct DeviceAvailability {
     pub from_temporary: bool,
 }
 
+/// Helper function to deserialize null as empty vector
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileDetails {
     pub local: Option<FileInfo>,
     pub global: Option<FileInfo>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub availability: Vec<DeviceAvailability>,
 }
 
@@ -315,6 +325,65 @@ impl SyncthingClient {
 
         // Extract just the filenames
         Ok(data.files.iter().map(|f| f.name.clone()).collect())
+    }
+
+    pub async fn get_local_changed_items(&self, folder_id: &str, prefix: Option<&str>) -> Result<Vec<BrowseItem>> {
+        let url = format!("{}/rest/db/localchanged?folder={}", self.base_url, folder_id);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch local changed files")?;
+
+        #[derive(Deserialize)]
+        struct LocalChangedResponse {
+            files: Vec<FileInfo>,
+        }
+
+        let data: LocalChangedResponse = response
+            .json()
+            .await
+            .context("Failed to parse local changed files")?;
+
+        // Filter to current directory and convert to BrowseItems
+        let prefix_str = prefix.unwrap_or("");
+        let mut items = Vec::new();
+
+        for file in data.files {
+            // Skip deleted files - they no longer exist locally
+            if file.deleted {
+                continue;
+            }
+
+            // Skip files not in this directory
+            if !file.name.starts_with(prefix_str) {
+                continue;
+            }
+
+            // Get the relative name (remove prefix)
+            let relative_name = file.name.strip_prefix(prefix_str).unwrap_or(&file.name);
+
+            // Skip if it has subdirectories (we only want items in current level)
+            if relative_name.contains('/') {
+                continue;
+            }
+
+            // Convert to BrowseItem
+            items.push(BrowseItem {
+                name: relative_name.to_string(),
+                size: file.size,
+                mod_time: file.modified.clone(),
+                item_type: if file.file_type == "FILE_INFO_TYPE_FILE" {
+                    "FILE_INFO_TYPE_FILE".to_string()
+                } else {
+                    "FILE_INFO_TYPE_DIRECTORY".to_string()
+                },
+            });
+        }
+
+        Ok(items)
     }
 
     pub async fn get_ignore_patterns(&self, folder_id: &str) -> Result<Vec<String>> {

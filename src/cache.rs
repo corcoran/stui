@@ -169,6 +169,13 @@ impl CacheDb {
         Ok(())
     }
 
+    pub fn invalidate_folder_status(&self, folder_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM folder_status WHERE folder_id = ?1",
+            params![folder_id],
+        )?;
+        Ok(())
+    }
 
     // Browse cache
     pub fn get_browse_items(&self, folder_id: &str, prefix: Option<&str>, folder_sequence: u64) -> Result<Option<Vec<BrowseItem>>> {

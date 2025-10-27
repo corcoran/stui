@@ -234,6 +234,7 @@ struct App {
     discovered_dirs: std::collections::HashSet<String>, // Set of "folder_id:prefix" already discovered (to prevent re-querying cache)
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
+    last_known_receive_only_counts: HashMap<String, u64>, // Track receiveOnlyTotalItems to detect local-only file changes
     // Track last update info per folder (for display)
     last_folder_updates: HashMap<String, (std::time::SystemTime, String)>, // folder_id -> (timestamp, last_changed_file)
     // Confirmation prompt state
@@ -367,6 +368,7 @@ impl App {
             discovered_dirs: HashSet::new(),
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
+            last_known_receive_only_counts: HashMap::new(),
             last_folder_updates: HashMap::new(),
             confirm_revert: None,
             confirm_delete: None,
@@ -455,7 +457,7 @@ impl App {
                 let browse_key = format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
                 self.loading_browse.remove(&browse_key);
 
-                let Ok(items) = items else {
+                let Ok(mut items) = items else {
                     return; // Silently ignore errors
                 };
 
@@ -465,7 +467,46 @@ impl App {
                     .map(|s| s.sequence)
                     .unwrap_or(0);
 
-                // Save to cache
+                // Check if this folder has local changes and merge them synchronously
+                let has_local_changes = self.folder_statuses
+                    .get(&folder_id)
+                    .map(|s| s.receive_only_total_items > 0)
+                    .unwrap_or(false);
+
+                let mut local_item_names = Vec::new();
+
+                if has_local_changes {
+                    log_debug(&format!("DEBUG [BrowseResult]: Folder has local changes, fetching..."));
+
+                    // Block to wait for local items synchronously
+                    let folder_id_clone = folder_id.clone();
+                    let prefix_clone = prefix.clone();
+                    let client = self.client.clone();
+
+                    // Use block_in_place to run async code synchronously
+                    let local_result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            client.get_local_changed_items(&folder_id_clone, prefix_clone.as_deref()).await
+                        })
+                    });
+
+                    if let Ok(local_items) = local_result {
+                        log_debug(&format!("DEBUG [BrowseResult]: Fetched {} local items", local_items.len()));
+
+                        // Merge local items
+                        for local_item in local_items {
+                            if !items.iter().any(|i| i.name == local_item.name) {
+                                log_debug(&format!("DEBUG [BrowseResult]: Merging local item: {}", local_item.name));
+                                local_item_names.push(local_item.name.clone());
+                                items.push(local_item);
+                            }
+                        }
+                    } else {
+                        log_debug("DEBUG [BrowseResult]: Failed to fetch local items");
+                    }
+                }
+
+                // Save merged items to cache
                 let _ = self.cache.save_browse_items(&folder_id, prefix.as_deref(), &items, folder_sequence);
 
                 // Update UI if this browse result matches current navigation
@@ -473,29 +514,37 @@ impl App {
                     // Root level update
                     if self.breadcrumb_trail[0].folder_id == folder_id {
                         self.breadcrumb_trail[0].items = items.clone();
+
                         // Load sync states from cache
-                        let sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+                        let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+
+                        // Mark local-only items with LocalOnly sync state
+                        for local_item_name in &local_item_names {
+                            sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                        }
+
                         self.breadcrumb_trail[0].file_sync_states = sync_states;
 
-                        // If items just arrived and state has no selection, select first item
-                        if !items.is_empty() && self.breadcrumb_trail[0].state.selected().is_none() {
-                            self.breadcrumb_trail[0].state.select(Some(0));
-                        }
+                        // Sort and restore selection
+                        self.sort_level(0);
                     }
                 } else if let Some(ref target_prefix) = prefix {
                     // Load sync states first (before mutable borrow)
-                    let sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
+                    let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
+
+                    // Mark local-only items with LocalOnly sync state
+                    for local_item_name in &local_item_names {
+                        sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                    }
 
                     // Check if this matches a breadcrumb level
-                    for level in &mut self.breadcrumb_trail {
+                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix) {
                             level.items = items.clone();
                             level.file_sync_states = sync_states.clone();
 
-                            // If items just arrived and state has no selection, select first item
-                            if !items.is_empty() && level.state.selected().is_none() {
-                                level.state.select(Some(0));
-                            }
+                            // Sort and restore selection (needs to be done after updating level)
+                            self.sort_level(idx);
                             break;
                         }
                     }
@@ -549,6 +598,7 @@ impl App {
                 };
 
                 let sequence = status.sequence;
+                let receive_only_count = status.receive_only_total_items;
 
                 // Check if sequence changed
                 if let Some(&last_seq) = self.last_known_sequences.get(&folder_id) {
@@ -570,8 +620,36 @@ impl App {
                     }
                 }
 
-                // Update last known sequence
+                // Check if receive-only item count changed (indicates local-only files added/removed)
+                if let Some(&last_count) = self.last_known_receive_only_counts.get(&folder_id) {
+                    if last_count != receive_only_count {
+                        log_debug(&format!("DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}", last_count, receive_only_count, folder_id));
+
+                        // Trigger refresh for currently viewed directory
+                        if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                            for level in &mut self.breadcrumb_trail {
+                                if level.folder_id == folder_id {
+                                    let browse_key = format!("{}:{}", folder_id, level.prefix.as_deref().unwrap_or(""));
+                                    if !self.loading_browse.contains(&browse_key) {
+                                        self.loading_browse.insert(browse_key);
+
+                                        let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                                            folder_id: folder_id.clone(),
+                                            prefix: level.prefix.clone(),
+                                            priority: api_service::Priority::High,
+                                        });
+
+                                        log_debug(&format!("DEBUG [FolderStatusResult]: Triggered browse refresh for prefix={:?}", level.prefix));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update last known values
                 self.last_known_sequences.insert(folder_id.clone(), sequence);
+                self.last_known_receive_only_counts.insert(folder_id.clone(), receive_only_count);
 
                 // Save and use fresh status
                 let _ = self.cache.save_folder_status(&folder_id, &status, sequence);
@@ -600,6 +678,14 @@ impl App {
             event_listener::CacheInvalidation::File { folder_id, file_path } => {
                 log_debug(&format!("DEBUG [Event]: Invalidating file: folder={} path={}", folder_id, file_path));
                 let _ = self.cache.invalidate_single_file(&folder_id, &file_path);
+
+                // Invalidate folder status cache to refresh receiveOnlyTotalItems count
+                let _ = self.cache.invalidate_folder_status(&folder_id);
+
+                // Request fresh folder status
+                let _ = self.api_tx.send(api_service::ApiRequest::GetFolderStatus {
+                    folder_id: folder_id.clone(),
+                });
 
                 // Update last change info for this folder
                 self.last_folder_updates.insert(
@@ -647,6 +733,14 @@ impl App {
             event_listener::CacheInvalidation::Directory { folder_id, dir_path } => {
                 log_debug(&format!("DEBUG [Event]: Invalidating directory: folder={} path={}", folder_id, dir_path));
                 let _ = self.cache.invalidate_directory(&folder_id, &dir_path);
+
+                // Invalidate folder status cache to refresh receiveOnlyTotalItems count
+                let _ = self.cache.invalidate_folder_status(&folder_id);
+
+                // Request fresh folder status
+                let _ = self.api_tx.send(api_service::ApiRequest::GetFolderStatus {
+                    folder_id: folder_id.clone(),
+                });
 
                 // Update last change info for this folder
                 self.last_folder_updates.insert(
@@ -712,6 +806,44 @@ impl App {
                 self.discovered_dirs.retain(|key| !key.starts_with(&dir_key_prefix));
             }
         }
+    }
+
+    /// Merge local-only files from receive-only folders into browse items
+    /// Returns the names of merged local items so we can mark their sync state
+    async fn merge_local_only_files(&self, folder_id: &str, items: &mut Vec<BrowseItem>, prefix: Option<&str>) -> Vec<String> {
+        let mut local_item_names = Vec::new();
+
+        // Check if folder has local changes
+        let has_local_changes = self.folder_statuses
+            .get(folder_id)
+            .map(|s| s.receive_only_total_items > 0)
+            .unwrap_or(false);
+
+        if !has_local_changes {
+            return local_item_names;
+        }
+
+        log_debug(&format!("DEBUG [merge_local_only_files]: Fetching local items for folder={} prefix={:?}", folder_id, prefix));
+
+        // Fetch local-only items for this directory
+        if let Ok(local_items) = self.client.get_local_changed_items(folder_id, prefix).await {
+            log_debug(&format!("DEBUG [merge_local_only_files]: Got {} local items", local_items.len()));
+
+            // Add local-only items that aren't already in the browse results
+            for local_item in local_items {
+                if !items.iter().any(|i| i.name == local_item.name) {
+                    log_debug(&format!("DEBUG [merge_local_only_files]: Adding local item: {}", local_item.name));
+                    local_item_names.push(local_item.name.clone());
+                    items.push(local_item);
+                } else {
+                    log_debug(&format!("DEBUG [merge_local_only_files]: Skipping duplicate item: {}", local_item.name));
+                }
+            }
+        } else {
+            log_debug(&format!("DEBUG [merge_local_only_files]: Failed to fetch local items"));
+        }
+
+        local_item_names
     }
 
     fn load_sync_states_from_cache(&self, folder_id: &str, items: &[BrowseItem], prefix: Option<&str>) -> HashMap<String, SyncState> {
@@ -1110,9 +1242,12 @@ impl App {
                 let browse_key = format!("{}:", folder.id); // Empty prefix for root
 
                 // Try cache first
-                let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder.id, None, folder_sequence) {
+                let (items, local_items) = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder.id, None, folder_sequence) {
                     self.cache_hit = Some(true);
-                    cached_items
+                    let mut items = cached_items;
+                    // Merge local files even from cache
+                    let local_items = self.merge_local_only_files(&folder.id, &mut items, None).await;
+                    (items, local_items)
                 } else if self.loading_browse.contains(&browse_key) {
                     // Already loading this path, skip to avoid duplicate work
                     return Ok(());
@@ -1122,7 +1257,11 @@ impl App {
 
                     // Cache miss - fetch from API (BLOCKING for root level)
                     self.cache_hit = Some(false);
-                    let items = self.client.browse_folder(&folder.id, None).await?;
+                    let mut items = self.client.browse_folder(&folder.id, None).await?;
+
+                    // Merge local-only files from receive-only folders
+                    let local_items = self.merge_local_only_files(&folder.id, &mut items, None).await;
+
                     if let Err(e) = self.cache.save_browse_items(&folder.id, None, &items, folder_sequence) {
                         log_debug(&format!("ERROR saving root cache: {}", e));
                     }
@@ -1130,7 +1269,7 @@ impl App {
                     // Done loading
                     self.loading_browse.remove(&browse_key);
 
-                    items
+                    (items, local_items)
                 };
 
                 // Record load time
@@ -1145,7 +1284,14 @@ impl App {
                 let translated_base_path = self.translate_path(folder, "");
 
                 // Load cached sync states for items
-                let file_sync_states = self.load_sync_states_from_cache(&folder.id, &items, None);
+                let mut file_sync_states = self.load_sync_states_from_cache(&folder.id, &items, None);
+
+                // Mark local-only items with LocalOnly sync state and save to cache
+                for local_item_name in &local_items {
+                    file_sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                    // Save to cache so it persists
+                    let _ = self.cache.save_sync_state(&folder.id, local_item_name, SyncState::LocalOnly, 0);
+                }
 
                 self.breadcrumb_trail = vec![BreadcrumbLevel {
                     folder_id: folder.id.clone(),
@@ -1210,9 +1356,12 @@ impl App {
                 let browse_key = format!("{}:{}", folder_id, new_prefix);
 
                 // Try cache first
-                let items = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
+                let (items, local_items) = if let Ok(Some(cached_items)) = self.cache.get_browse_items(&folder_id, Some(&new_prefix), folder_sequence) {
                     self.cache_hit = Some(true);
-                    cached_items
+                    let mut items = cached_items;
+                    // Merge local files even from cache
+                    let local_items = self.merge_local_only_files(&folder_id, &mut items, Some(&new_prefix)).await;
+                    (items, local_items)
                 } else if self.loading_browse.contains(&browse_key) {
                     // Already loading this path, skip to avoid duplicate work
                     return Ok(());
@@ -1222,13 +1371,17 @@ impl App {
                     self.cache_hit = Some(false);
 
                     // Cache miss - fetch from API (BLOCKING)
-                    let items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
+                    let mut items = self.client.browse_folder(&folder_id, Some(&new_prefix)).await?;
+
+                    // Merge local-only files from receive-only folders
+                    let local_items = self.merge_local_only_files(&folder_id, &mut items, Some(&new_prefix)).await;
+
                     let _ = self.cache.save_browse_items(&folder_id, Some(&new_prefix), &items, folder_sequence);
 
                     // Done loading
                     self.loading_browse.remove(&browse_key);
 
-                    items
+                    (items, local_items)
                 };
 
                 // Record load time
@@ -1255,8 +1408,16 @@ impl App {
                 self.breadcrumb_trail.truncate(level_idx + 1);
 
                 // Load cached sync states for items
-                let file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(&new_prefix));
+                let mut file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(&new_prefix));
                 log_debug(&format!("DEBUG [enter_directory]: Loaded {} cached states for new level with prefix={}", file_sync_states.len(), new_prefix));
+
+                // Mark local-only items with LocalOnly sync state and save to cache
+                for local_item_name in &local_items {
+                    file_sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                    // Save to cache so it persists
+                    let file_path = format!("{}{}", new_prefix, local_item_name);
+                    let _ = self.cache.save_sync_state(&folder_id, &file_path, SyncState::LocalOnly, 0);
+                }
 
                 // Add new level
                 self.breadcrumb_trail.push(BreadcrumbLevel {
@@ -1291,12 +1452,8 @@ impl App {
         }
     }
 
-    fn sort_current_level(&mut self) {
-        if self.focus_level == 0 {
-            return; // No sorting for folders list
-        }
-
-        let level_idx = self.focus_level - 1;
+    /// Sort a specific breadcrumb level by its index
+    fn sort_level(&mut self, level_idx: usize) {
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
             let sort_mode = level.sort_mode;
             let reverse = level.sort_reverse;
@@ -1363,6 +1520,14 @@ impl App {
                 level.state.select(Some(0));
             }
         }
+    }
+
+    fn sort_current_level(&mut self) {
+        if self.focus_level == 0 {
+            return; // No sorting for folders list
+        }
+        let level_idx = self.focus_level - 1;
+        self.sort_level(level_idx);
     }
 
     fn cycle_sort_mode(&mut self) {
@@ -1925,6 +2090,69 @@ impl App {
                     };
 
                     if delete_result.is_ok() {
+                        // Get current folder info for cache invalidation
+                        if self.focus_level > 0 && !self.breadcrumb_trail.is_empty() {
+                            let level_idx = self.focus_level - 1;
+
+                            // Extract all needed data first (immutable borrow)
+                            let deletion_info = if let Some(level) = self.breadcrumb_trail.get(level_idx) {
+                                let selected_idx = level.state.selected();
+                                selected_idx.and_then(|idx| {
+                                    level.items.get(idx).map(|item| {
+                                        (
+                                            level.folder_id.clone(),
+                                            item.name.clone(),
+                                            level.prefix.clone(),
+                                            idx,
+                                        )
+                                    })
+                                })
+                            } else {
+                                None
+                            };
+
+                            // Now do the mutations
+                            if let Some((folder_id, item_name, prefix, idx)) = deletion_info {
+                                // Build file path for cache invalidation
+                                let file_path = if let Some(ref prefix) = prefix {
+                                    format!("{}{}", prefix, item_name)
+                                } else {
+                                    item_name.clone()
+                                };
+
+                                // Invalidate cache for this file/directory
+                                if is_dir {
+                                    let _ = self.cache.invalidate_directory(&folder_id, &file_path);
+                                } else {
+                                    let _ = self.cache.invalidate_single_file(&folder_id, &file_path);
+                                }
+
+                                // Immediately remove from current view (mutable borrow)
+                                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                                    // Remove from items
+                                    if idx < level.items.len() {
+                                        level.items.remove(idx);
+                                    }
+                                    // Remove from sync states
+                                    level.file_sync_states.remove(&item_name);
+
+                                    // Adjust selection
+                                    let new_selection = if level.items.is_empty() {
+                                        None
+                                    } else if idx >= level.items.len() {
+                                        Some(level.items.len() - 1)
+                                    } else {
+                                        Some(idx)
+                                    };
+                                    level.state.select(new_selection);
+                                }
+
+                                // Invalidate browse cache for this directory
+                                let browse_key = format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
+                                self.loading_browse.remove(&browse_key);
+                            }
+                        }
+
                         // Trigger rescan after successful deletion
                         let _ = self.rescan_selected_folder();
                     }
