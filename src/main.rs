@@ -1312,7 +1312,7 @@ impl App {
         Ok(())
     }
 
-    async fn delete_ignored_file(&mut self) -> Result<()> {
+    async fn delete_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
@@ -1336,12 +1336,6 @@ impl App {
         }
 
         let item = &level.items[selected];
-
-        // Check if this is an ignored file
-        let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
-        if sync_state != SyncState::Ignored {
-            return Ok(()); // Only delete ignored files
-        }
 
         // Build the full host path
         let relative_path = if let Some(ref prefix) = level.prefix {
@@ -1736,8 +1730,8 @@ impl App {
                 let _ = self.restore_selected_file().await;
             }
             KeyCode::Char('d') => {
-                // Delete ignored file from disk (with confirmation)
-                let _ = self.delete_ignored_file().await;
+                // Delete file from disk (with confirmation)
+                let _ = self.delete_file().await;
             }
             KeyCode::Char('i') => {
                 // Toggle ignore state (add or remove from .stignore)
@@ -1843,7 +1837,11 @@ async fn run_app<B: ratatui::backend::Backend>(
 
             let visible_panes = num_panes.min(max_visible_panes);
 
-            // Create equal-width constraints for visible panes
+            // Determine if we have breadcrumb trails to show legend for
+            let has_breadcrumbs = !app.breadcrumb_trail.is_empty();
+            let folders_visible = start_pane == 0;
+
+            // Create horizontal split for all panes
             let constraints: Vec<Constraint> = (0..visible_panes)
                 .map(|_| Constraint::Ratio(1, visible_panes as u32))
                 .collect();
@@ -1852,6 +1850,59 @@ async fn run_app<B: ratatui::backend::Backend>(
                 .direction(Direction::Horizontal)
                 .constraints(constraints)
                 .split(content_area);
+
+            // Split breadcrumb areas vertically if needed for legend
+            let (breadcrumb_chunks, legend_area) = if has_breadcrumbs && folders_visible && chunks.len() > 1 {
+                // Split all chunks except the first (folders) to make room for legend
+                let breadcrumb_area = ratatui::layout::Rect {
+                    x: chunks[1].x,
+                    y: chunks[1].y,
+                    width: content_area.width - chunks[0].width,
+                    height: content_area.height,
+                };
+
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),      // Breadcrumb panes area
+                        Constraint::Length(3),   // Legend area (3 lines)
+                    ])
+                    .split(breadcrumb_area);
+
+                // Create new chunks for breadcrumb panels
+                let breadcrumb_constraints: Vec<Constraint> = (0..(visible_panes - 1))
+                    .map(|_| Constraint::Ratio(1, (visible_panes - 1) as u32))
+                    .collect();
+
+                let bc = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(breadcrumb_constraints)
+                    .split(split[0]);
+
+                (Some(bc), Some(split[1]))
+            } else if has_breadcrumbs && !folders_visible {
+                // No folders visible - split entire area
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),      // Panes area
+                        Constraint::Length(3),   // Legend area (3 lines)
+                    ])
+                    .split(content_area);
+
+                let breadcrumb_constraints: Vec<Constraint> = (0..visible_panes)
+                    .map(|_| Constraint::Ratio(1, visible_panes as u32))
+                    .collect();
+
+                let bc = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(breadcrumb_constraints)
+                    .split(split[0]);
+
+                (Some(bc), Some(split[1]))
+            } else {
+                (None, None)
+            };
 
             let mut chunk_idx = 0;
 
@@ -1952,6 +2003,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             }
 
             // Render breadcrumb levels
+            let mut breadcrumb_idx = 0;
             for (idx, level) in app.breadcrumb_trail.iter_mut().enumerate() {
                 if idx + 1 < start_pane {
                     continue; // Skip panes that are off-screen to the left
@@ -2047,10 +2099,50 @@ async fn run_app<B: ratatui::backend::Backend>(
                     )
                     .highlight_symbol("> ");
 
-                if chunk_idx < chunks.len() {
+                // Use breadcrumb_chunks if available, otherwise use regular chunks
+                if let Some(ref bc) = breadcrumb_chunks {
+                    if breadcrumb_idx < bc.len() {
+                        f.render_stateful_widget(list, bc[breadcrumb_idx], &mut level.state);
+                        breadcrumb_idx += 1;
+                    }
+                } else if chunk_idx < chunks.len() {
                     f.render_stateful_widget(list, chunks[chunk_idx], &mut level.state);
                     chunk_idx += 1;
                 }
+            }
+
+            // Render hotkey legend spanning across breadcrumb panels
+            if let Some(legend_rect) = legend_area {
+                let hotkeys = vec![
+                    Line::from(vec![
+                        Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Nav  "),
+                        Span::styled("Enter", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Open  "),
+                        Span::styled("←", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Back  "),
+                        Span::styled("i", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Ignore  "),
+                        Span::styled("I", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Ignore+Del  "),
+                        Span::styled("d", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Delete"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("r", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Rescan  "),
+                        Span::styled("R", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Restore  "),
+                        Span::styled("q", Style::default().fg(Color::Yellow)),
+                        Span::raw(":Quit"),
+                    ]),
+                ];
+
+                let legend = Paragraph::new(hotkeys)
+                    .block(Block::default().borders(Borders::ALL).title("Hotkeys"))
+                    .style(Style::default().fg(Color::Gray));
+
+                f.render_widget(legend, legend_rect);
             }
 
             // Render status bar at the bottom with columns

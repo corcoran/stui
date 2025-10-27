@@ -61,7 +61,8 @@ impl CacheDb {
                 global_bytes INTEGER NOT NULL,
                 local_bytes INTEGER NOT NULL,
                 need_bytes INTEGER NOT NULL,
-                receive_only_changed_bytes INTEGER NOT NULL
+                receive_only_changed_bytes INTEGER NOT NULL,
+                global_total_items INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS browse_cache (
@@ -98,7 +99,7 @@ impl CacheDb {
     pub fn get_folder_status(&self, folder_id: &str) -> Result<Option<FolderStatus>> {
         let mut stmt = self.conn.prepare(
             "SELECT state, need_total_items, receive_only_total_items, global_bytes,
-                    local_bytes, need_bytes, receive_only_changed_bytes
+                    local_bytes, need_bytes, receive_only_changed_bytes, global_total_items
              FROM folder_status WHERE folder_id = ?1"
         )?;
 
@@ -112,12 +113,12 @@ impl CacheDb {
                 local_bytes: row.get(4)?,
                 need_bytes: row.get(5)?,
                 receive_only_changed_bytes: row.get(6)?,
+                global_total_items: row.get(7)?,
                 // Other fields with default values
                 global_deleted: 0,
                 global_directories: 0,
                 global_files: 0,
                 global_symlinks: 0,
-                global_total_items: 0,
                 in_sync_bytes: 0,
                 in_sync_files: 0,
                 local_deleted: 0,
@@ -147,8 +148,8 @@ impl CacheDb {
         self.conn.execute(
             "INSERT OR REPLACE INTO folder_status
              (folder_id, sequence, state, need_total_items, receive_only_total_items,
-              global_bytes, local_bytes, need_bytes, receive_only_changed_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              global_bytes, local_bytes, need_bytes, receive_only_changed_bytes, global_total_items)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 folder_id,
                 sequence as i64,
@@ -159,6 +160,7 @@ impl CacheDb {
                 status.local_bytes as i64,
                 status.need_bytes as i64,
                 status.receive_only_changed_bytes as i64,
+                status.global_total_items as i64,
             ],
         )?;
 
