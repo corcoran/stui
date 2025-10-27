@@ -51,12 +51,14 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 **Next steps:**
 1. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
 2. Add config file location support (`~/.config/synctui/config.yaml` with CLI override)
-3. Add filtering functionality (show only ignored files, by type, etc.)
-4. Add event history viewer with persistent logging
-5. Add file preview system (text and images)
-6. Build comprehensive test suite
-7. Improve error handling, display, and timeouts
-8. Refactor code to be more modular and readable
+3. Pause / Resume folder toggle hotkey + status (with confirmation)
+4. Change Folder Type toggle hotkey + status (with confirmation)
+5. Add filtering functionality (show only ignored files, by type, etc.)
+6. Add event history viewer with persistent logging
+7. Add file preview system (text and images)
+8. Build comprehensive test suite
+9. Improve error handling, display, and timeouts
+10. Refactor code to be more modular and readable
 
 
 

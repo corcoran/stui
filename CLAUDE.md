@@ -142,6 +142,8 @@ CLI flags:
 
 ### Planned Features
 - Config file at `~/.config/synctui/config.yaml` with CLI override
+- Pause / Resume folder toggle hotkey + status (with confirmation)
+- Change Folder Type toggle hotkey + status (with confirmation)
 - File type filtering and ignored-only view
 - Event history viewer with persistent logging
 - File preview (text files and CLI image rendering)
