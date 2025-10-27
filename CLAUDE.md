@@ -54,24 +54,33 @@ Display visual indicators for file/folder states:
 - `R`: Restore deleted files (revert receive-only folder)
 - `s`: Cycle sort mode (Icon → A-Z → DateTime → Size)
 - `S`: Toggle reverse sort order
-- `t`: Toggle timestamp display
+- `t`: Toggle info display (Off → TimestampOnly → TimestampAndSize → Off)
 - `p`: Pause/resume folder (planned)
+- Vim keybindings (optional): `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
 
 ### Status Bar & UI Elements
 
 - **Status Bar**: Shows folder state, data sizes, sync progress, in_sync/total items, current sort mode
 - **Last Update Display**: Shows timestamp and filename of most recent change per folder
-- **Timestamp Display**: Modification time shown on right side (dark gray), toggleable with `t` key
-- **Hotkey Legend**: Wrapping legend at bottom of breadcrumb panels showing all available keys
+- **File Info Display**: Three-state toggle showing timestamp and/or size (human-readable: `1.2K`, `5.3M`, etc.)
+  - Off: No info displayed
+  - TimestampOnly: Shows modification time (e.g., `2025-10-26 20:58`)
+  - TimestampAndSize: Shows size + timestamp for files (e.g., `1.2M 2025-10-26 20:58`), timestamp only for directories
+- **Hotkey Legend**: Wrapping legend at bottom of breadcrumb panels showing all available keys (dynamic based on vim mode)
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
-- **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar
+- **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar, directories always sorted first
 
 ### Configuration
 
-YAML config file containing:
+YAML config file (currently `./config.yaml`, planned: `~/.config/synctui/config.yaml`) containing:
 - API key
 - Base URL
 - `path_map` (container-to-host path translations)
+- `vim_mode` (optional, boolean to enable vim keybindings)
+
+CLI flags:
+- `--debug`: Enable debug logging to `/tmp/synctui-debug.log`
+- `--vim`: Enable vim keybindings (overrides config file setting)
 
 ### Safety Features
 
@@ -126,6 +135,9 @@ YAML config file containing:
 - No filtering by file type or name (planned)
 - No batch operations for multi-select
 - Config file location hardcoded to `./config.yaml` (needs `~/.config/synctui/` support)
+- Error handling and timeout management needs improvement
+- Code needs refactoring for better modularity and readability
+- No comprehensive test suite yet
 
 ### Planned Features
 - Config file at `~/.config/synctui/config.yaml` with CLI override
@@ -136,6 +148,9 @@ YAML config file containing:
 - Batch operations (multi-select for ignore/delete/rescan)
 - Configurable keybindings via YAML/TOML
 - Cross-platform packaging (Linux, macOS, Windows)
+- Comprehensive test suite
+- Better error states, handling, and timeout management
+- Code refactoring for improved modularity
 
 ## Development Guidelines
 

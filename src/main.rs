@@ -110,6 +110,66 @@ fn format_timestamp(timestamp: &str) -> String {
     timestamp.to_string()
 }
 
+fn format_human_size(size: u64) -> String {
+    // Format size as human-readable, always 4 characters for alignment
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if size == 0 {
+        return "   0".to_string();
+    } else if size < KB {
+        // Show raw bytes as digits (no 'B' suffix)
+        return format!("{:>4}", size);
+    } else if size < MB {
+        let kb = size as f64 / KB as f64;
+        if kb < 10.0 {
+            return format!("{:.1}K", kb);
+        } else {
+            return format!("{:>3}K", (size / KB));
+        }
+    } else if size < GB {
+        let mb = size as f64 / MB as f64;
+        if mb < 10.0 {
+            return format!("{:.1}M", mb);
+        } else {
+            return format!("{:>3}M", (size / MB));
+        }
+    } else if size < TB {
+        let gb = size as f64 / GB as f64;
+        if gb < 10.0 {
+            return format!("{:.1}G", gb);
+        } else {
+            return format!("{:>3}G", (size / GB));
+        }
+    } else {
+        let tb = size as f64 / TB as f64;
+        if tb < 10.0 {
+            return format!("{:.1}T", tb);
+        } else {
+            return format!("{:>3}T", (size / TB));
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayMode {
+    Off,              // No timestamp or size
+    TimestampOnly,    // Show timestamp only
+    TimestampAndSize, // Show both size and timestamp
+}
+
+impl DisplayMode {
+    fn next(&self) -> Self {
+        match self {
+            DisplayMode::Off => DisplayMode::TimestampOnly,
+            DisplayMode::TimestampOnly => DisplayMode::TimestampAndSize,
+            DisplayMode::TimestampAndSize => DisplayMode::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SortMode {
     VisualIndicator, // Sort by sync state icon (directories first, then by state priority)
@@ -164,7 +224,7 @@ struct App {
     breadcrumb_trail: Vec<BreadcrumbLevel>,
     focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
     should_quit: bool,
-    show_timestamps: bool, // Toggle for displaying timestamps
+    display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
     vim_mode: bool, // Enable vim keybindings
     last_key_was_g: bool, // Track 'g' key for 'gg' command
     // Track in-flight operations to prevent duplicate fetches
@@ -297,7 +357,7 @@ impl App {
             breadcrumb_trail: Vec::new(),
             focus_level: 0,
             should_quit: false,
-            show_timestamps: true,
+            display_mode: DisplayMode::TimestampAndSize, // Start with most info
             vim_mode: config.vim_mode,
             last_key_was_g: false,
             loading_browse: HashSet::new(),
@@ -2037,8 +2097,8 @@ impl App {
                 self.toggle_sort_reverse();
             }
             KeyCode::Char('t') => {
-                // Toggle timestamp display
-                self.show_timestamps = !self.show_timestamps;
+                // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
+                self.display_mode = self.display_mode.next();
             }
             // Vim keybindings
             KeyCode::Char('h') if self.vim_mode => {
@@ -2463,61 +2523,83 @@ async fn run_app<B: ratatui::backend::Backend>(
                             }
                         };
 
-                        // Build display string with optional timestamp
-                        let display_str = if app.show_timestamps && !item.mod_time.is_empty() {
+                        // Build display string with optional timestamp and/or size
+                        let display_str = if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
                             let full_timestamp = format_timestamp(&item.mod_time);
                             let icon_and_name = format!("{}{}", icon, item.name);
+                            let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
 
                             // Calculate available space: panel_width - borders(2) - highlight(2) - padding(2)
                             let available_width = panel_width.saturating_sub(6) as usize;
-                            let spacing = 2; // Minimum spacing between name and timestamp
+                            let spacing = 2; // Minimum spacing between name and info
 
                             // Use unicode width for proper emoji handling
                             let name_width = icon_and_name.width();
-                            let timestamp_width = full_timestamp.width();
+
+                            // Determine what to show based on display mode (omit size for directories)
+                            let info_string = match app.display_mode {
+                                DisplayMode::TimestampOnly => full_timestamp.clone(),
+                                DisplayMode::TimestampAndSize => {
+                                    if is_directory {
+                                        // Directories: show only timestamp
+                                        full_timestamp.clone()
+                                    } else {
+                                        // Files: show size + timestamp
+                                        let human_size = format_human_size(item.size);
+                                        format!("{} {}", human_size, full_timestamp)
+                                    }
+                                },
+                                DisplayMode::Off => String::new(),
+                            };
+
+                            let info_width = info_string.width();
 
                             // If everything fits, show it all
-                            if name_width + spacing + timestamp_width <= available_width {
-                                let padding = available_width - name_width - timestamp_width;
-                                format!("{}{}{}", icon_and_name, " ".repeat(padding), full_timestamp)
+                            if name_width + spacing + info_width <= available_width {
+                                let padding = available_width - name_width - info_width;
+                                format!("{}{}{}", icon_and_name, " ".repeat(padding), info_string)
                             } else {
-                                // Truncate timestamp to make room for name
+                                // Truncate info to make room for name
                                 let space_left = available_width.saturating_sub(name_width + spacing);
 
                                 if space_left >= 5 {
-                                    // Show truncated timestamp (prioritize time over date)
-                                    // Format: "2025-10-26 20:58" -> "20:58" (5 chars) or "10-26" (5 chars)
-                                    let truncated_timestamp = if space_left >= 16 {
-                                        // Full timestamp fits
-                                        full_timestamp
-                                    } else if space_left >= 10 {
-                                        // Show "MM-DD HH:MM" (10 chars)
-                                        if full_timestamp.len() >= 16 {
-                                            full_timestamp[5..16].to_string()
-                                        } else {
-                                            full_timestamp
-                                        }
-                                    } else if space_left >= 5 {
-                                        // Show just time "HH:MM" (5 chars)
-                                        if full_timestamp.len() >= 16 {
+                                    // Show truncated info (prioritize time over date)
+                                    let truncated_info = if app.display_mode == DisplayMode::TimestampAndSize && !is_directory {
+                                        // Files with size: Try "1.2K HH:MM" (10 chars) or just "HH:MM" (5 chars)
+                                        if space_left >= 10 && full_timestamp.len() >= 16 {
+                                            // Show size + time only
+                                            let human_size = format_human_size(item.size);
+                                            format!("{} {}", human_size, &full_timestamp[11..16])
+                                        } else if space_left >= 5 && full_timestamp.len() >= 16 {
+                                            // Show just time
                                             full_timestamp[11..16].to_string()
                                         } else {
-                                            full_timestamp
+                                            String::new()
                                         }
                                     } else {
-                                        // Not enough room even for time
-                                        String::new()
+                                        // TimestampOnly OR directory: progressively truncate timestamp
+                                        if space_left >= 16 {
+                                            full_timestamp
+                                        } else if space_left >= 10 && full_timestamp.len() >= 16 {
+                                            // Show "MM-DD HH:MM" (10 chars)
+                                            full_timestamp[5..16].to_string()
+                                        } else if space_left >= 5 && full_timestamp.len() >= 16 {
+                                            // Show just time "HH:MM" (5 chars)
+                                            full_timestamp[11..16].to_string()
+                                        } else {
+                                            String::new()
+                                        }
                                     };
 
-                                    if !truncated_timestamp.is_empty() {
-                                        let ts_width = truncated_timestamp.width();
-                                        let padding = available_width - name_width - ts_width;
-                                        format!("{}{}{}", icon_and_name, " ".repeat(padding), truncated_timestamp)
+                                    if !truncated_info.is_empty() {
+                                        let info_width = truncated_info.width();
+                                        let padding = available_width - name_width - info_width;
+                                        format!("{}{}{}", icon_and_name, " ".repeat(padding), truncated_info)
                                     } else {
                                         icon_and_name
                                     }
                                 } else {
-                                    // Not enough room for timestamp, just show name
+                                    // Not enough room for info, just show name
                                     icon_and_name
                                 }
                             }
@@ -2525,46 +2607,74 @@ async fn run_app<B: ratatui::backend::Backend>(
                             format!("{}{}", icon, item.name)
                         };
 
-                        // Create ListItem with styled timestamp
-                        if app.show_timestamps && !item.mod_time.is_empty() {
-                            // Parse the display_str to separate name and timestamp
+                        // Create ListItem with styled info (timestamp and/or size)
+                        if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
                             let full_timestamp = format_timestamp(&item.mod_time);
                             let icon_and_name = format!("{}{}", icon, item.name);
+                            let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
 
                             // Calculate available space
                             let available_width = panel_width.saturating_sub(6) as usize;
                             let spacing = 2;
                             let name_width = icon_and_name.width();
-                            let timestamp_width = full_timestamp.width();
 
-                            if name_width + spacing + timestamp_width <= available_width {
+                            // Determine what to show based on display mode (omit size for directories)
+                            let info_string = match app.display_mode {
+                                DisplayMode::TimestampOnly => full_timestamp.clone(),
+                                DisplayMode::TimestampAndSize => {
+                                    if is_directory {
+                                        full_timestamp.clone()
+                                    } else {
+                                        let human_size = format_human_size(item.size);
+                                        format!("{} {}", human_size, full_timestamp)
+                                    }
+                                },
+                                DisplayMode::Off => String::new(),
+                            };
+
+                            let info_width = info_string.width();
+
+                            if name_width + spacing + info_width <= available_width {
                                 // Everything fits - use styled spans
-                                let padding = available_width - name_width - timestamp_width;
+                                let padding = available_width - name_width - info_width;
                                 ListItem::new(Line::from(vec![
                                     Span::raw(icon_and_name),
                                     Span::raw(" ".repeat(padding)),
-                                    Span::styled(full_timestamp, Style::default().fg(Color::Rgb(120, 120, 120))),
+                                    Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))),
                                 ]))
                             } else {
-                                // Truncated timestamp - calculate which one
+                                // Truncated info - calculate which one
                                 let space_left = available_width.saturating_sub(name_width + spacing);
-                                let truncated_timestamp = if space_left >= 16 {
-                                    full_timestamp
-                                } else if space_left >= 10 && full_timestamp.len() >= 16 {
-                                    full_timestamp[5..16].to_string()
-                                } else if space_left >= 5 && full_timestamp.len() >= 16 {
-                                    full_timestamp[11..16].to_string()
+                                let truncated_info = if app.display_mode == DisplayMode::TimestampAndSize && !is_directory {
+                                    // Files with size: Try "1.2K HH:MM" (10 chars) or just "HH:MM" (5 chars)
+                                    if space_left >= 10 && full_timestamp.len() >= 16 {
+                                        let human_size = format_human_size(item.size);
+                                        format!("{} {}", human_size, &full_timestamp[11..16])
+                                    } else if space_left >= 5 && full_timestamp.len() >= 16 {
+                                        full_timestamp[11..16].to_string()
+                                    } else {
+                                        String::new()
+                                    }
                                 } else {
-                                    String::new()
+                                    // TimestampOnly OR directory: progressively truncate timestamp
+                                    if space_left >= 16 {
+                                        full_timestamp.clone()
+                                    } else if space_left >= 10 && full_timestamp.len() >= 16 {
+                                        full_timestamp[5..16].to_string()
+                                    } else if space_left >= 5 && full_timestamp.len() >= 16 {
+                                        full_timestamp[11..16].to_string()
+                                    } else {
+                                        String::new()
+                                    }
                                 };
 
-                                if !truncated_timestamp.is_empty() {
-                                    let ts_width = truncated_timestamp.width();
-                                    let padding = available_width - name_width - ts_width;
+                                if !truncated_info.is_empty() {
+                                    let info_width = truncated_info.width();
+                                    let padding = available_width - name_width - info_width;
                                     ListItem::new(Line::from(vec![
                                         Span::raw(icon_and_name),
                                         Span::raw(" ".repeat(padding)),
-                                        Span::styled(truncated_timestamp, Style::default().fg(Color::Rgb(120, 120, 120))),
+                                        Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))),
                                     ]))
                                 } else {
                                     ListItem::new(Span::raw(icon_and_name))
@@ -2650,7 +2760,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                     Span::styled("S", Style::default().fg(Color::Yellow)),
                     Span::raw(":Reverse  "),
                     Span::styled("t", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Timestamp  "),
+                    Span::raw(":Info  "),
                     Span::styled("i", Style::default().fg(Color::Yellow)),
                     Span::raw(":Ignore  "),
                     Span::styled("I", Style::default().fg(Color::Yellow)),

@@ -16,13 +16,21 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 - ✅ Selection preserved when re-sorting
 - ✅ Proper handling of emoji icon widths using unicode-width
 
-**Timestamp Display:**
-- ✅ File/folder modification timestamps displayed on right side (on by default)
-- ✅ Toggle timestamps with `t` key
-- ✅ Smart truncation: Full (16 chars) → Medium (10 chars) → Time only (5 chars)
-- ✅ Timestamps in dark gray for subtle appearance
+**File Info Display (Three-State Toggle):**
+- ✅ Three display modes with `t` key: Off → TimestampOnly → TimestampAndSize → Off
+- ✅ File sizes shown in human-readable format (e.g., `1.2K`, `5.3M`, `2.1G`)
+- ✅ Bytes < 1KB shown as plain digits (e.g., `123`, `999`)
+- ✅ Size omitted for directories (semantically correct)
+- ✅ Smart truncation handles all three modes gracefully
+- ✅ Info displayed in dark gray for subtle appearance
 - ✅ Unicode-aware alignment (handles emoji widths correctly)
-- ✅ Graceful degradation when panel width is limited
+
+**Vim Keybindings:**
+- ✅ Optional vim navigation mode with `--vim` CLI flag or `vim_mode: true` in config
+- ✅ Full vim navigation: `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
+- ✅ Standard keys also available (PageUp/Down, Home/End) but not advertised
+- ✅ Dynamic hotkey legend shows vim keys when enabled
+- ✅ State tracking for `gg` double-key command
 
 **Database Schema Updates:**
 - ✅ Added `mod_time` and `size` fields to `browse_cache` table
@@ -30,7 +38,7 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 
 **UI Improvements:**
 - ✅ Hotkey legend now wraps automatically to multiple lines
-- ✅ Updated legend with all new keys: `s`, `S`, `t`
+- ✅ Updated legend with all keys: `s`, `S`, `t`, vim keys (when enabled)
 - ✅ Cache clearing fix for schema migrations
 
 **Next steps:**
@@ -39,8 +47,9 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 3. Add event history viewer with persistent logging
 4. Add file preview system (text and images)
 5. Build comprehensive test suite
-6. Improve error handling and display
-7. Performance testing with large-scale datasets
+6. Improve error handling, display, and timeouts
+7. Refactor code to be more modular and readable
+8. Performance testing with large-scale datasets
 
 
 
