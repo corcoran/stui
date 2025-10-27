@@ -4,29 +4,41 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 
 ---
 
-## 📍 Current Status (Updated 2025-10-26)
+## 📍 Current Status (Updated 2025-01-26)
 
 **Where we are:**
 - ✅ **Phase 1 complete** - Basic prototype with folder/directory listing, recursive browsing, caching, and directory prioritization
 - ✅ **Phase 1.5 complete** - Major async refactor eliminating all blocking API calls in background operations
-- ✅ **Phase 2 partially complete** - Rescan, ignore toggling, and ignore+delete operations working
+- ✅ **Phase 2 mostly complete** - Rescan, ignore toggling, ignore+delete, file deletion, and event-based cache invalidation working
+- ✅ **Phase 3 partially complete** - Breadcrumb navigation, status bar, and hotkey legend implemented
+- ✅ **Phase 4 complete** - Event listener with live updates fully functional
 - 🚧 **Currently ready for Phase 1.6** - Feature additions (filtering, error handling) and testing
 
-**What Phase 1.5 Accomplished:**
-All background/prefetch operations are now fully non-blocking:
-- ✅ Periodic folder status polling (async loop)
-- ✅ Visible file sync state fetching (batch operations)
-- ✅ Directory state prefetching (cache building)
-- ✅ Selected item sync state fetching (high-priority)
-- ✅ Recursive subdirectory discovery (cache-first with async fallback)
-- ✅ Hovered subdirectory prefetching (speculative loading)
+**Recent Accomplishments (Session 2025-01-26):**
 
-**Result:** Smooth scrolling with no stutter, even during heavy cache building on large directories. User actions and navigation remain strategically blocking for clear feedback.
+**Event-Based Cache Invalidation:**
+- ✅ Event listener tracks `LocalIndexUpdated`, `ItemFinished`, `LocalChangeDetected`, `RemoteChangeDetected`
+- ✅ Granular cache invalidation: file-level, directory-level, and folder-level
+- ✅ Immediate UI refresh when viewing affected directories
+- ✅ Last update timestamp displayed per folder with file path
+- ✅ Event ID persistence across app restarts
+
+**UI Improvements:**
+- ✅ Folder statistics fixed (4th column showing in_sync/total items correctly)
+- ✅ Hotkey legend spanning across breadcrumb panels (excludes Folders panel)
+- ✅ Legend positioned at bottom, left-aligned against Folders panel edge
+- ✅ Comprehensive hotkey display: `↑/↓`, `Enter`, `←`, `i`, `I`, `d`, `r`, `R`, `q`
+
+**New Features:**
+- ✅ File deletion with `d` key (with confirmation dialog) - works for any file, not just ignored
+- ✅ `I` key retained for ignore + delete workflow
+- ✅ Last update line color fixed (RGB 150,150,150) - visible on both highlighted and normal backgrounds
 
 **Next steps:**
 1. Build comprehensive test suite to prevent regressions
-2. Validate performance with large-scale testing
-3. Add filtering and remaining features (Phase 1.6+)
+2. Add filtering functionality (Phase 1.6)
+3. Improve error handling and display
+4. Performance testing with large-scale datasets
 
 ---
 
@@ -243,6 +255,14 @@ Add interactivity — rescan, pause/resume, and ignore actions.
    - Delete operation includes safety confirmations
    - Path mapping for Docker container paths working
 
+4. **✅ COMPLETED: File Deletion**
+   - `d` → Delete any file/directory from disk with confirmation **✅ Working**
+   - Confirmation dialog shows file/directory name
+   - Displays warning: "This action cannot be undone!"
+   - Works for both files and directories (recursive delete)
+   - Triggers rescan after successful deletion
+   - Independent from ignore status (unlike old behavior)
+
 ---
 
 ## Phase 3: UX Improvements
@@ -252,37 +272,62 @@ Make navigation smoother and display richer data.
 
 ### Steps
 
-1. **Breadcrumb Navigation**
-   - Allow traversing directories with `Enter` / `Backspace`.
-   - Maintain a navigation stack per folder.
+1. **✅ COMPLETED: Breadcrumb Navigation**
+   - Traversing directories with `Enter` / `Backspace` working
+   - Navigation stack per folder implemented
+   - Multi-pane horizontal layout showing navigation trail
 
-2. **Async Loading Indicators**
-   - Show spinners during REST requests.
+2. **⏳ Pending: Async Loading Indicators**
+   - Show spinners during REST requests
 
-3. **Status Bar**
-   - Show connection status, folder count, last API poll time.
+3. **✅ COMPLETED: Status Bar**
+   - Shows folder sync state (idle, syncing, paused)
+   - Displays data sizes (global bytes, local bytes, need bytes)
+   - Shows in_sync/total items count
+   - Displays sync status messages ("Up to date", "Out of sync", etc.)
+   - Shows last update timestamp and file path per folder
 
-4. **Keyboard Shortcuts Help**
-   - Display modal on `?` showing all hotkeys.
+4. **✅ COMPLETED: Keyboard Shortcuts Help**
+   - Hotkey legend displayed at bottom of breadcrumb panels
+   - Spans horizontally across all directory panels
+   - Shows all available hotkeys: `↑/↓`, `Enter`, `←`, `i`, `I`, `d`, `r`, `R`, `q`
+   - Keys highlighted in yellow for easy scanning
 
 ---
 
-## Phase 4: Event Listening and Live Updates
+## Phase 4: Event Listening and Live Updates ✅ COMPLETED
 
 ### Objective
 Subscribe to `/rest/events` for live status updates.
 
-### Steps
+### Implementation
 
-1. **Implement Event Listener (async task)**
-   - Stream events and update UI reactively.
-   - Detect folder rescans, sync completion, etc.
+1. **✅ COMPLETED: Event Listener (async task)** (`src/event_listener.rs`)
+   - Long-polling `/rest/events` endpoint
+   - Processes event types:
+     - `LocalIndexUpdated` - local file changes (has `filenames` array)
+     - `ItemFinished` - sync completion
+     - `LocalChangeDetected` - local changes detected
+     - `RemoteChangeDetected` - remote changes detected
+   - Event ID persistence across app restarts
+   - Automatic reconnection on connection drops
 
-2. **Display Realtime Icons**
-   - Automatically update states (✅, ⚠️, ⏸).
+2. **✅ COMPLETED: Granular Cache Invalidation** (`src/cache.rs`)
+   - File-level invalidation: `invalidate_single_file()`
+   - Directory-level invalidation: `invalidate_directory()`
+   - Folder-level invalidation: `invalidate_folder()`
+   - Browse cache and sync state cache properly cleared
 
-3. **Handle Connection Drops**
-   - Reconnect and retry event stream automatically.
+3. **✅ COMPLETED: Realtime UI Updates**
+   - Icons automatically update based on events (✅, ⚠️, ⏸, 💻, ☁️)
+   - Immediate refresh when viewing affected directories
+   - Last update timestamp displayed per folder
+   - Progressive state updates without blocking UI
+
+4. **✅ COMPLETED: Event Processing**
+   - Channel-based architecture: `invalidation_tx` → `invalidation_rx`
+   - Separate channel for event ID persistence
+   - Debug logging for troubleshooting (controlled by DEBUG_MODE flag)
 
 ---
 
@@ -322,11 +367,11 @@ Add quality-of-life improvements and new modes.
 | Phase | Status | Goal | Core Feature |
 |-------|--------|------|---------------|
 | 1 | ✅ Done | Initial prototype | Display folders & directories (with recursion & caching) |
-| 1.5 | ✅ **DONE** | **Async refactor** | **Non-blocking API calls, smooth scrolling, performance optimization** |
+| 1.5 | ✅ Done | Async refactor | Non-blocking API calls, smooth scrolling, performance optimization |
 | 1.6 | 🚧 Next | Feature additions | Filtering, advanced error handling, comprehensive testing |
-| 2 | 🚧 Partial | Control actions | Ignore ✅, delete ✅, rescan ✅, pause ⏳ |
-| 3 | ⏳ Planned | UX polish | Navigation, help modal, status bar |
-| 4 | ⏳ Planned | Live updates | Event streaming and reactive icons |
+| 2 | ✅ Done | Control actions | Ignore ✅, delete ✅, rescan ✅, file deletion ✅, pause ⏳ |
+| 3 | ✅ Mostly Done | UX polish | Breadcrumb nav ✅, status bar ✅, hotkey legend ✅, spinners ⏳ |
+| 4 | ✅ **DONE** | **Live updates** | **Event streaming ✅, cache invalidation ✅, realtime icons ✅** |
 | 5 | ⏳ Planned | Advanced features | Diff view, batch actions, packaging |
 
 ---
