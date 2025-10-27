@@ -27,6 +27,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Wrapping Hotkey Legend**: Always visible, adapts to show active keybindings
 
 ### 🎯 Smart Features
+- **Responsive Navigation**: Instant keyboard input with idle-aware background caching
 - **Docker Path Mapping**: Automatic translation between container and host paths
 - **Directory-Aware Display**: File sizes shown for files only, omitted for directories
 - **Unicode-Aware Rendering**: Proper alignment even with emoji icons

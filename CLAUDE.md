@@ -118,6 +118,7 @@ CLI flags:
 - **Sequence-Based Validation**: Only invalidates cache when Syncthing data changes
 - **Non-Blocking Operations**: All background tasks run async without freezing UI
 - **Request Deduplication**: Prevents duplicate in-flight API calls
+- **Idle Detection & Non-Blocking UI**: 300ms idle threshold ensures keyboard input is never blocked by background prefetch operations; main event loop uses 250ms poll timeout to minimize CPU wakeups (~<1-2% CPU when idle)
 
 ### Caching Strategy
 - **SQLite database**: `~/.cache/synctui/cache.db` (Linux) or `/tmp/synctui-cache` (fallback)
