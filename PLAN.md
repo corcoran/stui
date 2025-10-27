@@ -8,6 +8,27 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 
 **Recent Accomplishments (Session 2025-01-27):**
 
+**System Status Bar:**
+- ✅ Device status bar at bottom of Folders panel
+- ✅ Shows device name, uptime (formatted as "3d 16h" or "15h 44m")
+- ✅ Local state summary: total files, directories, and storage across all folders
+- ✅ Live download/upload transfer rates (updated every 2.5 seconds)
+- ✅ Pastel yellow labels matching Hotkeys bar style
+- ✅ Consistent gray text color across all status bars
+
+**Icon System Refactor:**
+- ✅ Centralized icon rendering in `src/icons.rs` module
+- ✅ Support for both Emoji and Nerd Fonts modes (configurable via `icon_mode` in config.yaml)
+- ✅ Pastel color scheme: blue folders/files, colored status icons
+- ✅ Eliminated ~75 lines of duplicated icon rendering code
+- ✅ Proper alignment for all icon types including ignored items
+- ✅ Option B coloring: folder/file icons stay blue, status icons get their own colors
+
+**Configuration:**
+- ✅ Config file now properly located at `~/.config/synctui/config.yaml`
+- ✅ Added `icon_mode` setting ("emoji" or "nerdfont")
+- ✅ Fallback to `./config.yaml` for development
+
 **Sorting System:**
 - ✅ Multi-mode sorting with `s` key: Icon (sync state) → A-Z → DateTime → Size
 - ✅ Reverse sort with `S` key
@@ -49,19 +70,17 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 - ✅ Instant keyboard responsiveness even during background caching
 
 **Next steps:**
-1. Status bar at top that shows: Device name, Download / Upload rate, Local State (num files, folders, size), Uptime, Version
-2. Pause / Resume folder toggle hotkey + status (with confirmation)
-3. Change Folder Type toggle hotkey + status (with confirmation)
-4. Remote Devices (Name, Download / Upload rate, Folders)
-5. Dynamic sizing (first panel is 25% width, 75% for right panels, keeps
-   shrinking proprotionally)
-4. Add event history viewer with persistent logging
-5. Add filtering functionality (show only ignored files, by type, etc.)
-6. Add file preview system (text and images)
-7. Build comprehensive test suite
-8. Improve error handling, display, and timeouts
-9. Refactor code to be more modular and readable
-10. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
+1. Pause / Resume folder toggle hotkey + status (with confirmation)
+2. Change Folder Type toggle hotkey + status (with confirmation)
+3. Remote Devices (Name, Download / Upload rate, Folders)
+4. Dynamic sizing (first panel is 25% width, 75% for right panels, keeps shrinking proportionally)
+5. Add event history viewer with persistent logging
+6. Add filtering functionality (show only ignored files, by type, etc.)
+7. Add file preview system (text and images)
+8. Build comprehensive test suite
+9. Improve error handling, display, and timeouts
+10. Refactor code to be more modular and readable
+11. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
 
 
 ## Polishing and Extensions

@@ -9,4 +9,10 @@ pub struct Config {
     pub path_map: HashMap<String, String>,
     #[serde(default)]
     pub vim_mode: bool,
+    #[serde(default = "default_icon_mode")]
+    pub icon_mode: String,
+}
+
+fn default_icon_mode() -> String {
+    "nerdfont".to_string()
 }

@@ -9,8 +9,10 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 
 ### 🚀 Real-Time Sync Monitoring
 - **Live Status Updates**: Automatic cache invalidation using Syncthing's event stream
-- **Visual Sync States**: Instant feedback with emoji indicators (✅ synced, ☁️ remote-only, 💻 local-only, ⚠️ out-of-sync, 🚫 ignored)
+- **Visual Sync States**: Instant feedback with pastel-colored icons (synced, remote-only, local-only, out-of-sync, ignored)
+- **Icon Modes**: Choose between emoji or Nerd Fonts icons via config
 - **Smart Caching**: SQLite-backed cache for instant UI responsiveness with background updates
+- **System Status Bar**: Device name, uptime, local state summary, and live transfer rates
 
 ### 📁 File & Folder Management
 - **Multi-Pane Navigation**: Breadcrumb-style directory traversal with independent panels
@@ -55,6 +57,9 @@ Create `~/.config/synctui/config.yaml`:
 ```yaml
 api_key: "your-syncthing-api-key"
 base_url: "http://127.0.0.1:8384"
+
+# Optional: Icon display mode ("emoji" or "nerdfont")
+icon_mode: "nerdfont"
 
 # Optional: Map container paths to host paths (for Docker setups)
 path_map:
@@ -148,10 +153,18 @@ Press `s` to cycle through sort modes:
 
 Press `S` to reverse the current sort order. Current mode and direction are shown in the status bar (e.g., `Sort: DateTime↑`)
 
-## Status Bar
+## Status Bars
 
-The bottom status bar shows:
-- **Folder Name**: Currently selected folder
+### System Status Bar
+Located at the bottom of the Folders panel, showing:
+- **Device Name**: Your Syncthing device name
+- **Uptime**: Time since Syncthing started (e.g., `Up: 3d 16h`)
+- **Local State**: Total files, directories, and storage size across all folders
+- **Transfer Rates**: Live download/upload speeds updated every 2.5 seconds
+
+### Folder/Directory Status Bar
+Located at the bottom of the screen, showing:
+- **Folder Name**: Currently selected folder/directory
 - **Sync State**: Folder status (Idle, Syncing, etc.)
 - **Data Sizes**: Local/Global bytes, sync progress
 - **Items**: In-sync count vs. total items (e.g., `125/125`)
@@ -201,7 +214,6 @@ rm ~/.cache/synctui/cache.db
 
 ## Limitations
 
-- Config file location currently hardcoded to `./config.yaml` (will support `~/.config/synctui/` in future)
 - No async loading spinners (UI may briefly pause on large operations)
 - No file type filtering or batch operations yet
 - Error handling and timeout management still being refined

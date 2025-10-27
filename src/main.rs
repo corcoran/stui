@@ -41,10 +41,12 @@ mod api_service;
 mod cache;
 mod config;
 mod event_listener;
+mod icons;
 
 use api::{BrowseItem, ConnectionStats, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
 use cache::CacheDb;
 use config::Config;
+use icons::{FolderState, IconMode, IconRenderer, IconTheme};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -294,6 +296,8 @@ struct App {
     device_name: Option<String>,      // Cached device name
     last_system_status_update: Instant,  // Track when we last fetched system status
     last_connection_stats_fetch: Instant,  // Track when we last fetched connection stats
+    // Icon rendering
+    icon_renderer: IconRenderer,      // Centralized icon renderer
 }
 
 impl App {
@@ -405,6 +409,14 @@ impl App {
             event_id_tx,
         );
 
+        // Parse icon mode from config
+        let icon_mode = match config.icon_mode.to_lowercase().as_str() {
+            "emoji" => IconMode::Emoji,
+            "nerdfont" | "nerd" | "nf" => IconMode::NerdFont,
+            _ => IconMode::NerdFont, // Default to nerd font
+        };
+        let icon_renderer = IconRenderer::new(icon_mode, IconTheme::default());
+
         let mut app = App {
             client,
             cache,
@@ -443,6 +455,7 @@ impl App {
             device_name: None,
             last_system_status_update: Instant::now(),
             last_connection_stats_fetch: Instant::now(),
+            icon_renderer,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -2792,33 +2805,35 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .map(|folder| {
                         let display_name = folder.label.as_ref().unwrap_or(&folder.id);
 
-                        // Determine folder icon based on status
-                        let icon = if !app.statuses_loaded {
-                            "📁🔍 " // Loading
+                        // Determine folder state
+                        let folder_state = if !app.statuses_loaded {
+                            FolderState::Loading
                         } else if folder.paused {
-                            "📁⏸  " // Paused
+                            FolderState::Paused
                         } else if let Some(status) = app.folder_statuses.get(&folder.id) {
                             if status.state == "" || status.state == "paused" {
-                                "📁⏸  " // Paused (empty state means paused)
+                                FolderState::Paused
                             } else if status.state == "syncing" {
-                                "📁🔄 " // Syncing
+                                FolderState::Syncing
                             } else if status.need_total_items > 0 || status.receive_only_total_items > 0 {
-                                "📁⚠️ " // Out of sync or has local additions
+                                FolderState::OutOfSync
                             } else if status.state == "idle" {
-                                "📁✅ " // Synced
+                                FolderState::Synced
                             } else if status.state.starts_with("sync") {
-                                "📁🔄 " // Any sync variant
+                                FolderState::Syncing
                             } else if status.state == "scanning" {
-                                "📁🔍 " // Scanning
+                                FolderState::Scanning
                             } else {
-                                "📁❓ " // Unknown state
+                                FolderState::Unknown
                             }
                         } else {
-                            "📁❌ " // Error fetching status
+                            FolderState::Error
                         };
 
                         // Build the folder display with optional last update info
-                        let folder_line = format!("{}{}", icon, display_name);
+                        let mut icon_spans = app.icon_renderer.folder_with_status(folder_state);
+                        icon_spans.push(Span::raw(display_name));
+                        let folder_line = Line::from(icon_spans);
 
                         // Add last update info if available
                         if let Some((timestamp, last_file)) = app.last_folder_updates.get(&folder.id) {
@@ -2844,7 +2859,7 @@ async fn run_app<B: ratatui::backend::Backend>(
 
                             // Multi-line item with update info
                             ListItem::new(vec![
-                                Line::from(Span::raw(folder_line)),
+                                folder_line,
                                 Line::from(Span::styled(
                                     format!("  ↳ {} - {}", time_str, file_display),
                                     Style::default().fg(Color::Rgb(150, 150, 150)) // Medium gray visible on both dark gray and black backgrounds
@@ -2852,7 +2867,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                             ])
                         } else {
                             // Single-line item without update info
-                            ListItem::new(Span::raw(folder_line))
+                            ListItem::new(folder_line)
                         }
                     })
                     .collect();
@@ -2911,63 +2926,28 @@ async fn run_app<B: ratatui::backend::Backend>(
                         // Use cached state directly (directories show their own metadata state, not aggregate)
                         let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
 
-                        let icon = match sync_state {
-                            SyncState::Synced => {
-                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                    "📁✅ "
-                                } else {
-                                    "📄✅ "
-                                }
-                            }
-                            SyncState::OutOfSync => {
-                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                    "📁⚠️ "
-                                } else {
-                                    "📄⚠️ "
-                                }
-                            }
-                            SyncState::LocalOnly => {
-                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                    "📁💻 "
-                                } else {
-                                    "📄💻 "
-                                }
-                            }
-                            SyncState::RemoteOnly => {
-                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                    "📁☁️ "
-                                } else {
-                                    "📄☁️ "
-                                }
-                            }
-                            SyncState::Ignored => {
-                                // Check if file exists on disk
-                                let relative_path = if let Some(ref prefix) = level.prefix {
-                                    format!("{}/{}", prefix, item.name)
-                                } else {
-                                    item.name.clone()
-                                };
-                                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
-
-                                if std::path::Path::new(&host_path).exists() {
-                                    "🚫⚠️ "  // Alarming - ignored file exists on disk
-                                } else {
-                                    "🚫.. "  // Normal - ignored file doesn't exist
-                                }
-                            }
-                            SyncState::Unknown => {
-                                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                                    "📁🔄 "
-                                } else {
-                                    "📄🔄 "
-                                }
-                            }
+                        // Build icon as spans (for coloring)
+                        let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
+                        let icon_spans: Vec<Span> = if sync_state == SyncState::Ignored {
+                            // Special handling for ignored items - check if exists on disk
+                            let relative_path = if let Some(ref prefix) = level.prefix {
+                                format!("{}/{}", prefix, item.name)
+                            } else {
+                                item.name.clone()
+                            };
+                            let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                            let exists = std::path::Path::new(&host_path).exists();
+                            app.icon_renderer.ignored_item(exists)
+                        } else {
+                            app.icon_renderer.item_with_sync_state(is_directory, sync_state)
                         };
 
                         // Build display string with optional timestamp and/or size
                         let display_str = if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
                             let full_timestamp = format_timestamp(&item.mod_time);
-                            let icon_and_name = format!("{}{}", icon, item.name);
+                            // For width calculation, create a temporary string from icons
+                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
+                            let icon_and_name = format!("{}{}", icon_string, item.name);
                             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
 
                             // Calculate available space: panel_width - borders(2) - highlight(2) - padding(2)
@@ -3045,13 +3025,15 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                         } else {
-                            format!("{}{}", icon, item.name)
+                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
+                            format!("{}{}", icon_string, item.name)
                         };
 
                         // Create ListItem with styled info (timestamp and/or size)
                         if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
                             let full_timestamp = format_timestamp(&item.mod_time);
-                            let icon_and_name = format!("{}{}", icon, item.name);
+                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
+                            let icon_and_name = format!("{}{}", icon_string, item.name);
                             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
 
                             // Calculate available space
@@ -3078,11 +3060,11 @@ async fn run_app<B: ratatui::backend::Backend>(
                             if name_width + spacing + info_width <= available_width {
                                 // Everything fits - use styled spans
                                 let padding = available_width - name_width - info_width;
-                                ListItem::new(Line::from(vec![
-                                    Span::raw(icon_and_name),
-                                    Span::raw(" ".repeat(padding)),
-                                    Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))),
-                                ]))
+                                let mut line_spans = icon_spans.clone();
+                                line_spans.push(Span::raw(&item.name));
+                                line_spans.push(Span::raw(" ".repeat(padding)));
+                                line_spans.push(Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))));
+                                ListItem::new(Line::from(line_spans))
                             } else {
                                 // Truncated info - calculate which one
                                 let space_left = available_width.saturating_sub(name_width + spacing);
@@ -3112,17 +3094,21 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 if !truncated_info.is_empty() {
                                     let info_width = truncated_info.width();
                                     let padding = available_width - name_width - info_width;
-                                    ListItem::new(Line::from(vec![
-                                        Span::raw(icon_and_name),
-                                        Span::raw(" ".repeat(padding)),
-                                        Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))),
-                                    ]))
+                                    let mut line_spans = icon_spans.clone();
+                                    line_spans.push(Span::raw(&item.name));
+                                    line_spans.push(Span::raw(" ".repeat(padding)));
+                                    line_spans.push(Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))));
+                                    ListItem::new(Line::from(line_spans))
                                 } else {
-                                    ListItem::new(Span::raw(icon_and_name))
+                                    let mut line_spans = icon_spans.clone();
+                                    line_spans.push(Span::raw(&item.name));
+                                    ListItem::new(Line::from(line_spans))
                                 }
                             }
                         } else {
-                            ListItem::new(Span::raw(display_str))
+                            let mut line_spans = icon_spans.clone();
+                            line_spans.push(Span::raw(&item.name));
+                            ListItem::new(Line::from(line_spans))
                         }
                     })
                     .collect();
