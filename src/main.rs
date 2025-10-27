@@ -42,7 +42,7 @@ mod cache;
 mod config;
 mod event_listener;
 
-use api::{BrowseItem, Folder, FolderStatus, SyncState, SyncthingClient};
+use api::{BrowseItem, ConnectionStats, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
 use cache::CacheDb;
 use config::Config;
 
@@ -157,6 +157,38 @@ fn format_human_size(size: u64) -> String {
     }
 }
 
+fn format_uptime(seconds: u64) -> String {
+    // Format uptime as "3d 15h" or "15h 44m" or "44m 30s"
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let minutes = (seconds % 3600) / 60;
+
+    if days > 0 {
+        format!("{}d {}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes)
+    }
+}
+
+fn format_transfer_rate(bytes_per_sec: f64) -> String {
+    // Format transfer rate as human-readable (B/s, KB/s, MB/s, GB/s)
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    if bytes_per_sec < KB {
+        format!("{:.0}B/s", bytes_per_sec)
+    } else if bytes_per_sec < MB {
+        format!("{:.1}K/s", bytes_per_sec / KB)
+    } else if bytes_per_sec < GB {
+        format!("{:.1}M/s", bytes_per_sec / MB)
+    } else {
+        format!("{:.2}G/s", bytes_per_sec / GB)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayMode {
     Off,              // No timestamp or size
@@ -255,6 +287,13 @@ struct App {
     // Performance metrics
     last_load_time_ms: Option<u64>,  // Time to load current directory (milliseconds)
     cache_hit: Option<bool>,          // Whether last load was a cache hit
+    // Device/System status
+    system_status: Option<SystemStatus>,  // Device name, uptime, etc.
+    connection_stats: Option<ConnectionStats>,  // Global transfer stats
+    last_connection_stats: Option<(ConnectionStats, Instant)>,  // Previous stats + timestamp for rate calc
+    device_name: Option<String>,      // Cached device name
+    last_system_status_update: Instant,  // Track when we last fetched system status
+    last_connection_stats_fetch: Instant,  // Track when we last fetched connection stats
 }
 
 impl App {
@@ -272,6 +311,21 @@ impl App {
 
         // If no mapping found, return container path
         container_path
+    }
+
+    fn get_local_state_summary(&self) -> (u64, u64, u64) {
+        // Calculate aggregate local state across all folders: (files, directories, bytes)
+        let mut total_files = 0u64;
+        let mut total_dirs = 0u64;
+        let mut total_bytes = 0u64;
+
+        for status in self.folder_statuses.values() {
+            total_files += status.local_files;
+            total_dirs += status.local_directories;
+            total_bytes += status.local_bytes;
+        }
+
+        (total_files, total_dirs, total_bytes)
     }
 
     fn pattern_matches(&self, pattern: &str, file_path: &str) -> bool {
@@ -383,10 +437,30 @@ impl App {
             event_id_rx,
             last_load_time_ms: None,
             cache_hit: None,
+            system_status: None,
+            connection_stats: None,
+            last_connection_stats: None,
+            device_name: None,
+            last_system_status_update: Instant::now(),
+            last_connection_stats_fetch: Instant::now(),
         };
 
         // Load folder statuses first (needed for cache validation)
         app.load_folder_statuses().await;
+
+        // Initialize system status and connection stats
+        if let Ok(device_name) = app.client.get_device_name().await {
+            app.device_name = Some(device_name);
+        }
+
+        if let Ok(sys_status) = app.client.get_system_status().await {
+            app.system_status = Some(sys_status);
+        }
+
+        if let Ok(conn_stats) = app.client.get_connection_stats().await {
+            app.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
+            app.connection_stats = Some(conn_stats);
+        }
 
         if !app.folders.is_empty() {
             app.folders_state.select(Some(0));
@@ -671,6 +745,54 @@ impl App {
                     });
                 } else {
                     log_debug(&format!("DEBUG [RescanResult ERROR]: Failed to rescan folder={} error={:?}", folder_id, error));
+                }
+            }
+
+            ApiResponse::SystemStatusResult { status } => {
+                match status {
+                    Ok(sys_status) => {
+                        log_debug(&format!("DEBUG [SystemStatusResult]: Received system status, uptime={}", sys_status.uptime));
+                        self.system_status = Some(sys_status);
+                    }
+                    Err(e) => {
+                        log_debug(&format!("DEBUG [SystemStatusResult ERROR]: {}", e));
+                    }
+                }
+            }
+
+            ApiResponse::ConnectionStatsResult { stats } => {
+                match stats {
+                    Ok(conn_stats) => {
+                        log_debug(&format!("DEBUG [ConnectionStatsResult]: in={} out={}",
+                            conn_stats.total.in_bytes_total, conn_stats.total.out_bytes_total));
+
+                        // Update current stats first
+                        self.connection_stats = Some(conn_stats.clone());
+
+                        // Store the connection stats with the PREVIOUS timestamp for next rate calculation
+                        // This way, when we render, we have the time delta between fetches
+                        if let Some((prev_stats, prev_instant)) = self.last_connection_stats.take() {
+                            // Previous data exists, update it with the new stats and current time
+                            self.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
+
+                            // Log the rate calculation for debugging
+                            let elapsed = prev_instant.elapsed().as_secs_f64();
+                            if elapsed > 0.0 {
+                                let in_delta = (conn_stats.total.in_bytes_total as i64 - prev_stats.total.in_bytes_total as i64).max(0) as f64;
+                                let out_delta = (conn_stats.total.out_bytes_total as i64 - prev_stats.total.out_bytes_total as i64).max(0) as f64;
+                                let in_rate = in_delta / elapsed;
+                                let out_rate = out_delta / elapsed;
+                                log_debug(&format!("DEBUG [ConnectionStatsResult]: rates in={:.1}/s out={:.1}/s elapsed={:.2}s", in_rate, out_rate, elapsed));
+                            }
+                        } else {
+                            // First fetch, just store it
+                            self.last_connection_stats = Some((conn_stats, Instant::now()));
+                            log_debug("DEBUG [ConnectionStatsResult]: First fetch, storing baseline");
+                        }
+                    }
+                    Err(e) => {
+                        log_debug(&format!("DEBUG [ConnectionStatsResult ERROR]: {}", e));
+                    }
                 }
             }
         }
@@ -2606,6 +2728,64 @@ async fn run_app<B: ratatui::backend::Backend>(
 
             // Render folders pane if visible
             if start_pane == 0 {
+                // Split folders pane into folders list (top) + device status bar (bottom)
+                let folders_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),      // Folders list content
+                        Constraint::Length(3),   // Device status bar (3 lines: top border, text, bottom border)
+                    ])
+                    .split(chunks[0]);
+
+                // Render Device Status Bar
+                let device_status_line = if let Some(ref sys_status) = app.system_status {
+                    let uptime_str = format_uptime(sys_status.uptime);
+
+                    // Calculate local state summary
+                    let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
+                    log_debug(&format!("DEBUG [DeviceStatusBar]: local_state - files={} dirs={} bytes={}", total_files, total_dirs, total_bytes));
+
+                    let mut spans = vec![
+                        Span::raw(app.device_name.as_deref().unwrap_or("Unknown")),
+                        Span::raw(" | "),
+                        Span::styled("Up:", Style::default().fg(Color::Yellow)),
+                        Span::raw(format!(" {}", uptime_str)),
+                    ];
+
+                    // Add local state (use trimmed size to avoid padding)
+                    let size_str = format_human_size(total_bytes).trim().to_string();
+                    spans.push(Span::raw(" | "));
+                    spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
+                    spans.push(Span::raw(format!(" {} files, {} dirs, {}", total_files, total_dirs, size_str)));
+
+                    // Add rates if available
+                    if let Some(ref conn_stats) = app.connection_stats {
+                        if let Some((last_stats, last_instant)) = &app.last_connection_stats {
+                            let elapsed = last_instant.elapsed().as_secs_f64().max(0.1);
+                            let in_delta = (conn_stats.total.in_bytes_total as i64 - last_stats.total.in_bytes_total as i64).max(0) as f64;
+                            let out_delta = (conn_stats.total.out_bytes_total as i64 - last_stats.total.out_bytes_total as i64).max(0) as f64;
+                            let in_rate = in_delta / elapsed;
+                            let out_rate = out_delta / elapsed;
+                            spans.push(Span::raw(" | "));
+                            spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
+                            spans.push(Span::raw(format_transfer_rate(in_rate)));
+                            spans.push(Span::raw(" "));
+                            spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
+                            spans.push(Span::raw(format_transfer_rate(out_rate)));
+                        }
+                    }
+
+                    log_debug(&format!("DEBUG [DeviceStatusBar]: {} spans", spans.len()));
+                    Line::from(spans)
+                } else {
+                    log_debug("DEBUG [DeviceStatusBar]: system_status not available");
+                    Line::from(Span::raw("Device: Loading..."))
+                };
+
+                let device_status_widget = Paragraph::new(device_status_line)
+                    .block(Block::default().borders(Borders::ALL).title("System"))
+                    .style(Style::default().fg(Color::Gray));
+
                 let folders_items: Vec<ListItem> = app
                     .folders
                     .iter()
@@ -2696,7 +2876,11 @@ async fn run_app<B: ratatui::backend::Backend>(
                     )
                     .highlight_symbol("> ");
 
-                f.render_stateful_widget(folders_list, chunks[chunk_idx], &mut app.folders_state);
+                f.render_stateful_widget(folders_list, folders_chunks[0], &mut app.folders_state);
+
+                // Render Device Status Bar at bottom
+                f.render_widget(device_status_widget, folders_chunks[1]);
+
                 chunk_idx += 1;
             }
 
@@ -3152,9 +3336,43 @@ async fn run_app<B: ratatui::backend::Backend>(
                 }
             };
 
-            let status_bar = Paragraph::new(Line::from(Span::raw(status_line)))
+            // Parse status_line and color the labels (before colons)
+            let status_spans: Vec<Span> = if status_line.is_empty() {
+                vec![Span::raw("")]
+            } else {
+                let mut spans = vec![];
+                // Check for both separators: " │ " (focus_level 0) and " | " (focus_level > 0)
+                let parts: Vec<&str> = if status_line.contains(" │ ") {
+                    status_line.split(" │ ").collect()
+                } else {
+                    status_line.split(" | ").collect()
+                };
+
+                for (idx, part) in parts.iter().enumerate() {
+                    if idx > 0 {
+                        // Use the appropriate separator
+                        if status_line.contains(" │ ") {
+                            spans.push(Span::raw(" │ "));
+                        } else {
+                            spans.push(Span::raw(" | "));
+                        }
+                    }
+                    // Split on first colon to separate label from value
+                    if let Some(colon_pos) = part.find(':') {
+                        let label = &part[..=colon_pos];
+                        let value = &part[colon_pos + 1..];
+                        spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
+                        spans.push(Span::raw(value));
+                    } else {
+                        spans.push(Span::raw(*part));
+                    }
+                }
+                spans
+            };
+
+            let status_bar = Paragraph::new(Line::from(status_spans))
                 .block(Block::default().borders(Borders::ALL).title("Status"))
-                .style(Style::default().fg(Color::White));
+                .style(Style::default().fg(Color::Gray));
 
             f.render_widget(status_bar, status_area);
 
@@ -3303,6 +3521,18 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Status updates now only happen:
         // 1. On app startup (initial load)
         // 2. After user-initiated rescan (to get updated sequence)
+
+        // Refresh device/system status periodically (less frequently than folder stats)
+        // System status every 30 seconds, connection stats every 2-3 seconds
+        if app.last_system_status_update.elapsed() >= std::time::Duration::from_secs(30) {
+            let _ = app.api_tx.send(api_service::ApiRequest::GetSystemStatus);
+            app.last_system_status_update = Instant::now();
+        }
+
+        if app.last_connection_stats_fetch.elapsed() >= std::time::Duration::from_millis(2500) {
+            let _ = app.api_tx.send(api_service::ApiRequest::GetConnectionStats);
+            app.last_connection_stats_fetch = Instant::now();
+        }
 
         // Only run prefetch operations when user has been idle for 300ms
         // This prevents blocking keyboard input and reduces CPU usage

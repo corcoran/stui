@@ -15,7 +15,8 @@
       "Bash(python3:*)",
       "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/browse?folder=lok75-7d42r&prefix=Movies/\")",
       "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/system/config\")",
-      "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/ignores?folder=lok75-7d42r\")"
+      "Bash(curl -s -H \"X-API-Key: AQE2bWCbkR3wugekRjvLUcaeN2kGSgMN\" \"http://127.0.0.1:8384/rest/db/ignores?folder=lok75-7d42r\")",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

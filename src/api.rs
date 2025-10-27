@@ -11,9 +11,19 @@ pub struct Folder {
     pub paused: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Device {
+    #[serde(rename = "deviceID")]
+    #[allow(dead_code)]
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ConfigResponse {
     folders: Vec<Folder>,
+    #[serde(default)]
+    devices: Vec<Device>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +175,31 @@ pub struct FolderStatus {
     pub receive_only_total_items: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemStatus {
+    #[serde(rename = "myID")]
+    #[allow(dead_code)]
+    pub my_id: String,
+    pub uptime: u64,
+    #[allow(dead_code)]
+    pub start_time: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTotal {
+    #[allow(dead_code)]
+    pub at: String,
+    pub in_bytes_total: u64,
+    pub out_bytes_total: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectionStats {
+    pub total: ConnectionTotal,
+}
+
 #[derive(Clone)]
 pub struct SyncthingClient {
     base_url: String,
@@ -181,7 +216,8 @@ impl SyncthingClient {
         }
     }
 
-    pub async fn get_folders(&self) -> Result<Vec<Folder>> {
+    /// Fetch system config (consolidates get_folders and get_device_name)
+    async fn get_system_config(&self) -> Result<ConfigResponse> {
         let url = format!("{}/rest/system/config", self.base_url);
         let response = self
             .client
@@ -196,7 +232,23 @@ impl SyncthingClient {
             .await
             .context("Failed to parse system config")?;
 
+        Ok(config)
+    }
+
+    pub async fn get_folders(&self) -> Result<Vec<Folder>> {
+        let config = self.get_system_config().await?;
         Ok(config.folders)
+    }
+
+    pub async fn get_device_name(&self) -> Result<String> {
+        let config = self.get_system_config().await?;
+
+        // Find the local device (first device is usually local)
+        if let Some(device) = config.devices.first() {
+            Ok(device.name.clone())
+        } else {
+            Err(anyhow::anyhow!("No devices found in config"))
+        }
     }
 
     pub async fn browse_folder(
@@ -428,6 +480,42 @@ impl SyncthingClient {
             .context("Failed to set ignore patterns")?;
 
         Ok(())
+    }
+
+    pub async fn get_system_status(&self) -> Result<SystemStatus> {
+        let url = format!("{}/rest/system/status", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch system status")?;
+
+        let status: SystemStatus = response
+            .json()
+            .await
+            .context("Failed to parse system status")?;
+
+        Ok(status)
+    }
+
+    pub async fn get_connection_stats(&self) -> Result<ConnectionStats> {
+        let url = format!("{}/rest/system/connections", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch connection stats")?;
+
+        let stats: ConnectionStats = response
+            .json()
+            .await
+            .context("Failed to parse connection stats")?;
+
+        Ok(stats)
     }
 }
 

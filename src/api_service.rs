@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
-use crate::api::{BrowseItem, FileDetails, FolderStatus, SyncthingClient};
+use crate::api::{BrowseItem, ConnectionStats, FileDetails, FolderStatus, SyncthingClient, SystemStatus};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -37,6 +37,8 @@ pub(crate) enum RequestKey {
     Browse { folder_id: String, prefix: Option<String> },
     FileInfo { folder_id: String, file_path: String },
     FolderStatus { folder_id: String },
+    SystemStatus,
+    ConnectionStats,
 }
 
 /// API request types
@@ -65,6 +67,12 @@ pub enum ApiRequest {
     RescanFolder {
         folder_id: String,
     },
+
+    /// Get system status (device info, uptime)
+    GetSystemStatus,
+
+    /// Get global connection/transfer statistics
+    GetConnectionStats,
 }
 
 impl ApiRequest {
@@ -103,6 +111,8 @@ impl ApiRequest {
                 folder_id: format!("write-{:?}", std::time::Instant::now()),
                 prefix: None,
             },
+            ApiRequest::GetSystemStatus => RequestKey::SystemStatus,
+            ApiRequest::GetConnectionStats => RequestKey::ConnectionStats,
         }
     }
 }
@@ -131,6 +141,14 @@ pub enum ApiResponse {
         folder_id: String,
         success: bool,
         error: Option<String>,
+    },
+
+    SystemStatusResult {
+        status: Result<SystemStatus, String>,
+    },
+
+    ConnectionStatsResult {
+        stats: Result<ConnectionStats, String>,
     },
 }
 
@@ -276,6 +294,20 @@ impl ApiService {
                         error: Some(e.to_string()),
                     },
                 }
+            }
+
+            ApiRequest::GetSystemStatus => {
+                let status = client.get_system_status().await
+                    .map_err(|e| e.to_string());
+
+                ApiResponse::SystemStatusResult { status }
+            }
+
+            ApiRequest::GetConnectionStats => {
+                let stats = client.get_connection_stats().await
+                    .map_err(|e| e.to_string());
+
+                ApiResponse::ConnectionStatsResult { stats }
             }
         }
     }
