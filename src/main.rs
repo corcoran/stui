@@ -296,6 +296,7 @@ struct App {
     device_name: Option<String>,      // Cached device name
     last_system_status_update: Instant,  // Track when we last fetched system status
     last_connection_stats_fetch: Instant,  // Track when we last fetched connection stats
+    last_transfer_rates: Option<(f64, f64)>,  // Cached transfer rates (download, upload) in bytes/sec
     // Icon rendering
     icon_renderer: IconRenderer,      // Centralized icon renderer
 }
@@ -457,6 +458,7 @@ impl App {
             device_name: None,
             last_system_status_update: Instant::now(),
             last_connection_stats_fetch: Instant::now(),
+            last_transfer_rates: None,
             icon_renderer,
         };
 
@@ -778,31 +780,31 @@ impl App {
             ApiResponse::ConnectionStatsResult { stats } => {
                 match stats {
                     Ok(conn_stats) => {
-                        log_debug(&format!("DEBUG [ConnectionStatsResult]: in={} out={}",
-                            conn_stats.total.in_bytes_total, conn_stats.total.out_bytes_total));
-
-                        // Update current stats first
+                        // Update current stats with new data
                         self.connection_stats = Some(conn_stats.clone());
 
-                        // Store the connection stats with the PREVIOUS timestamp for next rate calculation
-                        // This way, when we render, we have the time delta between fetches
-                        if let Some((prev_stats, prev_instant)) = self.last_connection_stats.take() {
-                            // Previous data exists, update it with the new stats and current time
-                            self.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
-
-                            // Log the rate calculation for debugging
+                        // Calculate transfer rates if we have previous stats
+                        if let Some((prev_stats, prev_instant)) = &self.last_connection_stats {
                             let elapsed = prev_instant.elapsed().as_secs_f64();
                             if elapsed > 0.0 {
                                 let in_delta = (conn_stats.total.in_bytes_total as i64 - prev_stats.total.in_bytes_total as i64).max(0) as f64;
                                 let out_delta = (conn_stats.total.out_bytes_total as i64 - prev_stats.total.out_bytes_total as i64).max(0) as f64;
                                 let in_rate = in_delta / elapsed;
                                 let out_rate = out_delta / elapsed;
-                                log_debug(&format!("DEBUG [ConnectionStatsResult]: rates in={:.1}/s out={:.1}/s elapsed={:.2}s", in_rate, out_rate, elapsed));
+
+                                // Store the calculated rates for UI display
+                                self.last_transfer_rates = Some((in_rate, out_rate));
+                            }
+
+                            // Update baseline every ~10 seconds to prevent drift
+                            if elapsed > 10.0 {
+                                self.last_connection_stats = Some((conn_stats, Instant::now()));
                             }
                         } else {
-                            // First fetch, just store it
+                            // First fetch, store as baseline
                             self.last_connection_stats = Some((conn_stats, Instant::now()));
-                            log_debug("DEBUG [ConnectionStatsResult]: First fetch, storing baseline");
+                            // Initialize rates to zero on first fetch
+                            self.last_transfer_rates = Some((0.0, 0.0));
                         }
                     }
                     Err(e) => {
@@ -2770,21 +2772,14 @@ async fn run_app<B: ratatui::backend::Backend>(
                     spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
                     spans.push(Span::raw(format!(" {} files, {} dirs, {}", total_files, total_dirs, size_str)));
 
-                    // Add rates if available
-                    if let Some(ref conn_stats) = app.connection_stats {
-                        if let Some((last_stats, last_instant)) = &app.last_connection_stats {
-                            let elapsed = last_instant.elapsed().as_secs_f64().max(0.1);
-                            let in_delta = (conn_stats.total.in_bytes_total as i64 - last_stats.total.in_bytes_total as i64).max(0) as f64;
-                            let out_delta = (conn_stats.total.out_bytes_total as i64 - last_stats.total.out_bytes_total as i64).max(0) as f64;
-                            let in_rate = in_delta / elapsed;
-                            let out_rate = out_delta / elapsed;
-                            spans.push(Span::raw(" | "));
-                            spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
-                            spans.push(Span::raw(format_transfer_rate(in_rate)));
-                            spans.push(Span::raw(" "));
-                            spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
-                            spans.push(Span::raw(format_transfer_rate(out_rate)));
-                        }
+                    // Add rates if available (display pre-calculated rates)
+                    if let Some((in_rate, out_rate)) = app.last_transfer_rates {
+                        spans.push(Span::raw(" | "));
+                        spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
+                        spans.push(Span::raw(format_transfer_rate(in_rate)));
+                        spans.push(Span::raw(" "));
+                        spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
+                        spans.push(Span::raw(format_transfer_rate(out_rate)));
                     }
 
                     Line::from(spans)
@@ -3512,7 +3507,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.last_system_status_update = Instant::now();
         }
 
-        if app.last_connection_stats_fetch.elapsed() >= std::time::Duration::from_millis(2500) {
+        if app.last_connection_stats_fetch.elapsed() >= std::time::Duration::from_millis(5000) {
             let _ = app.api_tx.send(api_service::ApiRequest::GetConnectionStats);
             app.last_connection_stats_fetch = Instant::now();
         }
