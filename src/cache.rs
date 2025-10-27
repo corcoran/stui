@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::fs::OpenOptions;
@@ -169,15 +169,6 @@ impl CacheDb {
         Ok(())
     }
 
-    pub fn is_folder_status_valid(&self, folder_id: &str, current_sequence: u64) -> Result<bool> {
-        let mut stmt = self.conn.prepare(
-            "SELECT sequence FROM folder_status WHERE folder_id = ?1"
-        )?;
-
-        let cached_seq: Option<i64> = stmt.query_row(params![folder_id], |row| row.get(0)).ok();
-
-        Ok(cached_seq.map_or(false, |seq| seq as u64 == current_sequence))
-    }
 
     // Browse cache
     pub fn get_browse_items(&self, folder_id: &str, prefix: Option<&str>, folder_sequence: u64) -> Result<Option<Vec<BrowseItem>>> {
@@ -292,28 +283,6 @@ impl CacheDb {
         }
     }
 
-    // Sync states cache (validated by sequence)
-    pub fn get_sync_state(&self, folder_id: &str, file_path: &str, file_sequence: u64) -> Result<Option<SyncState>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT file_sequence, sync_state FROM sync_states
-             WHERE folder_id = ?1 AND file_path = ?2"
-        )?;
-
-        let result = stmt.query_row(params![folder_id, file_path], |row| {
-            let cached_seq: i64 = row.get(0)?;
-            let state_str: String = row.get(1)?;
-            Ok((cached_seq, state_str))
-        });
-
-        match result {
-            Ok((cached_seq, state_str)) if cached_seq as u64 == file_sequence => {
-                Ok(Some(Self::parse_sync_state(&state_str)))
-            }
-            Ok(_) => Ok(None), // Stale cache
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
 
     pub fn save_sync_state(&self, folder_id: &str, file_path: &str, state: SyncState, file_sequence: u64) -> Result<()> {
         self.conn.execute(

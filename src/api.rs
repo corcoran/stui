@@ -39,6 +39,7 @@ pub enum SyncState {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct FileInfo {
     #[serde(default)]
     pub deleted: bool,
@@ -83,6 +84,7 @@ pub struct FileInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct DeviceAvailability {
     pub id: String,
     #[serde(rename = "fromTemporary")]

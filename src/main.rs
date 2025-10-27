@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
-use std::{collections::{HashMap, HashSet}, fs, io, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, fs, io, sync::atomic::{AtomicBool, Ordering}, time::Instant};
 use unicode_width::UnicodeWidthStr;
 
 /// Syncthing TUI Manager
@@ -434,13 +434,6 @@ impl App {
         self.last_status_update = Instant::now();
     }
 
-    async fn check_and_update_statuses(&mut self) {
-        // Auto-refresh every 5 seconds (non-blocking)
-        if self.last_status_update.elapsed() >= Duration::from_secs(5) {
-            self.refresh_folder_statuses_nonblocking();
-            self.last_status_update = Instant::now();
-        }
-    }
 
     fn refresh_folder_statuses_nonblocking(&mut self) {
         // Non-blocking version for background polling
@@ -598,11 +591,6 @@ impl App {
                     log_debug(&format!("DEBUG [RescanResult ERROR]: Failed to rescan folder={} error={:?}", folder_id, error));
                 }
             }
-
-            // Other response types can be handled as needed
-            _ => {
-                // Ignore responses we don't need to handle immediately
-            }
         }
     }
 
@@ -628,7 +616,7 @@ impl App {
 
                 // Check if we're currently viewing this directory - if so, trigger refresh
                 if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
-                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                    for (_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
                             // Clear in-memory sync state for this file
                             level.file_sync_states.remove(&file_path);
@@ -668,7 +656,7 @@ impl App {
 
                 // Clear in-memory state for all files in this directory and trigger refresh if viewing
                 if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
-                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                    for (_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
                             // Remove all states that start with this directory path
                             let dir_prefix = if dir_path.is_empty() {
@@ -722,22 +710,6 @@ impl App {
                 // Clear discovered directories cache for this path
                 let dir_key_prefix = format!("{}:{}", folder_id, dir_path);
                 self.discovered_dirs.retain(|key| !key.starts_with(&dir_key_prefix));
-            }
-            event_listener::CacheInvalidation::Folder { folder_id } => {
-                log_debug(&format!("DEBUG [Event]: Invalidating entire folder: {}", folder_id));
-                let _ = self.cache.invalidate_folder(&folder_id);
-
-                // Clear all in-memory state for this folder
-                if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
-                    for level in &mut self.breadcrumb_trail {
-                        if level.folder_id == folder_id {
-                            level.file_sync_states.clear();
-                        }
-                    }
-                }
-
-                // Clear discovered directories for this folder
-                self.discovered_dirs.retain(|key| !key.starts_with(&format!("{}:", folder_id)));
             }
         }
     }

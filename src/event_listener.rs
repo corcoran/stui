@@ -23,6 +23,7 @@ fn log_debug(msg: &str) {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncthingEvent {
     pub id: u64,
     #[serde(rename = "globalID")]
@@ -39,8 +40,6 @@ pub enum CacheInvalidation {
     File { folder_id: String, file_path: String },
     /// Invalidate an entire directory
     Directory { folder_id: String, dir_path: String },
-    /// Invalidate entire folder (fallback for missed events)
-    Folder { folder_id: String },
 }
 
 /// Spawn the event listener task
