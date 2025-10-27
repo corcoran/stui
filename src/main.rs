@@ -27,6 +27,10 @@ struct Args {
     /// Enable vim keybindings (hjkl, ^D/U, ^F/B, gg/G)
     #[arg(long)]
     vim: bool,
+
+    /// Path to config file (default: ~/.config/synctui/config.yaml)
+    #[arg(short, long)]
+    config: Option<String>,
 }
 
 // Global flag for debug mode
@@ -2405,6 +2409,46 @@ impl App {
     }
 }
 
+/// Determine the config file path with fallback logic
+fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    // If CLI argument provided, use it
+    if let Some(path) = cli_path {
+        let p = PathBuf::from(&path);
+        if p.exists() {
+            return Ok(p);
+        } else {
+            anyhow::bail!("Config file not found at specified path: {}", path);
+        }
+    }
+
+    // Try ~/.config/synctui/config.yaml
+    if let Some(config_dir) = dirs::config_dir() {
+        let synctui_dir = config_dir.join("synctui");
+        let config_path = synctui_dir.join("config.yaml");
+
+        if config_path.exists() {
+            return Ok(config_path);
+        }
+    }
+
+    // Fallback to ./config.yaml
+    let local_config = PathBuf::from("config.yaml");
+    if local_config.exists() {
+        return Ok(local_config);
+    }
+
+    // No config found, provide helpful error
+    anyhow::bail!(
+        "Config file not found. Expected locations:\n\
+         1. ~/.config/synctui/config.yaml (preferred)\n\
+         2. ./config.yaml (fallback)\n\
+         \n\
+         Use --config <path> to specify a custom location."
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command-line arguments
@@ -2417,8 +2461,15 @@ async fn main() -> Result<()> {
         log_debug("Debug mode enabled");
     }
 
+    // Determine config file path
+    let config_path = get_config_path(args.config)?;
+
+    if args.debug {
+        log_debug(&format!("Loading config from: {:?}", config_path));
+    }
+
     // Load configuration
-    let config_str = fs::read_to_string("config.yaml")?;
+    let config_str = fs::read_to_string(&config_path)?;
     let mut config: Config = serde_yaml::from_str(&config_str)?;
 
     // Override config with CLI flags
