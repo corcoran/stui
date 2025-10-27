@@ -608,6 +608,11 @@ impl App {
                 if prefix.is_none() && self.focus_level == 1 && !self.breadcrumb_trail.is_empty() {
                     // Root level update
                     if self.breadcrumb_trail[0].folder_id == folder_id {
+                        // Save currently selected item name BEFORE replacing items
+                        let selected_name = self.breadcrumb_trail[0].state.selected()
+                            .and_then(|idx| self.breadcrumb_trail[0].items.get(idx))
+                            .map(|item| item.name.clone());
+
                         self.breadcrumb_trail[0].items = items.clone();
 
                         // Load sync states from cache
@@ -620,8 +625,8 @@ impl App {
 
                         self.breadcrumb_trail[0].file_sync_states = sync_states;
 
-                        // Sort and restore selection
-                        self.sort_level(0);
+                        // Sort and restore selection using the saved name
+                        self.sort_level_with_selection(0, selected_name);
                     }
                 } else if let Some(ref target_prefix) = prefix {
                     // Load sync states first (before mutable borrow)
@@ -635,11 +640,16 @@ impl App {
                     // Check if this matches a breadcrumb level
                     for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix) {
+                            // Save currently selected item name BEFORE replacing items
+                            let selected_name = level.state.selected()
+                                .and_then(|sel_idx| level.items.get(sel_idx))
+                                .map(|item| item.name.clone());
+
                             level.items = items.clone();
                             level.file_sync_states = sync_states.clone();
 
-                            // Sort and restore selection (needs to be done after updating level)
-                            self.sort_level(idx);
+                            // Sort and restore selection using the saved name
+                            self.sort_level_with_selection(idx, selected_name);
                             break;
                         }
                     }
@@ -1593,14 +1603,20 @@ impl App {
 
     /// Sort a specific breadcrumb level by its index
     fn sort_level(&mut self, level_idx: usize) {
+        self.sort_level_with_selection(level_idx, None);
+    }
+
+    fn sort_level_with_selection(&mut self, level_idx: usize, preserve_selection_name: Option<String>) {
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
             let sort_mode = self.sort_mode;
             let reverse = self.sort_reverse;
 
-            // Remember the currently selected item name
-            let selected_name = level.state.selected()
-                .and_then(|idx| level.items.get(idx))
-                .map(|item| item.name.clone());
+            // Use provided name if given, otherwise get currently selected item name
+            let selected_name = preserve_selection_name.or_else(|| {
+                level.state.selected()
+                    .and_then(|idx| level.items.get(idx))
+                    .map(|item| item.name.clone())
+            });
 
             // Sort items
             level.items.sort_by(|a, b| {
