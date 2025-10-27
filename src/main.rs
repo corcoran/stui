@@ -246,8 +246,6 @@ struct BreadcrumbLevel {
     state: ListState,
     translated_base_path: String,  // Cached translated base path for this level
     file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
-    sort_mode: SortMode,     // Current sort mode for this level
-    sort_reverse: bool,      // Whether to reverse sort order
 }
 
 struct App {
@@ -266,6 +264,8 @@ struct App {
     vim_mode: bool, // Enable vim keybindings
     last_key_was_g: bool, // Track 'g' key for 'gg' command
     last_user_action: Instant, // Track last user interaction for idle detection
+    sort_mode: SortMode,     // Current sort mode (session-wide)
+    sort_reverse: bool,      // Whether to reverse sort order (session-wide)
     // Track in-flight operations to prevent duplicate fetches
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
@@ -433,6 +433,8 @@ impl App {
             vim_mode: config.vim_mode,
             last_key_was_g: false,
             last_user_action: Instant::now(),
+            sort_mode: SortMode::Alphabetical,
+            sort_reverse: false,
             loading_browse: HashSet::new(),
             loading_sync_states: HashSet::new(),
             discovered_dirs: HashSet::new(),
@@ -1441,8 +1443,6 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
-                    sort_mode: SortMode::VisualIndicator,
-                    sort_reverse: false,
                 }];
                 self.focus_level = 1;
 
@@ -1568,8 +1568,6 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
-                    sort_mode: SortMode::VisualIndicator,
-                    sort_reverse: false,
                 });
 
                 self.focus_level += 1;
@@ -1594,8 +1592,8 @@ impl App {
     /// Sort a specific breadcrumb level by its index
     fn sort_level(&mut self, level_idx: usize) {
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-            let sort_mode = level.sort_mode;
-            let reverse = level.sort_reverse;
+            let sort_mode = self.sort_mode;
+            let reverse = self.sort_reverse;
 
             // Remember the currently selected item name
             let selected_name = level.state.selected()
@@ -1669,17 +1667,22 @@ impl App {
         self.sort_level(level_idx);
     }
 
+    fn sort_all_levels(&mut self) {
+        // Apply sorting to all breadcrumb levels
+        let num_levels = self.breadcrumb_trail.len();
+        for idx in 0..num_levels {
+            self.sort_level(idx);
+        }
+    }
+
     fn cycle_sort_mode(&mut self) {
         if self.focus_level == 0 {
             return; // No sorting for folders list
         }
 
-        let level_idx = self.focus_level - 1;
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-            level.sort_mode = level.sort_mode.next();
-            level.sort_reverse = false; // Reset reverse when changing mode
-        }
-        self.sort_current_level();
+        self.sort_mode = self.sort_mode.next();
+        self.sort_reverse = false; // Reset reverse when changing mode
+        self.sort_all_levels(); // Apply to all levels
     }
 
     fn toggle_sort_reverse(&mut self) {
@@ -1687,11 +1690,8 @@ impl App {
             return; // No sorting for folders list
         }
 
-        let level_idx = self.focus_level - 1;
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-            level.sort_reverse = !level.sort_reverse;
-        }
-        self.sort_current_level();
+        self.sort_reverse = !self.sort_reverse;
+        self.sort_all_levels(); // Apply to all levels
     }
 
     fn next_item(&mut self) {
@@ -3291,8 +3291,8 @@ async fn run_app<B: ratatui::backend::Backend>(
 
                     // Show sort mode
                     let sort_display = format!("Sort: {}{}",
-                        level.sort_mode.as_str(),
-                        if level.sort_reverse { "↓" } else { "↑" }
+                        app.sort_mode.as_str(),
+                        if app.sort_reverse { "↓" } else { "↑" }
                     );
                     metrics.push(sort_display);
 
