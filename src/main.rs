@@ -31,6 +31,7 @@ mod api;
 mod api_service;
 mod cache;
 mod config;
+mod event_listener;
 
 use api::{BrowseItem, Folder, FolderStatus, SyncState, SyncthingClient};
 use cache::CacheDb;
@@ -102,6 +103,8 @@ struct App {
     discovered_dirs: std::collections::HashSet<String>, // Set of "folder_id:prefix" already discovered (to prevent re-querying cache)
     prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
+    // Track last update info per folder (for display)
+    last_folder_updates: HashMap<String, (std::time::SystemTime, String)>, // folder_id -> (timestamp, last_changed_file)
     // Confirmation prompt state
     confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
@@ -110,6 +113,9 @@ struct App {
     // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
+    // Event listener channels
+    invalidation_rx: tokio::sync::mpsc::UnboundedReceiver<event_listener::CacheInvalidation>,
+    event_id_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
     // Performance metrics
     last_load_time_ms: Option<u64>,  // Time to load current directory (milliseconds)
     cache_hit: Option<bool>,          // Whether last load was a cache hit
@@ -193,6 +199,22 @@ impl App {
         // Spawn API service worker
         let (api_tx, api_rx) = api_service::spawn_api_service(client.clone());
 
+        // Get last event ID from cache
+        let last_event_id = cache.get_last_event_id().unwrap_or(0);
+
+        // Create channels for event listener
+        let (invalidation_tx, invalidation_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (event_id_tx, event_id_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Spawn event listener
+        event_listener::spawn_event_listener(
+            config.base_url.clone(),
+            config.api_key.clone(),
+            last_event_id,
+            invalidation_tx,
+            event_id_tx,
+        );
+
         let mut app = App {
             client,
             cache,
@@ -210,11 +232,14 @@ impl App {
             discovered_dirs: HashSet::new(),
             prefetch_enabled: true,
             last_known_sequences: HashMap::new(),
+            last_folder_updates: HashMap::new(),
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
             api_tx,
             api_rx,
+            invalidation_rx,
+            event_id_rx,
             last_load_time_ms: None,
             cache_hit: None,
         };
@@ -442,6 +467,142 @@ impl App {
             // Other response types can be handled as needed
             _ => {
                 // Ignore responses we don't need to handle immediately
+            }
+        }
+    }
+
+    /// Handle cache invalidation messages from event listener
+    fn handle_cache_invalidation(&mut self, invalidation: event_listener::CacheInvalidation) {
+        match invalidation {
+            event_listener::CacheInvalidation::File { folder_id, file_path } => {
+                log_debug(&format!("DEBUG [Event]: Invalidating file: folder={} path={}", folder_id, file_path));
+                let _ = self.cache.invalidate_single_file(&folder_id, &file_path);
+
+                // Update last change info for this folder
+                self.last_folder_updates.insert(
+                    folder_id.clone(),
+                    (std::time::SystemTime::now(), file_path.clone())
+                );
+
+                // Extract parent directory path
+                let parent_dir = if let Some(last_slash) = file_path.rfind('/') {
+                    Some(&file_path[..last_slash + 1])
+                } else {
+                    None // File is in root directory
+                };
+
+                // Check if we're currently viewing this directory - if so, trigger refresh
+                if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                        if level.folder_id == folder_id {
+                            // Clear in-memory sync state for this file
+                            level.file_sync_states.remove(&file_path);
+
+                            // Check if this level is showing the parent directory
+                            let level_prefix = level.prefix.as_deref();
+
+                            if level_prefix == parent_dir {
+                                // This level is showing the directory containing the changed file
+                                // Trigger a fresh browse request
+                                let browse_key = format!("{}:{}", folder_id, parent_dir.unwrap_or(""));
+                                if !self.loading_browse.contains(&browse_key) {
+                                    self.loading_browse.insert(browse_key);
+
+                                    let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                                        folder_id: folder_id.clone(),
+                                        prefix: parent_dir.map(|s| s.to_string()),
+                                        priority: api_service::Priority::High,
+                                    });
+
+                                    log_debug(&format!("DEBUG [Event]: Triggered refresh for currently viewed directory: {:?}", parent_dir));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            event_listener::CacheInvalidation::Directory { folder_id, dir_path } => {
+                log_debug(&format!("DEBUG [Event]: Invalidating directory: folder={} path={}", folder_id, dir_path));
+                let _ = self.cache.invalidate_directory(&folder_id, &dir_path);
+
+                // Update last change info for this folder
+                self.last_folder_updates.insert(
+                    folder_id.clone(),
+                    (std::time::SystemTime::now(), dir_path.clone())
+                );
+
+                // Clear in-memory state for all files in this directory and trigger refresh if viewing
+                if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                        if level.folder_id == folder_id {
+                            // Remove all states that start with this directory path
+                            let dir_prefix = if dir_path.is_empty() {
+                                String::new()
+                            } else if dir_path.ends_with('/') {
+                                dir_path.clone()
+                            } else {
+                                format!("{}/", dir_path)
+                            };
+
+                            level.file_sync_states.retain(|path, _| {
+                                if dir_prefix.is_empty() {
+                                    false // Clear everything for root
+                                } else {
+                                    !path.starts_with(&dir_prefix)
+                                }
+                            });
+
+                            // Check if this level is showing the changed directory
+                            let level_prefix = level.prefix.as_deref();
+
+                            let normalized_dir = if dir_path.is_empty() {
+                                None
+                            } else {
+                                Some(if dir_path.ends_with('/') {
+                                    dir_path.as_str()
+                                } else {
+                                    &format!("{}/", dir_path)[..]
+                                })
+                            };
+
+                            if level_prefix == normalized_dir {
+                                // This level is showing the changed directory - trigger refresh
+                                let browse_key = format!("{}:{}", folder_id, level_prefix.unwrap_or(""));
+                                if !self.loading_browse.contains(&browse_key) {
+                                    self.loading_browse.insert(browse_key);
+
+                                    let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                                        folder_id: folder_id.clone(),
+                                        prefix: level_prefix.map(|s| s.to_string()),
+                                        priority: api_service::Priority::High,
+                                    });
+
+                                    log_debug(&format!("DEBUG [Event]: Triggered refresh for currently viewed directory: {:?}", level_prefix));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Clear discovered directories cache for this path
+                let dir_key_prefix = format!("{}:{}", folder_id, dir_path);
+                self.discovered_dirs.retain(|key| !key.starts_with(&dir_key_prefix));
+            }
+            event_listener::CacheInvalidation::Folder { folder_id } => {
+                log_debug(&format!("DEBUG [Event]: Invalidating entire folder: {}", folder_id));
+                let _ = self.cache.invalidate_folder(&folder_id);
+
+                // Clear all in-memory state for this folder
+                if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                    for level in &mut self.breadcrumb_trail {
+                        if level.folder_id == folder_id {
+                            level.file_sync_states.clear();
+                        }
+                    }
+                }
+
+                // Clear discovered directories for this folder
+                self.discovered_dirs.retain(|key| !key.starts_with(&format!("{}:", folder_id)));
             }
         }
     }
@@ -1727,7 +1888,43 @@ async fn run_app<B: ratatui::backend::Backend>(
                             "📁❌ " // Error fetching status
                         };
 
-                        ListItem::new(Span::raw(format!("{}{}", icon, display_name)))
+                        // Build the folder display with optional last update info
+                        let folder_line = format!("{}{}", icon, display_name);
+
+                        // Add last update info if available
+                        if let Some((timestamp, last_file)) = app.last_folder_updates.get(&folder.id) {
+                            // Calculate time since last update
+                            let elapsed = timestamp.elapsed().unwrap_or(std::time::Duration::from_secs(0));
+                            let time_str = if elapsed.as_secs() < 60 {
+                                format!("{}s ago", elapsed.as_secs())
+                            } else if elapsed.as_secs() < 3600 {
+                                format!("{}m ago", elapsed.as_secs() / 60)
+                            } else if elapsed.as_secs() < 86400 {
+                                format!("{}h ago", elapsed.as_secs() / 3600)
+                            } else {
+                                format!("{}d ago", elapsed.as_secs() / 86400)
+                            };
+
+                            // Truncate filename if too long
+                            let max_file_len = 40;
+                            let file_display = if last_file.len() > max_file_len {
+                                format!("...{}", &last_file[last_file.len() - max_file_len..])
+                            } else {
+                                last_file.clone()
+                            };
+
+                            // Multi-line item with update info
+                            ListItem::new(vec![
+                                Line::from(Span::raw(folder_line)),
+                                Line::from(Span::styled(
+                                    format!("  ↳ {} - {}", time_str, file_display),
+                                    Style::default().fg(Color::Rgb(150, 150, 150)) // Medium gray visible on both dark gray and black backgrounds
+                                ))
+                            ])
+                        } else {
+                            // Single-line item without update info
+                            ListItem::new(Span::raw(folder_line))
+                        }
                     })
                     .collect();
 
@@ -2095,8 +2292,21 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.handle_api_response(response);
         }
 
-        // Check for periodic status updates
-        app.check_and_update_statuses().await;
+        // Process cache invalidation messages from event listener (non-blocking)
+        while let Ok(invalidation) = app.invalidation_rx.try_recv() {
+            app.handle_cache_invalidation(invalidation);
+        }
+
+        // Process event ID updates from event listener (non-blocking)
+        while let Ok(event_id) = app.event_id_rx.try_recv() {
+            // Persist event ID to cache periodically
+            let _ = app.cache.save_last_event_id(event_id);
+        }
+
+        // NOTE: Removed periodic status polling - we now rely on events for cache invalidation
+        // Status updates now only happen:
+        // 1. On app startup (initial load)
+        // 2. After user-initiated rescan (to get updated sequence)
 
         // HIGHEST PRIORITY: If hovering over a directory, recursively discover all subdirectories
         // and fetch their states (goes as deep as possible, depth=10, fetch 15 dirs per frame)

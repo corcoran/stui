@@ -80,6 +80,14 @@ impl CacheDb {
                 sync_state TEXT NOT NULL,
                 PRIMARY KEY (folder_id, file_path)
             ) WITHOUT ROWID;
+
+            CREATE TABLE IF NOT EXISTS event_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_event_id INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- Insert default row if it doesn't exist
+            INSERT OR IGNORE INTO event_state (id, last_event_id) VALUES (1, 0);
             ",
         )?;
 
@@ -337,6 +345,87 @@ impl CacheDb {
         let browse_deleted = self.conn.execute("DELETE FROM browse_cache WHERE folder_id = ?1", params![folder_id])?;
         let sync_deleted = self.conn.execute("DELETE FROM sync_states WHERE folder_id = ?1", params![folder_id])?;
         log_debug(&format!("DEBUG [invalidate_folder]: Deleted {} browse entries, {} sync entries", browse_deleted, sync_deleted));
+        Ok(())
+    }
+
+    // Invalidate cache for a single file
+    pub fn invalidate_single_file(&self, folder_id: &str, file_path: &str) -> Result<()> {
+        log_debug(&format!("DEBUG [invalidate_single_file]: folder={} file={}", folder_id, file_path));
+
+        // Delete sync state for this file
+        let sync_deleted = self.conn.execute(
+            "DELETE FROM sync_states WHERE folder_id = ?1 AND file_path = ?2",
+            params![folder_id, file_path]
+        )?;
+
+        // Also invalidate browse cache for the parent directory
+        // Extract parent directory path
+        let parent_dir = if let Some(last_slash) = file_path.rfind('/') {
+            &file_path[..last_slash + 1] // Include trailing slash
+        } else {
+            "" // File is in root directory
+        };
+
+        let browse_deleted = self.conn.execute(
+            "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
+            params![folder_id, parent_dir]
+        )?;
+
+        log_debug(&format!("DEBUG [invalidate_single_file]: Deleted {} sync state entries, {} browse entries for parent dir '{}'", sync_deleted, browse_deleted, parent_dir));
+        Ok(())
+    }
+
+    // Invalidate cache for a directory and all its contents
+    pub fn invalidate_directory(&self, folder_id: &str, dir_path: &str) -> Result<()> {
+        log_debug(&format!("DEBUG [invalidate_directory]: folder={} dir={}", folder_id, dir_path));
+
+        // Normalize directory path - ensure it ends with /
+        let normalized_dir = if dir_path.is_empty() {
+            String::new()
+        } else if dir_path.ends_with('/') {
+            dir_path.to_string()
+        } else {
+            format!("{}/", dir_path)
+        };
+
+        // Delete browse cache for this exact directory
+        let browse_deleted = self.conn.execute(
+            "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
+            params![folder_id, &normalized_dir]
+        )?;
+
+        // Delete sync states for all files in this directory and subdirectories
+        // Use LIKE with pattern matching: "dir/%" matches "dir/file" and "dir/subdir/file"
+        let pattern = if normalized_dir.is_empty() {
+            "%".to_string() // Root directory - match everything
+        } else {
+            format!("{}%", normalized_dir)
+        };
+
+        let sync_deleted = self.conn.execute(
+            "DELETE FROM sync_states WHERE folder_id = ?1 AND file_path LIKE ?2",
+            params![folder_id, &pattern]
+        )?;
+
+        log_debug(&format!(
+            "DEBUG [invalidate_directory]: Deleted {} browse entries, {} sync entries",
+            browse_deleted, sync_deleted
+        ));
+        Ok(())
+    }
+
+    // Event ID persistence
+    pub fn get_last_event_id(&self) -> Result<u64> {
+        let mut stmt = self.conn.prepare("SELECT last_event_id FROM event_state WHERE id = 1")?;
+        let event_id: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(event_id as u64)
+    }
+
+    pub fn save_last_event_id(&self, event_id: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE event_state SET last_event_id = ?1 WHERE id = 1",
+            params![event_id as i64],
+        )?;
         Ok(())
     }
 }
