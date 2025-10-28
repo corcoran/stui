@@ -396,12 +396,31 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image inside - just give it the full inner area
-                    // The protocol handles sizing and aspect ratio automatically
+                    // Render image inside with centering
+                    // The protocol handles sizing/aspect ratio, we just need to center the result
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
+                    // Use simple percentage-based centering - give it 90% of space centered
+                    let vertical_layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Percentage(5),   // Top padding
+                            Constraint::Percentage(90),  // Image area
+                            Constraint::Percentage(5),   // Bottom padding
+                        ])
+                        .split(inner_area);
+
+                    let horizontal_layout = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Percentage(5),   // Left padding
+                            Constraint::Percentage(90),  // Image area
+                            Constraint::Percentage(5),   // Right padding
+                        ])
+                        .split(vertical_layout[1]);
+
                     let image = ratatui_image::StatefulImage::new(None);
-                    f.render_stateful_widget(image, inner_area, protocol);
+                    f.render_stateful_widget(image, horizontal_layout[1], protocol);
                 }
             }
             ImagePreviewState::Failed { metadata } => {
