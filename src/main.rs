@@ -2667,33 +2667,55 @@ impl App {
             _ => "Unknown",
         };
 
+        let load_start = std::time::Instant::now();
         log_debug(&format!(
             "Loading image: {}x{} pixels",
             img.width(), img.height()
         ));
 
-        // Pre-downscale large images for better quality
-        // The protocol will downscale to terminal resolution, but starting from a
-        // high-quality intermediate size produces better results than protocol's resize
+        // Pre-downscale large images with adaptive quality/performance balance
         let font_size = picker.font_size;
 
         // Estimate maximum reasonable size: ~200 cells × ~60 cells (typical large terminal)
-        // Multiply by font_size and by 2x for quality headroom
-        let max_reasonable_width = 200 * font_size.0 as u32 * 2;
-        let max_reasonable_height = 60 * font_size.1 as u32 * 2;
+        // Use 1.25x headroom for quality (balanced for performance)
+        let max_reasonable_width = 200 * font_size.0 as u32 * 5 / 4;
+        let max_reasonable_height = 60 * font_size.1 as u32 * 5 / 4;
 
         let processed_img = if img.width() > max_reasonable_width || img.height() > max_reasonable_height {
+            let scale_factor = (img.width() as f32 / max_reasonable_width as f32)
+                .max(img.height() as f32 / max_reasonable_height as f32);
+
             log_debug(&format!(
-                "Pre-downscaling {}x{} to fit {}x{} for better quality",
-                img.width(), img.height(), max_reasonable_width, max_reasonable_height
+                "Pre-downscaling {}x{} by {:.2}x to fit {}x{} for better quality",
+                img.width(), img.height(), scale_factor, max_reasonable_width, max_reasonable_height
             ));
-            img.resize(max_reasonable_width, max_reasonable_height, image::imageops::FilterType::Lanczos3)
+
+            // Adaptive filter selection based on downscale amount
+            let filter = if scale_factor > 4.0 {
+                // Extreme downscale (>4x): Use Triangle for speed
+                image::imageops::FilterType::Triangle
+            } else if scale_factor > 2.0 {
+                // Large downscale (2-4x): Use CatmullRom for balance
+                image::imageops::FilterType::CatmullRom
+            } else {
+                // Moderate downscale (<2x): Use Lanczos3 for quality
+                image::imageops::FilterType::Lanczos3
+            };
+
+            log_debug(&format!("Using {:?} filter for {:.2}x downscale", filter, scale_factor));
+            let resize_start = std::time::Instant::now();
+            let resized = img.resize(max_reasonable_width, max_reasonable_height, filter);
+            log_debug(&format!("Resize took {:.2}s", resize_start.elapsed().as_secs_f32()));
+            resized
         } else {
             img
         };
 
-        // Pass processed image to protocol - it will resize again to fit the actual render area
+        log_debug(&format!("Creating protocol..."));
+        let protocol_start = std::time::Instant::now();
         let protocol = picker.new_resize_protocol(processed_img);
+        log_debug(&format!("Protocol creation took {:.2}s", protocol_start.elapsed().as_secs_f32()));
+        log_debug(&format!("Total image load took {:.2}s", load_start.elapsed().as_secs_f32()));
 
         // Return both protocol and metadata
         let metadata = ImageMetadata {
