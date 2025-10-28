@@ -396,86 +396,12 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image inside using StatefulImage, with smart aspect-ratio-based centering
+                    // Render image inside - just give it the full inner area
+                    // The protocol handles sizing and aspect ratio automatically
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
-                    // Calculate aspect ratios to determine optimal layout
-                    let (vertical_constraints, horizontal_constraints) = if let Some((img_w, img_h)) = metadata.dimensions {
-                        let image_aspect = img_w as f32 / img_h as f32;
-                        let area_aspect = inner_area.width as f32 / inner_area.height as f32;
-
-                        // Strategy: Use 95% of available space in one dimension, calculate the other
-                        // based on aspect ratio to maintain proportions
-                        const MAIN_AXIS_USAGE: f32 = 0.95; // Use 95% of limiting dimension
-                        const MIN_PADDING: f32 = 0.025;    // Minimum 2.5% padding on each side
-
-                        if image_aspect > area_aspect {
-                            // Image is wider than area (relative to heights)
-                            // Width is limiting factor - use 95% width, calculate height needed
-                            let width_ratio = MAIN_AXIS_USAGE;
-                            let height_ratio = width_ratio * (area_aspect / image_aspect);
-                            let vertical_padding = ((1.0 - height_ratio) / 2.0).max(MIN_PADDING);
-
-                            (
-                                vec![
-                                    Constraint::Ratio((vertical_padding * 100.0) as u32, 100),
-                                    Constraint::Ratio((height_ratio * 100.0) as u32, 100),
-                                    Constraint::Ratio((vertical_padding * 100.0) as u32, 100),
-                                ],
-                                vec![
-                                    Constraint::Ratio(((1.0 - width_ratio) / 2.0 * 100.0) as u32, 100),
-                                    Constraint::Ratio((width_ratio * 100.0) as u32, 100),
-                                    Constraint::Ratio(((1.0 - width_ratio) / 2.0 * 100.0) as u32, 100),
-                                ],
-                            )
-                        } else {
-                            // Image is taller than area (relative to widths)
-                            // Height is limiting factor - use 95% height, calculate width needed
-                            let height_ratio = MAIN_AXIS_USAGE;
-                            let width_ratio = height_ratio * (image_aspect / area_aspect);
-                            let horizontal_padding = ((1.0 - width_ratio) / 2.0).max(MIN_PADDING);
-
-                            (
-                                vec![
-                                    Constraint::Ratio(((1.0 - height_ratio) / 2.0 * 100.0) as u32, 100),
-                                    Constraint::Ratio((height_ratio * 100.0) as u32, 100),
-                                    Constraint::Ratio(((1.0 - height_ratio) / 2.0 * 100.0) as u32, 100),
-                                ],
-                                vec![
-                                    Constraint::Ratio((horizontal_padding * 100.0) as u32, 100),
-                                    Constraint::Ratio((width_ratio * 100.0) as u32, 100),
-                                    Constraint::Ratio((horizontal_padding * 100.0) as u32, 100),
-                                ],
-                            )
-                        }
-                    } else {
-                        // No dimensions available, use balanced centering with minimal padding
-                        (
-                            vec![
-                                Constraint::Ratio(5, 100),   // 5% padding
-                                Constraint::Ratio(90, 100),  // 90% image
-                                Constraint::Ratio(5, 100),   // 5% padding
-                            ],
-                            vec![
-                                Constraint::Ratio(5, 100),
-                                Constraint::Ratio(90, 100),
-                                Constraint::Ratio(5, 100),
-                            ],
-                        )
-                    };
-
-                    let vertical_layout = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints(vertical_constraints)
-                        .split(inner_area);
-
-                    let horizontal_layout = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints(horizontal_constraints)
-                        .split(vertical_layout[1]);
-
                     let image = ratatui_image::StatefulImage::new(None);
-                    f.render_stateful_widget(image, horizontal_layout[1], protocol);
+                    f.render_stateful_widget(image, inner_area, protocol);
                 }
             }
             ImagePreviewState::Failed { metadata } => {
