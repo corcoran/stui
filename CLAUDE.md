@@ -44,16 +44,15 @@ What makes this app unique is the file management part (breadcrumbs, directories
 
 ### Sync State Icons
 
-Display visual indicators for file/folder states:
-- `✅` Synced
-- `☁️` Remote-only
-- `💻` Local-only
-- `⚠️` Out-of-sync
-- `⏸` Paused
-- `🚫⚠️` Ignored (exists on disk)
-- `🚫..` Ignored (doesn't exist)
-- `🔄` Syncing (actively downloading/uploading)
-- `❓` Unknown
+Display visual indicators for file/folder states following `<file|dir><status>` pattern:
+- `📄✅` / `📁✅` Synced
+- `📄☁️` / `📁☁️` Remote-only
+- `📄💻` / `📁💻` Local-only
+- `📄⚠️` / `📁⚠️` Out-of-sync OR Ignored (exists on disk)
+- `📄⏸` / `📁⏸` Paused
+- `📄🚫` / `📁🚫` Ignored (deleted from disk)
+- `📄🔄` / `📁🔄` Syncing (actively downloading/uploading)
+- `📄❓` / `📁❓` Unknown
 
 ### User Actions
 
@@ -70,13 +69,28 @@ Display visual indicators for file/folder states:
 
 ### Status Bar & UI Elements
 
-- **Status Bar**: Shows folder state, data sizes, sync progress, in_sync/total items, current sort mode
+**UI Layout (top to bottom):**
+- **System Bar** (full width): Device name, uptime, local state summary, transfer rates
+- **Main Content**: Folders pane + Breadcrumb panels (horizontal split with smart sizing)
+- **Hotkey Legend** (full width): Context-aware key display
+- **Status Bar** (full width): Folder state, data sizes, sync progress, sort mode
+
+**Breadcrumb Layout:**
+- Current folder gets 50-60% of screen width for better visibility
+- Parent folders share remaining 40-50% equally
+- All ancestor breadcrumbs remain highlighted (blue border) when drilling deeper
+- Current breadcrumb has cyan border + `> ` arrow
+
+**Other UI Features:**
 - **Last Update Display**: Shows timestamp and filename of most recent change per folder
 - **File Info Display**: Three-state toggle showing timestamp and/or size (human-readable: `1.2K`, `5.3M`, etc.)
   - Off: No info displayed
   - TimestampOnly: Shows modification time (e.g., `2025-10-26 20:58`)
   - TimestampAndSize: Shows size + timestamp for files (e.g., `1.2M 2025-10-26 20:58`), timestamp only for directories
-- **Hotkey Legend**: Wrapping legend at bottom of breadcrumb panels showing all available keys (dynamic based on vim mode)
+- **Smart Hotkey Legend**: Context-aware display
+  - Folder view: Shows navigation, Rescan, Quit (hides Sort, Info, Ignore, Delete)
+  - Breadcrumb view: Shows all keys including file operations
+  - Restore only appears when folder has local changes (receive_only_total_items > 0)
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
 - **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar, directories always sorted first
 

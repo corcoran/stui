@@ -4,9 +4,34 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 
 ---
 
-## 📍 Current Status (Updated 2025-01-28)
+## 📍 Current Status (Updated 2025-10-28)
 
-**Recent Accomplishments (Session 2025-01-28):**
+**Recent Accomplishments (Session 2025-10-28):**
+
+**UI Layout Reorganization:**
+- ✅ System bar moved to top (full width) showing device info, uptime, transfer rates
+- ✅ Main content area (folders + breadcrumbs) with smart horizontal sizing
+- ✅ Hotkeys legend moved to full-width bar above status
+- ✅ Status bar at bottom (full width) for folder/directory metrics
+- ✅ Current folder gets 50-60% screen width for better visibility
+- ✅ Parent folders share remaining 40-50% equally
+- ✅ All ancestor breadcrumbs stay highlighted (blue border) when drilling deeper
+- ✅ Current breadcrumb has cyan border + arrow, parents have blue border only
+
+**Icon Pattern Consistency:**
+- ✅ Changed ignored file icons to follow `<file|dir><status>` pattern
+- ✅ Ignored + exists: `📄⚠️` or `📁⚠️` (file/dir + warning)
+- ✅ Ignored + deleted: `📄🚫` or `📁🚫` (file/dir + ban)
+- ✅ Consistent with all other sync state icons (Synced, RemoteOnly, LocalOnly, etc.)
+
+**Smart Hotkey Legend:**
+- ✅ Context-aware key display based on focus level
+- ✅ Folder view: Hides Sort, Info, Ignore, Delete (not applicable to folders)
+- ✅ Breadcrumb view: Shows all file operation keys
+- ✅ Restore only shown when folder has local changes (receive_only_total_items > 0)
+- ✅ Rescan always visible (works in both folder list and breadcrumbs)
+
+**Previous Accomplishments (Session 2025-01-28):**
 
 **State Transition Validation System:**
 - ✅ Replaced arbitrary time-based heuristics (3s/5s timeouts) with logical state transition validation

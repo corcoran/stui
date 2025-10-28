@@ -9,14 +9,16 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 
 ### 🚀 Real-Time Sync Monitoring
 - **Live Status Updates**: Automatic cache invalidation using Syncthing's event stream
-- **Visual Sync States**: Instant feedback with pastel-colored icons (synced, syncing, remote-only, local-only, out-of-sync, ignored)
+- **Visual Sync States**: Instant feedback with `<file|dir><status>` icon pattern (e.g., `📄✅`, `📁☁️`)
 - **Active Sync Indicator**: Files show spinning icon (🔄) during active downloads/uploads
+- **Ignored File Detection**: Separate icons for ignored files that exist (`📄⚠️`) vs deleted (`📄🚫`)
 - **Icon Modes**: Choose between emoji or Nerd Fonts icons via config
 - **Smart Caching**: SQLite-backed cache for instant UI responsiveness with background updates
-- **System Status Bar**: Device name, uptime, local state summary, and live transfer rates
+- **System Status Bar**: Device name, uptime, local state summary, and live transfer rates at top of screen
 
 ### 📁 File & Folder Management
-- **Multi-Pane Navigation**: Breadcrumb-style directory traversal with independent panels
+- **Multi-Pane Navigation**: Breadcrumb-style directory traversal with smart sizing (current folder gets 50-60% width)
+- **Ancestor Highlighting**: All parent folders stay highlighted (blue border) when drilling deeper
 - **Flexible Sorting**: Sort by sync state, name, timestamp, or size with one keypress
 - **File Info Display**: Toggle between no info, timestamps only, or timestamps + human-readable sizes
 - **Ignore Management**: Add or remove files from `.stignore` patterns interactively
@@ -27,7 +29,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Multi-Mode Sorting**: `s` to cycle modes, `S` to reverse order
 - **Info Toggle**: `t` cycles through Off → Timestamp → Size+Timestamp
 - **Quick Actions**: Single-key commands for ignore, delete, rescan, restore
-- **Wrapping Hotkey Legend**: Always visible, adapts to show active keybindings
+- **Smart Hotkey Legend**: Context-aware display - hides irrelevant keys, shows Restore only when applicable
 
 ### 🎯 Smart Features
 - **Responsive Navigation**: Instant keyboard input with idle-aware background caching
@@ -154,17 +156,30 @@ Press `s` to cycle through sort modes:
 
 Press `S` to reverse the current sort order. Current mode and direction are shown in the status bar (e.g., `Sort: DateTime↑`)
 
-## Status Bars
+## UI Layout
 
-### System Status Bar
-Located at the bottom of the Folders panel, showing:
+The interface is organized top to bottom:
+
+### System Status Bar (Top)
+Full-width bar showing:
 - **Device Name**: Your Syncthing device name
 - **Uptime**: Time since Syncthing started (e.g., `Up: 3d 16h`)
 - **Local State**: Total files, directories, and storage size across all folders
 - **Transfer Rates**: Live download/upload speeds updated every 2.5 seconds
 
-### Folder/Directory Status Bar
-Located at the bottom of the screen, showing:
+### Main Content (Middle)
+- **Folders Panel**: Left side, lists all Syncthing folders
+- **Breadcrumb Panels**: Right side, current folder gets 50-60% width, parents share remaining space
+- **Ancestor Highlighting**: All parent folders stay highlighted (blue) when drilling deeper
+
+### Hotkey Legend (Above Status)
+Full-width bar with context-aware key display:
+- **Folder View**: Shows navigation, Rescan, Quit
+- **Breadcrumb View**: Shows all keys including Sort, Info, Ignore, Delete
+- **Dynamic Restore**: Only appears when folder has local changes to restore
+
+### Status Bar (Bottom)
+Full-width bar showing:
 - **Folder Name**: Currently selected folder/directory
 - **Sync State**: Folder status (Idle, Syncing, etc.)
 - **Data Sizes**: Local/Global bytes, sync progress
