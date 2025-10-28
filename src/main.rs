@@ -260,6 +260,7 @@ pub struct App {
     pub icon_renderer: IconRenderer,      // Centralized icon renderer
     // Image preview protocol
     pub image_picker: Option<ratatui_image::picker::Picker>,  // Protocol picker for image rendering
+    image_dpi_scale: f32,  // DPI scale factor for image preview
 }
 
 impl App {
@@ -419,20 +420,6 @@ impl App {
                 }
             }
 
-            // Apply DPI scale if configured
-            if config.image_dpi_scale > 1.0 {
-                let orig_width = picker.font_size.0;
-                let orig_height = picker.font_size.1;
-                picker.font_size.0 = (orig_width as f32 * config.image_dpi_scale) as u16;
-                picker.font_size.1 = (orig_height as f32 * config.image_dpi_scale) as u16;
-                log_debug(&format!(
-                    "Image preview: Applied DPI scale {}: {}x{} -> {}x{}",
-                    config.image_dpi_scale,
-                    orig_width, orig_height,
-                    picker.font_size.0, picker.font_size.1
-                ));
-            }
-
             Some(picker)
         } else {
             log_debug("Image preview disabled in config");
@@ -489,6 +476,7 @@ impl App {
             last_transfer_rates: None,
             icon_renderer,
             image_picker,
+            image_dpi_scale: config.image_dpi_scale,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -2500,8 +2488,9 @@ impl App {
             if exists && self.image_picker.is_some() {
                 let picker = self.image_picker.as_ref().unwrap().clone();
                 let max_size = 20; // TODO: Get from config
+                let dpi_scale = self.image_dpi_scale;
 
-                match Self::load_image_preview(host_path_buf, picker, max_size).await {
+                match Self::load_image_preview(host_path_buf, picker, max_size, dpi_scale).await {
                     Ok(protocol) => (
                         Ok("[Image preview - see right panel]".to_string()),
                         true,
@@ -2580,6 +2569,7 @@ impl App {
         host_path: std::path::PathBuf,
         mut picker: ratatui_image::picker::Picker,
         max_size_mb: u64,
+        dpi_scale: f32,
     ) -> Result<Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata> {
         let max_size_bytes = max_size_mb * 1024 * 1024;
 
@@ -2644,8 +2634,17 @@ impl App {
             _ => "Unknown",
         };
 
-        // Convert to dynamic image and resize using picker
-        let protocol = picker.new_resize_protocol(img);
+        // Pre-upscale image for sharper rendering if DPI scale > 1.0
+        let upscaled = if dpi_scale > 1.0 {
+            let new_width = (img.width() as f32 * dpi_scale) as u32;
+            let new_height = (img.height() as f32 * dpi_scale) as u32;
+            img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        };
+
+        // Convert to protocol (will fit upscaled image into available space)
+        let protocol = picker.new_resize_protocol(upscaled);
 
         Ok(protocol)
     }
