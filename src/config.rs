@@ -21,6 +21,8 @@ pub struct Config {
     pub image_protocol: String,
     #[serde(default = "default_max_image_size_mb")]
     pub max_image_size_mb: u64,
+    #[serde(default = "default_image_dpi_scale")]
+    pub image_dpi_scale: f32,
 }
 
 fn default_icon_mode() -> String {
@@ -37,4 +39,8 @@ fn default_image_protocol() -> String {
 
 fn default_max_image_size_mb() -> u64 {
     20
+}
+
+fn default_image_dpi_scale() -> f32 {
+    1.0
 }

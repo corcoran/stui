@@ -382,34 +382,58 @@ impl App {
 
         // Initialize image preview protocol picker
         let image_picker = if config.image_preview_enabled {
+            // Get picker with terminal dimensions
+            let mut picker = match ratatui_image::picker::Picker::from_termios() {
+                Ok(p) => p,
+                Err(e) => {
+                    log_debug(&format!("Image preview: Failed to detect terminal: {}", e));
+                    ratatui_image::picker::Picker::new((8, 16)) // Fallback font size
+                }
+            };
+
+            // Apply protocol from config
             match config.image_protocol.to_lowercase().as_str() {
                 "auto" => {
-                    // Auto-detect best protocol for terminal using from_termios
-                    match ratatui_image::picker::Picker::from_termios() {
-                        Ok(picker) => {
-                            log_debug("Image preview: Auto-detected terminal protocol");
-                            Some(picker)
-                        }
-                        Err(e) => {
-                            log_debug(&format!("Image preview: Failed to detect protocol: {}", e));
-                            None
-                        }
-                    }
+                    picker.guess_protocol();
+                    log_debug("Image preview: Auto-detected protocol");
                 }
-                protocol_name => {
-                    // Try to use specific protocol
-                    match ratatui_image::picker::Picker::from_termios() {
-                        Ok(picker) => {
-                            log_debug(&format!("Image preview: Using protocol '{}'", protocol_name));
-                            Some(picker)
-                        }
-                        Err(e) => {
-                            log_debug(&format!("Image preview: Failed to initialize protocol '{}': {}", protocol_name, e));
-                            None
-                        }
-                    }
+                "iterm2" => {
+                    picker.protocol_type = ratatui_image::picker::ProtocolType::Iterm2;
+                    log_debug("Image preview: Using iTerm2 protocol");
+                }
+                "kitty" => {
+                    picker.protocol_type = ratatui_image::picker::ProtocolType::Kitty;
+                    log_debug("Image preview: Using Kitty protocol");
+                }
+                "sixel" => {
+                    picker.protocol_type = ratatui_image::picker::ProtocolType::Sixel;
+                    log_debug("Image preview: Using Sixel protocol");
+                }
+                "halfblocks" => {
+                    picker.protocol_type = ratatui_image::picker::ProtocolType::Halfblocks;
+                    log_debug("Image preview: Using Halfblocks protocol");
+                }
+                unknown => {
+                    picker.guess_protocol();
+                    log_debug(&format!("Image preview: Unknown protocol '{}', using auto-detect", unknown));
                 }
             }
+
+            // Apply DPI scale if configured
+            if config.image_dpi_scale > 1.0 {
+                let orig_width = picker.font_size.0;
+                let orig_height = picker.font_size.1;
+                picker.font_size.0 = (orig_width as f32 * config.image_dpi_scale) as u16;
+                picker.font_size.1 = (orig_height as f32 * config.image_dpi_scale) as u16;
+                log_debug(&format!(
+                    "Image preview: Applied DPI scale {}: {}x{} -> {}x{}",
+                    config.image_dpi_scale,
+                    orig_width, orig_height,
+                    picker.font_size.0, picker.font_size.1
+                ));
+            }
+
+            Some(picker)
         } else {
             log_debug("Image preview disabled in config");
             None
