@@ -3,6 +3,342 @@
 This document outlines the step-by-step plan for building a **Rust Ratatui CLI tool** that interfaces with **Syncthing's REST API** to manage folders, view sync states, and control ignored/deleted files. The steps are structured to allow **progressive, testable milestones**, ideal for both human and LLM collaboration.
 
 ---
+## Next Steps
+ -  **Refactor code to be more modular and readable** _(See detailed plan in 'Refactoring Plan' section below)_
+ -  Pause / Resume folder toggle hotkey + status (with confirmation)
+ -  Change Folder Type toggle hotkey + status (with confirmation)
+ -  Remote Devices (Name, Download / Upload rate, Folders)
+ -  Add event history viewer with persistent logging
+ -  Add filtering functionality (show only ignored files, by type, etc.)
+ -  Add file preview system (text and images)
+ -  Build comprehensive test suite
+ -  Improve error handling, display, and timeouts
+ -  Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
+
+---
+
+## Refactoring Plan: Elm Architecture Migration
+
+### Overview
+Transform the codebase from a monolithic 3000-line `main.rs` into a testable, maintainable architecture using the Elm/Redux pattern. This will be done in two phases: **Moderate** (foundational restructuring) followed by **Comprehensive** (full architectural overhaul).
+
+---
+
+### Current Code Structure (Before Refactoring)
+
+Understanding what exists helps plan the refactoring. Here's a snapshot of the current architecture:
+
+#### File Sizes
+```
+src/main.rs                 3016 lines  (NEEDS BREAKING UP)
+src/api.rs                   558 lines  (Syncthing API client)
+src/cache.rs                 431 lines  (SQLite cache operations)
+src/api_service.rs           359 lines  (API request queue service)
+src/ui/breadcrumb.rs         288 lines  (Breadcrumb panel rendering)
+src/event_listener.rs        265 lines  (Event stream listener)
+src/ui/icons.rs              235 lines  (Icon rendering)
+src/ui/status_bar.rs         210 lines  (Status bar rendering)
+src/ui/render.rs             191 lines  (Main render orchestration)
+```
+
+#### Key Structs in `main.rs`
+```rust
+struct App {
+    // API & Services (will move to services/)
+    client: SyncthingClient,
+    cache: CacheDb,
+    api_tx/api_rx: API service channels,
+    invalidation_rx/event_id_rx: Event listener channels,
+
+    // State (will move to state/)
+    folders: Vec<Folder>,
+    folder_statuses: HashMap<String, FolderStatus>,
+    breadcrumb_trail: Vec<BreadcrumbLevel>,
+    focus_level: usize,
+
+    // Sync State Management (will move to state/sync_manager.rs)
+    file_sync_states: scattered in BreadcrumbLevel,
+    manually_set_states: HashMap<String, ManualStateChange>,
+    syncing_files: HashSet<String>,
+
+    // UI State (will move to state/)
+    display_mode: DisplayMode,
+    sort_mode: SortMode,
+    sort_reverse: bool,
+
+    // Confirmation dialogs (will move to state/)
+    confirm_revert: Option<...>,
+    confirm_delete: Option<...>,
+    pattern_selection: Option<...>,
+}
+
+struct BreadcrumbLevel {
+    folder_id: String,
+    items: Vec<BrowseItem>,
+    state: ListState,
+    file_sync_states: HashMap<String, SyncState>,  // Mixed responsibility!
+    ignored_exists: HashMap<String, bool>,
+}
+```
+
+#### Key Methods in `App` (40+ methods, 3000+ lines)
+
+**API Response Handling (→ handlers/api.rs):**
+- `handle_api_response()` - 400 lines, handles BrowseResult, FileInfoResult, FolderStatusResult
+- `load_sync_states_from_cache()` - Load cached states
+- `merge_local_only_files()` - Merge receive-only folder changes
+
+**Event Handling (→ handlers/events.rs):**
+- `handle_cache_invalidation()` - 180 lines, handles file/directory/folder invalidation
+- Handles ItemStarted/ItemFinished for syncing state
+
+**Navigation (→ logic/navigation.rs):**
+- `load_root_level()` - 100 lines, enter folder
+- `enter_directory()` - 130 lines, drill down breadcrumb
+- `go_back()` - Exit breadcrumb level
+- `sort_level()`, `sort_level_with_selection()` - Sorting logic
+- `next_item()`, `previous_item()`, `jump_to_first()`, `jump_to_last()`, `page_up()`, `page_down()` - Navigation
+
+**Sync State Logic (→ logic/sync_states.rs):**
+- State transition validation (lines 663-701)
+- `update_ignored_exists_for_file()` - Check if ignored files exist
+- `check_ignored_existence()` - Batch check on directory load
+- Syncing state preservation logic (scattered in multiple places)
+
+**Ignore Operations (→ logic/ignore.rs):**
+- `toggle_ignore()` - 100 lines, add/remove from .stignore
+- `ignore_and_delete()` - Ignore + delete from disk
+- `pattern_matches()` - Pattern matching logic
+- `find_matching_patterns()` - Find which patterns match a file
+
+**File Operations (→ handlers/keyboard.rs or domain/file.rs):**
+- `delete_file()` - Delete with confirmation
+- `restore_selected_file()` - Revert receive-only folder
+- `rescan_selected_folder()` - Trigger Syncthing rescan
+
+**Keyboard Handling (→ handlers/keyboard.rs):**
+- `handle_key()` - 700 lines, giant match on KeyEvent
+- Vim mode state tracking (`gg` command)
+
+**Background Operations (needs better home):**
+- `batch_fetch_visible_sync_states()` - Prefetch sync states for visible items
+- `prefetch_hovered_subdirectories()` - Prefetch child directories
+- `fetch_directory_states()` - Fetch directory metadata
+- `discover_subdirectories_sync()` - Recursive directory discovery
+
+#### Key Enums & Types
+```rust
+enum SyncState { Synced, OutOfSync, LocalOnly, RemoteOnly, Ignored, Syncing, Unknown }
+enum DisplayMode { Off, TimestampOnly, TimestampAndSize }
+enum SortMode { VisualIndicator, Alphabetical, DateTime, Size }
+enum ManualAction { SetIgnored, SetUnignored }  // For state transition validation
+
+struct ManualStateChange {
+    action: ManualAction,
+    timestamp: Instant,
+}
+```
+
+#### Critical Patterns to Preserve During Refactoring
+
+1. **State Transition Validation** (lines 663-701):
+   - Manual action tracking (SetIgnored/SetUnignored)
+   - Illegal transition blocking (Syncing → Unknown)
+   - Must be preserved in any new architecture
+
+2. **Syncing State Preservation** (lines 549-582, 604-624):
+   - Browse results must preserve actively syncing files
+   - Check `syncing_files` HashSet before overwriting
+   - Two code paths: root level + non-root levels
+
+3. **Ignored File Existence Tracking**:
+   - `ignored_exists` HashMap updated on every state change
+   - Inline filesystem checks to avoid borrow checker issues
+   - Critical for status bar display
+
+4. **Event-Driven Cache Invalidation**:
+   - Granular invalidation (file/directory/folder level)
+   - Persistent event ID across restarts
+   - Auto-recovery from stale event IDs
+
+---
+
+### Testing Strategy
+
+Tests will be added **throughout the refactoring process**, not just at the end:
+
+#### Before Phase 1: Characterization Tests
+- **Goal:** Lock down existing behavior before refactoring
+- Write integration tests for critical user flows:
+  - Navigate folders → enter directory → toggle ignore → verify state
+  - Un-ignore file → verify ItemStarted → verify Syncing → verify Synced
+  - Browse results don't overwrite Syncing states
+- These tests document current behavior and catch regressions during refactoring
+- **Tool:** Run actual app against mocked Syncthing API responses
+
+#### During Phase 1: Unit Tests for Extracted Logic
+- As we extract pure functions to `src/logic/`, add unit tests immediately:
+  - `sync_states.rs` → Test state transition validation rules
+  - `navigation.rs` → Test sorting, selection preservation
+  - `ignore.rs` → Test pattern matching edge cases
+- Each extraction should come with tests (no naked code)
+- **Benefit:** Proves the extracted logic works correctly in isolation
+
+#### During Phase 2: Comprehensive Test Suite
+- Unit tests for domain models (pure business logic)
+- Property-based tests for state machines (use `proptest` crate)
+- Integration tests with mocked services
+- **Target:** 80%+ coverage on business logic, lower on UI/glue code
+
+#### Continuous: Regression Tests
+- Any bug found during refactoring gets a test first, then fixed
+- Prevents same bug from reappearing after further changes
+
+---
+
+### Phase 1: Moderate Refactoring
+**Goal:** Break apart the 3000-line `main.rs` into manageable pieces while establishing Elm Architecture foundations.
+
+#### 1.0: Write Characterization Tests (FIRST!)
+- Add `tests/` directory with integration tests
+- Mock Syncthing API responses for critical flows
+- Document current behavior before making changes
+- Run tests after each refactoring step to verify no regressions
+
+#### 1.1: Extract Message Types
+- **New file:** `src/messages.rs`
+- Create `AppMessage` enum containing all events:
+  - `KeyPress(KeyEvent)`
+  - `ApiResponse(ApiResponse)`
+  - `CacheInvalidation(CacheInvalidation)`
+  - `Tick` (for periodic updates)
+- Move from scattered handling to centralized message dispatch
+
+#### 1.2: Extract State Management
+- **New file:** `src/state.rs`
+- Extract pure state structs from `App`:
+  - `AppState` (folders, statuses, breadcrumbs)
+  - `NavigationState` (focus_level, selection)
+  - `SyncStateManager` (file_sync_states, manually_set_states, syncing_files)
+- Keep `App` as coordinator but move data to state structs
+
+#### 1.3: Extract Handlers
+- **New directory:** `src/handlers/`
+  - `mod.rs` - Module exports
+  - `keyboard.rs` - All keyboard handling (`handle_key` method)
+  - `api.rs` - API response handling (`handle_api_response`)
+  - `events.rs` - Event invalidation (`handle_cache_invalidation`)
+- Each handler becomes: `fn handle_xxx(state: &mut AppState, msg: Xxx) -> Result<Option<Command>>`
+
+#### 1.4: Extract Business Logic
+- **New directory:** `src/logic/`
+  - `mod.rs` - Module exports
+  - `sync_states.rs` - Sync state transitions, validation rules
+  - `navigation.rs` - Breadcrumb logic, sorting, selection
+  - `ignore.rs` - Pattern matching, toggle logic
+- Pure functions that can be unit tested
+
+#### 1.5: Consolidate Services
+- **New directory:** `src/services/`
+  - Move `api_service.rs` → `services/api.rs`
+  - Move `event_listener.rs` → `services/events.rs`
+  - Keep `cache.rs` and `api.rs` (client) as-is for now
+
+**Expected Outcome:** `main.rs` reduces from ~3000 to ~500 lines, core logic becomes testable
+
+---
+
+### Phase 2: Comprehensive Refactoring
+**Goal:** Full Elm Architecture with complete separation of concerns
+
+#### 2.1: Pure Elm Update Function
+- Single `update(state: AppState, msg: AppMessage) -> (AppState, Command)` function
+- All handlers become pure functions
+- Side effects isolated into `Command` enum for execution outside update loop
+
+#### 2.2: Domain Models
+- **New directory:** `src/domain/`
+  - `folder.rs` - Folder domain logic and state machine
+  - `sync_state.rs` - Sync state machine with clear transitions
+  - `file.rs` - File metadata and operations
+- Pure business logic with zero dependencies on UI or services
+
+#### 2.3: Full Directory Restructure
+```
+src/
+├── main.rs              # 50 lines - just setup and event loop
+├── app.rs               # App coordinator (manages update loop)
+├── messages.rs          # All message types (AppMessage enum)
+│
+├── state/               # Pure state (no I/O, no side effects)
+│   ├── mod.rs
+│   ├── app_state.rs
+│   ├── navigation.rs
+│   └── sync_manager.rs
+│
+├── logic/               # Business logic (pure functions)
+│   ├── mod.rs
+│   ├── sync_states.rs   # State transition validation
+│   ├── navigation.rs    # Breadcrumb/sorting logic
+│   └── ignore.rs        # Pattern matching
+│
+├── handlers/            # Message handlers (thin layer)
+│   ├── mod.rs
+│   ├── keyboard.rs
+│   ├── api.rs
+│   └── events.rs
+│
+├── services/            # External I/O (HTTP, cache, events)
+│   ├── mod.rs
+│   ├── api.rs           # API request service
+│   ├── events.rs        # Event listener
+│   └── cache.rs         # SQLite cache
+│
+├── domain/              # Domain models (pure business logic)
+│   ├── mod.rs
+│   ├── folder.rs
+│   ├── sync_state.rs
+│   └── file.rs
+│
+├── ui/                  # Already well-organized
+│   ├── mod.rs
+│   ├── render.rs
+│   ├── breadcrumb.rs
+│   ├── folder_list.rs
+│   ├── status_bar.rs
+│   ├── system_bar.rs
+│   ├── legend.rs
+│   ├── dialogs.rs
+│   ├── layout.rs
+│   └── icons.rs
+│
+├── api.rs               # Syncthing API client
+├── config.rs            # Configuration
+│
+└── tests/               # Unit and integration tests
+    ├── logic_tests.rs
+    ├── state_tests.rs
+    └── integration_tests.rs
+```
+
+#### 2.4: Add Comprehensive Tests
+- Unit tests for state transitions
+- Unit tests for business logic (ignore patterns, sync validation)
+- Integration tests with mocked services
+- Property-based tests for state machines
+
+---
+
+### Benefits of This Approach
+
+✅ **Testability:** Pure functions with no side effects can be unit tested in isolation
+✅ **Maintainability:** Clear separation of concerns, small focused files (<300 lines each)
+✅ **Predictability:** Unidirectional data flow makes state changes easy to reason about
+✅ **Gradual Migration:** Phase 1 can be done incrementally, Phase 2 builds on solid foundation
+✅ **Elm Pattern:** Proven architecture for TUI apps, handles async gracefully via Commands
+✅ **Debugging:** All state changes flow through single update function with full visibility
+
+---
 
 ## 📍 Current Status (Updated 2025-10-28)
 
@@ -122,19 +458,6 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 - ✅ Event poll timeout increased from 100ms to 250ms (60% reduction in wakeups)
 - ✅ CPU usage reduced from ~18% idle to <1-2% expected
 - ✅ Instant keyboard responsiveness even during background caching
-
-**Next steps:**
-1. Pause / Resume folder toggle hotkey + status (with confirmation)
-2. Change Folder Type toggle hotkey + status (with confirmation)
-3. Remote Devices (Name, Download / Upload rate, Folders)
-4. Dynamic sizing (first panel is 25% width, 75% for right panels, keeps shrinking proportionally)
-5. Add event history viewer with persistent logging
-6. Add filtering functionality (show only ignored files, by type, etc.)
-7. Add file preview system (text and images)
-8. Build comprehensive test suite
-9. Improve error handling, display, and timeouts
-10. Refactor code to be more modular and readable
-11. Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
 
 
 ## Polishing and Extensions
