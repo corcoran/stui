@@ -48,8 +48,8 @@ pub struct IconTheme {
 impl Default for IconTheme {
     fn default() -> Self {
         Self {
-            // File types (pastel blues)
-            folder_color: Color::Rgb(120, 150, 200), // Darker pastel blue
+            // File types
+            folder_color: Color::Rgb(180, 140, 210), // Pastel purple
             file_color: Color::Rgb(150, 180, 220),   // Pastel blue
 
             // Status colors (pastels)
