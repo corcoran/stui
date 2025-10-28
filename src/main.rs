@@ -2672,9 +2672,28 @@ impl App {
             img.width(), img.height()
         ));
 
-        // Pass original image to protocol - it will handle ALL resizing
-        // The protocol converts pixels → cells using font_size, then resizes to fit the render area
-        let protocol = picker.new_resize_protocol(img);
+        // Pre-downscale large images for better quality
+        // The protocol will downscale to terminal resolution, but starting from a
+        // high-quality intermediate size produces better results than protocol's resize
+        let font_size = picker.font_size;
+
+        // Estimate maximum reasonable size: ~200 cells × ~60 cells (typical large terminal)
+        // Multiply by font_size and by 2x for quality headroom
+        let max_reasonable_width = 200 * font_size.0 as u32 * 2;
+        let max_reasonable_height = 60 * font_size.1 as u32 * 2;
+
+        let processed_img = if img.width() > max_reasonable_width || img.height() > max_reasonable_height {
+            log_debug(&format!(
+                "Pre-downscaling {}x{} to fit {}x{} for better quality",
+                img.width(), img.height(), max_reasonable_width, max_reasonable_height
+            ));
+            img.resize(max_reasonable_width, max_reasonable_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        };
+
+        // Pass processed image to protocol - it will resize again to fit the actual render area
+        let protocol = picker.new_resize_protocol(processed_img);
 
         // Return both protocol and metadata
         let metadata = ImageMetadata {
