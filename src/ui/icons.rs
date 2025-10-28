@@ -141,40 +141,37 @@ impl IconRenderer {
     }
 
     /// Render an ignored item (shows special indicator based on existence)
-    pub fn ignored_item(&self, exists: bool) -> Vec<Span<'static>> {
+    /// Follows pattern: <file|dir><status>
+    /// - exists: <file|dir>⚠️  (e.g., 📄⚠️ or 📁⚠️)
+    /// - deleted: <file|dir>🚫  (e.g., 📄🚫 or 📁🚫)
+    pub fn ignored_item(&self, is_dir: bool, exists: bool) -> Vec<Span<'static>> {
+        let mut spans = vec![];
+
+        // Add folder or file icon
+        if is_dir {
+            spans.push(self.folder_icon());
+        } else {
+            spans.push(self.file_icon());
+        }
+
+        // Add status icon based on existence
         if exists {
             // Ignored + exists: show warning icon
-            match self.mode {
-                IconMode::Emoji => {
-                    vec![Span::styled(
-                        "🚫⚠️ ",
-                        Style::default().fg(self.theme.ignored_color),
-                    )]
-                }
-                IconMode::NerdFont => {
-                    vec![
-                        Span::styled("\u{F05E}", Style::default().fg(self.theme.ignored_color)),
-                        Span::styled("\u{F071} ", Style::default().fg(self.theme.out_of_sync_color)),
-                    ]
-                }
-            }
+            let warning_span = match self.mode {
+                IconMode::Emoji => Span::styled("⚠️ ", Style::default().fg(self.theme.out_of_sync_color)),
+                IconMode::NerdFont => Span::styled("\u{F071} ", Style::default().fg(self.theme.out_of_sync_color)),
+            };
+            spans.push(warning_span);
         } else {
-            // Ignored + doesn't exist: just ban icon + double space for alignment
-            match self.mode {
-                IconMode::Emoji => {
-                    vec![Span::styled(
-                        "🚫  ",
-                        Style::default().fg(self.theme.ignored_color),
-                    )]
-                }
-                IconMode::NerdFont => {
-                    vec![Span::styled(
-                        "\u{F05E}  ",
-                        Style::default().fg(self.theme.ignored_color),
-                    )]
-                }
-            }
+            // Ignored + deleted: show block icon
+            let block_span = match self.mode {
+                IconMode::Emoji => Span::styled("🚫 ", Style::default().fg(self.theme.ignored_color)),
+                IconMode::NerdFont => Span::styled("\u{F05E} ", Style::default().fg(self.theme.ignored_color)),
+            };
+            spans.push(block_span);
         }
+
+        spans
     }
 
     /// Get sync folder icon span (for Syncthing folders in left panel)
