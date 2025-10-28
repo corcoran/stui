@@ -267,6 +267,8 @@ pub struct App {
     // Image update channel for non-blocking image loading
     image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,  // Send (file_path, state) when image loads
     image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>,  // Receive image updates
+    // Sixel cleanup counter - render white screen for N frames after closing image preview
+    pub sixel_cleanup_frames: u8,  // If > 0, render white rectangle and decrement
 }
 
 impl App {
@@ -492,6 +494,7 @@ impl App {
             image_font_size,
             image_update_tx,
             image_update_rx,
+            sixel_cleanup_frames: 0,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -3367,7 +3370,10 @@ impl App {
         if let Some(popup_state) = &mut self.show_file_info {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => {
-                    // Close popup
+                    // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
+                    if popup_state.is_image {
+                        self.sixel_cleanup_frames = 1;
+                    }
                     self.show_file_info = None;
                     return Ok(());
                 }
@@ -3500,8 +3506,11 @@ impl App {
             }
             KeyCode::Char('?') if self.focus_level > 0 => {
                 // Toggle file information popup
-                if self.show_file_info.is_some() {
-                    // Close popup
+                if let Some(popup_state) = &self.show_file_info {
+                    // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
+                    if popup_state.is_image {
+                        self.sixel_cleanup_frames = 1;
+                    }
                     self.show_file_info = None;
                 } else {
                     // Open popup for selected item
@@ -3731,9 +3740,14 @@ async fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> Result<()> {
     loop {
+        // Clear terminal to remove sixel graphics if needed (brief flash but necessary)
+        if app.sixel_cleanup_frames > 0 {
+            terminal.clear()?;
+            app.sixel_cleanup_frames = 0;
+        }
+
         terminal.draw(|f| {
             ui::render(f, app);
-
         })?;
 
         // Auto-dismiss toast after 1.5 seconds

@@ -371,7 +371,7 @@ fn render_metadata_column(
                 .border_style(Style::default().fg(Color::Cyan))
                 .title("Metadata")
         )
-        .style(Style::default().fg(Color::White)) // Use terminal default background
+        .style(Style::default().fg(Color::White))
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
@@ -541,7 +541,7 @@ fn render_preview_column(
                     .border_style(Style::default().fg(Color::Cyan))
                     .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)")
             )
-            .style(Style::default().fg(Color::White)) // Use terminal default background
+            .style(Style::default().fg(Color::White))
             .wrap(Wrap { trim: false }) // Enable line wrapping!
             .scroll((clamped_scroll, 0)); // Enable scrolling with clamped offset!
 
