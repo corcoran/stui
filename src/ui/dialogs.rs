@@ -465,9 +465,28 @@ fn render_preview_column(
                         inner_area
                     };
 
-                    // Use Lanczos3 for high-quality downscaling (default is Nearest which is blurry)
+                    // Adaptive filter for protocol's final resize
+                    // Pre-downscale already handled most of the work, so we can use faster filters
+                    let filter = if let Some((img_w, img_h)) = metadata.dimensions {
+                        // Calculate if this is still a large downscale
+                        let width_ratio = img_w as f32 / render_rect.width as f32;
+                        let height_ratio = img_h as f32 / render_rect.height as f32;
+                        let max_ratio = width_ratio.max(height_ratio);
+
+                        if max_ratio > 3.0 {
+                            // Still large downscale: use Triangle for speed
+                            image::imageops::FilterType::Triangle
+                        } else {
+                            // Moderate/small: use Lanczos3 for quality
+                            image::imageops::FilterType::Lanczos3
+                        }
+                    } else {
+                        // No dimensions: use CatmullRom as balanced default
+                        image::imageops::FilterType::CatmullRom
+                    };
+
                     let image = ratatui_image::StatefulImage::new(None)
-                        .resize(ratatui_image::Resize::Fit(Some(image::imageops::FilterType::Lanczos3)));
+                        .resize(ratatui_image::Resize::Fit(Some(filter)));
                     f.render_stateful_widget(image, render_rect, protocol);
                 }
             }
