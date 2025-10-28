@@ -19,10 +19,6 @@ pub struct Config {
     pub image_preview_enabled: bool,
     #[serde(default = "default_image_protocol")]
     pub image_protocol: String,
-    #[serde(default = "default_max_image_size_mb")]
-    pub max_image_size_mb: u64,
-    #[serde(default = "default_image_dpi_scale")]
-    pub image_dpi_scale: f32,
 }
 
 fn default_icon_mode() -> String {
@@ -35,12 +31,4 @@ fn default_image_preview_enabled() -> bool {
 
 fn default_image_protocol() -> String {
     "auto".to_string()
-}
-
-fn default_max_image_size_mb() -> u64 {
-    20
-}
-
-fn default_image_dpi_scale() -> f32 {
-    1.0
 }

@@ -264,7 +264,6 @@ pub struct App {
     // Image preview protocol
     pub image_picker: Option<ratatui_image::picker::Picker>,  // Protocol picker for image rendering
     pub image_font_size: Option<(u16, u16)>,  // Font size (width, height) for image cell calculations
-    image_dpi_scale: f32,  // DPI scale factor for image preview
     // Image update channel for non-blocking image loading
     image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,  // Send (file_path, state) when image loads
     image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>,  // Receive image updates
@@ -491,7 +490,6 @@ impl App {
             icon_renderer,
             image_picker,
             image_font_size,
-            image_dpi_scale: config.image_dpi_scale,
             image_update_tx,
             image_update_rx,
         };
@@ -2505,14 +2503,12 @@ impl App {
             if exists && self.image_picker.is_some() {
                 // Spawn background task to load image
                 let picker = self.image_picker.as_ref().unwrap().clone();
-                let max_size = 20; // TODO: Get from config
-                let dpi_scale = self.image_dpi_scale;
                 let image_tx = self.image_update_tx.clone();
                 let image_file_path = file_path.clone();
 
                 tokio::spawn(async move {
                     log_debug(&format!("Background: Loading image {}", image_file_path));
-                    match Self::load_image_preview(host_path_buf, picker, max_size, dpi_scale).await {
+                    match Self::load_image_preview(host_path_buf, picker).await {
                         Ok((protocol, metadata)) => {
                             log_debug(&format!("Background: Image loaded successfully {}", image_file_path));
                             let _ = image_tx.send((
@@ -2601,10 +2597,8 @@ impl App {
     async fn load_image_preview(
         host_path: std::path::PathBuf,
         mut picker: ratatui_image::picker::Picker,
-        max_size_mb: u64,
-        _dpi_scale: f32,  // Unused: protocol handles all resizing
     ) -> Result<(Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata), ImageMetadata> {
-        let max_size_bytes = max_size_mb * 1024 * 1024;
+        let max_size_bytes = 20 * 1024 * 1024;  // 20MB limit
 
         // Check file size
         let metadata = match tokio::fs::metadata(&host_path).await {

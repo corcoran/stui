@@ -520,16 +520,149 @@ pub enum ApiResponse {
 - [ ] Works with files in subdirectories
 - [ ] Works with files in root of folder
 
+## Image Preview Feature (Implemented)
+
+### Overview
+Images are automatically detected and rendered in the preview column using the `ratatui-image` library with support for multiple terminal graphics protocols (Kitty, iTerm2, Sixel, Halfblocks).
+
+### Supported Image Formats
+- PNG, JPG/JPEG, GIF, BMP, WebP, TIFF/TIF
+
+### Architecture
+
+#### Data Structures
+```rust
+pub struct ImageMetadata {
+    pub dimensions: Option<(u32, u32)>,  // Original image dimensions
+    pub format: Option<String>,           // Color format (RGB8, RGBA8, etc.)
+    pub file_size: u64,                   // File size in bytes
+}
+
+pub enum ImagePreviewState {
+    Loading,                              // Initial state while image loads
+    Ready {
+        protocol: Box<dyn StatefulProtocol>,
+        metadata: ImageMetadata,
+    },
+    Failed { metadata: ImageMetadata },   // Load failed but shows metadata
+}
+
+pub struct FileInfoPopupState {
+    // ... existing fields ...
+    pub is_image: bool,
+    pub image_state: Option<ImagePreviewState>,
+}
+```
+
+#### Non-Blocking Loading
+- Images load in background `tokio::spawn` task
+- Popup appears immediately with "Loading..." state
+- Updates via unbounded channel when image is ready
+- UI remains responsive during load
+
+#### Performance Optimizations
+
+**Adaptive Quality/Performance Balance:**
+1. **Pre-downscale Stage** (our code):
+   - Target size: ~200 cells × ~60 cells × 1.25x quality headroom
+   - For font_size (8, 16): ~2000×1200 pixels max
+   - **Adaptive filter selection** based on downscale ratio:
+     - `>4x downscale`: Triangle filter (fastest, 3-5x faster than Lanczos3)
+     - `2-4x downscale`: CatmullRom filter (balanced, 2x faster)
+     - `<2x downscale`: Lanczos3 filter (highest quality)
+
+2. **Protocol Render Stage** (ratatui-image):
+   - Also uses adaptive filtering based on final downscale ratio
+   - `>3x`: Triangle for speed
+   - `<3x`: Lanczos3 for quality
+
+**Performance Results:**
+- Small images (<2x downscale): ~20-50ms (Lanczos3)
+- Medium images (2-4x downscale): ~40-130ms (CatmullRom)
+- Large images (>4x downscale): ~100-200ms (Triangle)
+- Example: 3072×4080 image loads in 130ms
+- Example: 1080×2340 image loads in 40ms
+
+#### Smart Centering
+- Calculates how many terminal cells the image needs using `pixels / font_size`
+- Fits to available area maintaining aspect ratio (mimics `Resize::Fit`)
+- Centers the fitted rect within the preview area
+- Works for both oversized images (fills area) and undersized images (natural size, centered)
+
+#### Configuration
+```yaml
+# config.yaml
+image_preview_enabled: true        # Enable/disable image preview
+image_protocol: "auto"             # auto|kitty|iterm2|sixel|halfblocks
+# Note: 20MB size limit is hardcoded in the implementation
+```
+
+#### Protocol Detection
+- Uses `Picker::from_termios()` to auto-detect terminal capabilities
+- Detects font size for pixel-to-cell calculations
+- Falls back to (8, 16) if detection fails
+- Respects `image_protocol` config override
+
+#### Image Rendering
+- **Loading state**: Shows "Loading image..." with yellow text
+- **Ready state**: Renders image centered with dimensions in title
+  - Title shows: "Preview (Image | 1920x1080)"
+  - Uses `StatefulImage` widget with adaptive filter
+  - Images fill available space or display at natural size if smaller
+- **Failed state**: Shows metadata fallback with format, dimensions, file size
+
+#### Metadata Display
+- **Resolution**: Added to metadata column (e.g., "Resolution: 3840x2160")
+- Shows for both Ready and Failed states
+- Displays original dimensions (before any resizing)
+
+#### Debug Logging
+With `--debug` flag, detailed timing information is logged:
+```
+Loading image: 3072x4080 pixels
+Pre-downscaling 3072x4080 by 3.63x to fit 1750x1125 for better quality
+Using CatmullRom filter for 3.63x downscale
+Resize took 0.13s
+Creating protocol...
+Protocol creation took 0.00s
+Total image load took 0.13s
+```
+
+### Technical Details
+
+**Why Two-Stage Resizing:**
+- Single extreme downscale (e.g., 8000×6000 → 800×600) creates artifacts
+- Two moderate downscales produce better results
+- Pre-downscale with high-quality filter + protocol's final resize = optimal quality
+
+**Filter Characteristics:**
+- **Nearest**: Fastest, blocky/pixelated (default in protocol - we override this)
+- **Triangle**: Fast, decent quality for large downscales
+- **CatmullRom**: Good quality, 2x faster than Lanczos3
+- **Lanczos3**: Best quality, slowest (used sparingly)
+
+**Font Size Impact:**
+- Protocol converts `image pixels / font_size = terminal cells needed`
+- Smaller font size = more cells = larger rendered image
+- Typical font sizes: 8×16 (common), 7×14 (small), 9×18 (large)
+
+### Implementation Files
+- `src/main.rs`: Image loading, metadata, state management, channels
+- `src/ui/dialogs.rs`: Image rendering with centering logic
+- `src/config.rs`: Configuration fields for image preview
+- `Cargo.toml`: Dependencies (`ratatui-image = "1.0"`, `image = "0.25"`)
+
 ## Future Enhancements
 
-1. **Scrolling**: Add scroll support for tall content (PgUp/PgDn, j/k in vim mode)
-2. **Image preview**: Detect image files and render using terminal graphics protocols (Kitty, iTerm2, Sixel)
+1. ~~**Scrolling**: Add scroll support for tall content (PgUp/PgDn, j/k in vim mode)~~ ✅ Implemented
+2. ~~**Image preview**: Detect image files and render using terminal graphics protocols (Kitty, iTerm2, Sixel)~~ ✅ Implemented
 3. **Syntax highlighting**: Use syntect or similar for code files
 4. **Diff view**: Show local vs global differences
 5. **Event-driven updates**: Auto-refresh on file changes
 6. **Configurable layout**: Allow users to adjust column proportions
 7. **Export**: Save preview to file or copy to clipboard
 8. **Search within preview**: Filter/highlight text in preview column
+9. **Image zoom controls**: Allow adjusting quality multiplier on-the-fly
 
 ## References
 

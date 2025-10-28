@@ -3,7 +3,13 @@
 ## Project Overview
 
 Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing folders, showing contents, adding .stignore rules, and deleting directories safely with Docker path-mapping support.
-What makes this app unique is the file management part (breadcrumbs, directories, files) part. Being able to navigate your files and selectively ignore and see if the file is ignored but still exists on the disk is a feature missing across most Syncthing apps. It is one of the most important features and should be modified with care ONLY.
+
+**What makes this app unique:**
+- **Advanced file management**: Breadcrumb navigation, selective ignore, and visibility of ignored files that still exist on disk
+- **Terminal image preview**: High-performance image rendering (40-200ms) with adaptive quality using Kitty/iTerm2/Sixel/Halfblocks protocols
+- **Real-time sync monitoring**: Event-driven cache invalidation with granular file-level updates
+
+The file management and image preview features are core differentiators and should be modified with care.
 
 ## claude instructions
 
@@ -26,8 +32,18 @@ What makes this app unique is the file management part (breadcrumbs, directories
 - **TUI Framework**: Ratatui
 - **Dependencies**:
   - `reqwest` (HTTP client)
-  - `serde` (serialization)
+  - `serde` / `serde_json` / `serde_yaml` (serialization)
   - `crossterm` (terminal handling)
+  - `tokio` (async runtime)
+  - `rusqlite` (SQLite cache)
+  - `ratatui-image` (terminal image rendering)
+  - `image` (image processing and resizing)
+  - `anyhow` (error handling)
+  - `urlencoding` (URL encoding)
+  - `dirs` (directory paths)
+  - `glob` (pattern matching)
+  - `clap` (CLI argument parsing)
+  - `unicode-width` (text width calculations)
 
 ## Core Features
 
@@ -56,7 +72,15 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### User Actions
 
-- `?`: Show detailed file info popup with metadata (sync state, permissions, device availability) and text preview (scrollable with vim keybindings)
+- `?`: Show detailed file info popup with metadata (sync state, permissions, device availability) and preview:
+  - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
+  - **Image files**: Terminal image rendering with Kitty/iTerm2/Sixel/Halfblocks protocols
+    - Auto-detects terminal capabilities and font size
+    - Non-blocking background loading (popup appears immediately)
+    - Adaptive quality/performance (40-200ms load times)
+    - Smart centering and aspect ratio preservation
+    - Shows resolution in metadata column
+  - **Binary files**: Shows extracted text or metadata
 - `c`: Copy folder ID (folders) or file/directory path (files/folders, uses mapped host paths) to clipboard
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
@@ -104,12 +128,18 @@ YAML config file (currently `./config.yaml`, planned: `~/.config/synctui/config.
 - Base URL
 - `path_map` (container-to-host path translations)
 - `vim_mode` (optional, boolean to enable vim keybindings)
+- `icon_mode` (optional, string): Icon rendering mode - `"nerdfont"` or `"emoji"` (default: `"nerdfont"`)
 - `open_command` (optional, string): Command to execute for opening files/directories (e.g., `xdg-open`, `code`, `vim`)
-- `clipboard_command` (optional, string): Command to copy text to clipboard via stdin (e.g., `wl-copy`, `xclip`, `pbcopy`).
+- `clipboard_command` (optional, string): Command to copy text to clipboard via stdin (e.g., `wl-copy`, `xclip`, `pbcopy`)
+- **Image Preview Settings**:
+  - `image_preview_enabled` (boolean, default: `true`): Enable/disable image preview
+  - `image_protocol` (string, default: `"auto"`): Terminal graphics protocol - `"auto"`, `"kitty"`, `"iterm2"`, `"sixel"`, or `"halfblocks"`
 
 CLI flags:
-- `--debug`: Enable debug logging to `/tmp/synctui-debug.log`
+- `--debug`: Enable debug logging to `/tmp/synctui-debug.log` (includes image loading performance metrics)
+- `--bug`: Enable targeted bug debugging to `/tmp/synctui-bug.log`
 - `--vim`: Enable vim keybindings (overrides config file setting)
+- `--config <path>`: Specify custom config file path
 
 ### Safety Features
 
@@ -186,7 +216,7 @@ CLI flags:
 - Change Folder Type toggle hotkey + status (with confirmation)
 - File type filtering and ignored-only view
 - Event history viewer with persistent logging
-- Image preview in file info popup (CLI rendering)
+- ~~Image preview in file info popup (CLI rendering)~~ ✅ **Implemented** (see User Actions section)
 - Optional filesystem diff view
 - Batch operations (multi-select for ignore/delete/rescan)
 - Configurable keybindings via YAML/TOML
