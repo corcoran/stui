@@ -123,7 +123,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config file (currently `./config.yaml`, planned: `~/.config/synctui/config.yaml`) containing:
+YAML config file at platform-specific location (Linux: `~/.config/synctui/config.yaml`, macOS: `~/Library/Application Support/synctui/config.yaml`, Windows: `%APPDATA%\synctui\config.yaml`) containing:
 - API key
 - Base URL
 - `path_map` (container-to-host path translations)

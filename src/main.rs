@@ -28,7 +28,7 @@ struct Args {
     #[arg(long)]
     vim: bool,
 
-    /// Path to config file (default: ~/.config/synctui/config.yaml)
+    /// Path to config file (default: platform-specific, see docs)
     #[arg(short, long)]
     config: Option<String>,
 }
@@ -3656,12 +3656,18 @@ fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
     }
 
     // No config found, provide helpful error
+    let expected_path = if let Some(config_dir) = dirs::config_dir() {
+        config_dir.join("synctui").join("config.yaml").display().to_string()
+    } else {
+        "~/.config/synctui/config.yaml".to_string()
+    };
+
     anyhow::bail!(
         "Config file not found. Expected locations:\n\
-         1. ~/.config/synctui/config.yaml (preferred)\n\
+         1. {} (preferred)\n\
          2. ./config.yaml (fallback)\n\
          \n\
-         Use --config <path> to specify a custom location."
+         Use --config <path> to specify a custom location.", expected_path
     )
 }
 

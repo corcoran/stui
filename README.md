@@ -63,7 +63,10 @@ sudo cp target/release/synctui /usr/local/bin/
 
 ## Configuration
 
-Create `~/.config/synctui/config.yaml`:
+Create a config file at the platform-specific location:
+- **Linux**: `~/.config/synctui/config.yaml`
+- **macOS**: `~/Library/Application Support/synctui/config.yaml`
+- **Windows**: `%APPDATA%\synctui\config.yaml`
 
 ```yaml
 api_key: "your-syncthing-api-key"
