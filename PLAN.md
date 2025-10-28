@@ -10,7 +10,7 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
  -  Remote Devices (Name, Download / Upload rate, Folders)
  -  Add event history viewer with persistent logging
  -  Add filtering functionality (show only ignored files, by type, etc.)
- -  Add file preview system (text and images)
+ -  Add image preview support to file info popup (CLI rendering)
  -  Build comprehensive test suite
  -  Improve error handling, display, and timeouts
  -  Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
@@ -343,6 +343,21 @@ src/
 ## 📍 Current Status (Updated 2025-10-28)
 
 **Recent Accomplishments (Session 2025-10-28):**
+
+**File Info Popup Feature:**
+- ✅ Comprehensive file information popup triggered by `?` key
+- ✅ Two-column layout: metadata (35 chars fixed) + preview (remaining width with min 50 chars)
+- ✅ Metadata shows: name, type, size, modified time, local state, permissions, modified by device, sync status, device availability, disk existence
+- ✅ Text preview with full vim keybindings (j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)
+- ✅ Visual scrollbar for preview pane with accurate position tracking
+- ✅ Smart scroll clamping prevents offset drift beyond valid bounds
+- ✅ Binary file detection with text extraction (strings-like algorithm)
+- ✅ Sync status uses icon renderer (respects emoji vs nerdfont preference)
+- ✅ Device names resolved from IDs with fallback to short ID
+- ✅ User-friendly sync status display (✅ In Sync, ⚠️ Behind, ⚠️ Ahead)
+- ✅ Shows only connected/online devices in availability list
+- ✅ Terminal theme compatible (uses default background)
+- ✅ Max file size: 20MB (supports future image preview)
 
 **UI Layout Reorganization:**
 - ✅ System bar moved to top (full width) showing device info, uptime, transfer rates

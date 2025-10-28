@@ -190,6 +190,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         dialogs::render_pattern_selection(f, patterns, state);
     }
 
+    // Render file info popup if active
+    if let Some(state) = &mut app.show_file_info {
+        let my_device_id = app.system_status.as_ref().map(|s| s.my_id.as_str());
+        dialogs::render_file_info(f, state, &app.devices, my_device_id, &app.icon_renderer);
+    }
+
     // Render toast notification if active
     if let Some((message, _timestamp)) = &app.toast_message {
         toast::render_toast(f, size, message);

@@ -56,6 +56,8 @@ pub fn render_legend(
             Span::raw(":Reverse  "),
             Span::styled("t", Style::default().fg(Color::Yellow)),
             Span::raw(":Info  "),
+            Span::styled("?", Style::default().fg(Color::Yellow)),
+            Span::raw(":File Info  "),
         ]);
 
         // Open - only show if open_command is configured

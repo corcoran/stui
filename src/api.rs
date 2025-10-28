@@ -14,7 +14,6 @@ pub struct Folder {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Device {
     #[serde(rename = "deviceID")]
-    #[allow(dead_code)]
     pub id: String,
     pub name: String,
 }
@@ -239,6 +238,11 @@ impl SyncthingClient {
     pub async fn get_folders(&self) -> Result<Vec<Folder>> {
         let config = self.get_system_config().await?;
         Ok(config.folders)
+    }
+
+    pub async fn get_devices(&self) -> Result<Vec<Device>> {
+        let config = self.get_system_config().await?;
+        Ok(config.devices)
     }
 
     pub async fn get_device_name(&self) -> Result<String> {

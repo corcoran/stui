@@ -1,10 +1,14 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
+
+use crate::{FileInfoPopupState, api::Device};
+use crate::utils;
+use super::icons::IconRenderer;
 
 /// Render the revert confirmation dialog (for restoring deleted files in receive-only folders)
 pub fn render_revert_confirmation(
@@ -135,4 +139,295 @@ pub fn render_pattern_selection(
 
     f.render_widget(ratatui::widgets::Clear, menu_area);
     f.render_stateful_widget(menu, menu_area, state);
+}
+
+/// Render the file information popup with metadata and preview
+pub fn render_file_info(
+    f: &mut Frame,
+    state: &mut FileInfoPopupState,
+    devices: &[Device],
+    my_device_id: Option<&str>,
+    icon_renderer: &IconRenderer,
+) {
+    // Calculate centered area (90% width, 90% height)
+    let area = f.size();
+    let popup_width = (area.width as f32 * 0.9) as u16;
+    let popup_height = (area.height as f32 * 0.9) as u16;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    // Clear background
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+
+    // Split into two columns - metadata gets reasonable fixed width, preview gets the rest
+    // Use 35 chars for metadata (should fit most filenames without wrapping)
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(35),
+            Constraint::Min(50), // Preview gets at least 50 chars
+        ])
+        .split(popup_area);
+
+    // Render metadata column
+    render_metadata_column(f, columns[0], state, devices, my_device_id, icon_renderer);
+
+    // Render preview column
+    render_preview_column(f, columns[1], state);
+}
+
+fn render_metadata_column(
+    f: &mut Frame,
+    area: Rect,
+    state: &FileInfoPopupState,
+    devices: &[Device],
+    my_device_id: Option<&str>,
+    icon_renderer: &IconRenderer,
+) {
+    let mut lines = vec![];
+
+    // Name
+    lines.push(Line::from(vec![
+        Span::styled("Name: ", Style::default().fg(Color::Yellow)),
+        Span::raw(&state.browse_item.name),
+    ]));
+
+    // Type
+    let item_type = if state.browse_item.item_type == "directory" {
+        "Directory"
+    } else {
+        "File"
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Type: ", Style::default().fg(Color::Yellow)),
+        Span::raw(item_type),
+    ]));
+
+    // Size
+    lines.push(Line::from(vec![
+        Span::styled("Size: ", Style::default().fg(Color::Yellow)),
+        Span::raw(utils::format_bytes(state.browse_item.size)),
+    ]));
+
+    // Modified time
+    lines.push(Line::from(vec![
+        Span::styled("Modified: ", Style::default().fg(Color::Yellow)),
+        Span::raw(&state.browse_item.mod_time),
+    ]));
+
+    lines.push(Line::from(""));
+
+    // File details from API
+    if let Some(details) = &state.file_details {
+        // Local state
+        if let Some(local) = &details.local {
+            lines.push(Line::from(vec![
+                Span::styled("State (Local): ", Style::default().fg(Color::Yellow)),
+                Span::raw(if local.deleted { "Deleted" } else { "Present" }),
+            ]));
+
+            lines.push(Line::from(vec![
+                Span::styled("Ignored: ", Style::default().fg(Color::Yellow)),
+                Span::raw(if local.ignored { "Yes" } else { "No" }),
+            ]));
+
+            if !local.permissions.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Permissions: ", Style::default().fg(Color::Yellow)),
+                    Span::raw(&local.permissions),
+                ]));
+            }
+
+            if !local.modified_by.is_empty() {
+                // Try to find the device name
+                let device_name = devices.iter()
+                    .find(|d| d.id == local.modified_by)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or_else(|| &local.modified_by[..std::cmp::min(12, local.modified_by.len())]);
+
+                lines.push(Line::from(vec![
+                    Span::styled("Modified By: ", Style::default().fg(Color::Yellow)),
+                    Span::raw(device_name),
+                ]));
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        // Sync status comparison (more user-friendly than sequence numbers)
+        if let Some(local) = &details.local {
+            if let Some(global) = &details.global {
+                let (status_text, sync_state) = if local.sequence == global.sequence {
+                    ("In Sync", crate::api::SyncState::Synced)
+                } else if local.sequence < global.sequence {
+                    ("Behind (needs update)", crate::api::SyncState::OutOfSync)
+                } else {
+                    ("Ahead (local changes)", crate::api::SyncState::OutOfSync)
+                };
+
+                // Get icon span from icon_renderer (returns [file_icon, status_icon])
+                let icon_spans = icon_renderer.item_with_sync_state(false, sync_state);
+
+                let mut status_spans = vec![
+                    Span::styled("Sync Status: ", Style::default().fg(Color::Yellow)),
+                ];
+                // Add just the status icon (second element, skip the file icon)
+                if icon_spans.len() > 1 {
+                    status_spans.push(icon_spans[1].clone());
+                }
+                status_spans.push(Span::raw(status_text));
+
+                lines.push(Line::from(status_spans));
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        // Device availability (only shows connected/online devices)
+        let other_devices: Vec<_> = details.availability.iter()
+            .filter(|d| Some(d.id.as_str()) != my_device_id) // Filter out current device
+            .collect();
+
+        if !other_devices.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Available on (connected):",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            )));
+
+            for device_avail in other_devices {
+                // Try to find the device name
+                let device_name = devices.iter()
+                    .find(|d| d.id == device_avail.id)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or_else(|| &device_avail.id[..std::cmp::min(12, device_avail.id.len())]);
+
+                lines.push(Line::from(format!("  • {}", device_name)));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "Available on: Only this device",
+                Style::default().fg(Color::DarkGray)
+            )));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "API details not available",
+            Style::default().fg(Color::Gray)
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // Disk status
+    lines.push(Line::from(vec![
+        Span::styled("Exists on Disk: ", Style::default().fg(Color::Yellow)),
+        Span::styled(
+            if state.exists_on_disk { "Yes" } else { "No" },
+            if state.exists_on_disk {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red)
+            }
+        ),
+    ]));
+
+    if state.is_binary {
+        lines.push(Line::from(Span::styled(
+            "⚠️  Binary file",
+            Style::default().fg(Color::Magenta)
+        )));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Metadata")
+        )
+        .style(Style::default().fg(Color::White)) // Use terminal default background
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_preview_column(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut FileInfoPopupState,
+) {
+    let content = match &state.file_content {
+        Ok(text) => text.clone(),
+        Err(msg) => format!("Error: {}", msg),
+    };
+
+    // Calculate the effective width for text (accounting for borders)
+    let text_width = area.width.saturating_sub(2) as usize; // -2 for borders
+
+    // Count total lines considering wrapping
+    let total_lines = content.lines()
+        .map(|line| {
+            if line.is_empty() {
+                1
+            } else {
+                // Calculate how many display lines this line will take when wrapped
+                ((line.len() + text_width - 1) / text_width).max(1)
+            }
+        })
+        .sum::<usize>();
+
+    // Viewport height (visible lines)
+    let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
+
+    // Calculate max scroll position (can't scroll past the last line)
+    let max_scroll = if total_lines > viewport_height {
+        total_lines - viewport_height
+    } else {
+        0
+    };
+
+    // Clamp scroll offset to valid range
+    let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
+
+    // Write the clamped value back to state to prevent offset drift
+    state.scroll_offset = clamped_scroll;
+
+    // Enable text wrapping with Wrap { trim: false } and scrolling
+    let paragraph = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)")
+        )
+        .style(Style::default().fg(Color::White)) // Use terminal default background
+        .wrap(Wrap { trim: false }) // Enable line wrapping!
+        .scroll((clamped_scroll, 0)); // Enable scrolling with clamped offset!
+
+    f.render_widget(paragraph, area);
+
+    // Render scrollbar if content is longer than viewport
+    if total_lines > viewport_height {
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(clamped_scroll as usize);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        f.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin { horizontal: 0, vertical: 1 }), // Keep scrollbar inside borders
+            &mut scrollbar_state,
+        );
+    }
 }

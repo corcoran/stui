@@ -7,26 +7,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use crate::api::{Folder, FolderStatus, SyncState};
-
-/// Format bytes into human-readable string (e.g., "1.2 KB", "5.3 MB")
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.2} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
+use crate::utils;
 
 /// Render the bottom status bar
 /// - When focus_level == 0: Shows folder status (state, size, sync progress)
@@ -73,18 +54,18 @@ pub fn render_status_bar(
                             format!("↓{} ↑{} ({})",
                                 status.need_total_items,
                                 status.receive_only_total_items,
-                                format_bytes(status.need_bytes + status.receive_only_changed_bytes)
+                                utils::format_bytes(status.need_bytes + status.receive_only_changed_bytes)
                             )
                         } else {
                             // Only local additions
                             format!("Local: {} items ({})",
                                 status.receive_only_total_items,
-                                format_bytes(status.receive_only_changed_bytes)
+                                utils::format_bytes(status.receive_only_changed_bytes)
                             )
                         }
                     } else if status.need_total_items > 0 {
                         // Only remote needs
-                        format!("{} items ({}) ", status.need_total_items, format_bytes(status.need_bytes))
+                        format!("{} items ({}) ", status.need_total_items, utils::format_bytes(status.need_bytes))
                     } else {
                         "Up to date ".to_string()
                     };
@@ -92,7 +73,7 @@ pub fn render_status_bar(
                     format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
                         state_display,
-                        format_bytes(status.global_bytes),
+                        utils::format_bytes(status.global_bytes),
                         items_display,
                         need_display
                     )

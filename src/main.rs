@@ -58,8 +58,9 @@ mod cache;
 mod config;
 mod event_listener;
 mod ui;
+mod utils;
 
-use api::{BrowseItem, ConnectionStats, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
+use api::{BrowseItem, ConnectionStats, Device, FileDetails, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
 use cache::CacheDb;
 use config::Config;
 use ui::icons::{IconMode, IconRenderer, IconTheme};
@@ -157,6 +158,18 @@ impl SortMode {
 }
 
 #[derive(Clone)]
+pub struct FileInfoPopupState {
+    pub folder_id: String,
+    pub file_path: String,
+    pub browse_item: BrowseItem,
+    pub file_details: Option<FileDetails>,
+    pub file_content: Result<String, String>, // Ok(content) or Err(error message)
+    pub exists_on_disk: bool,
+    pub is_binary: bool,
+    pub scroll_offset: u16, // Vertical scroll offset for preview
+}
+
+#[derive(Clone)]
 pub struct BreadcrumbLevel {
     pub folder_id: String,
     pub folder_label: String,
@@ -173,6 +186,7 @@ pub struct App {
     client: SyncthingClient,
     cache: CacheDb,
     pub folders: Vec<Folder>,
+    pub devices: Vec<Device>,
     pub folders_state: ListState,
     pub folder_statuses: HashMap<String, FolderStatus>,
     pub statuses_loaded: bool,
@@ -203,6 +217,8 @@ pub struct App {
     pub confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
     pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
+    // File information popup
+    pub show_file_info: Option<FileInfoPopupState>, // If Some, shows file information popup
     // Toast notification
     pub toast_message: Option<(String, Instant)>, // If Some, shows toast notification (message, timestamp)
     // Track manually set states to prevent stale file_info updates from causing flashes
@@ -319,6 +335,7 @@ impl App {
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
         let cache = CacheDb::new()?;
         let folders = client.get_folders().await?;
+        let devices = client.get_devices().await.unwrap_or_default();
 
         // Spawn API service worker
         let (api_tx, api_rx) = api_service::spawn_api_service(client.clone());
@@ -351,6 +368,7 @@ impl App {
             client,
             cache,
             folders,
+            devices,
             folders_state: ListState::default(),
             folder_statuses: HashMap::new(),
             statuses_loaded: false,
@@ -377,6 +395,7 @@ impl App {
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
+            show_file_info: None,
             toast_message: None,
             manually_set_states: HashMap::new(),
             syncing_files: HashSet::new(),
@@ -2341,6 +2360,163 @@ impl App {
         Ok(())
     }
 
+    async fn fetch_file_info_and_content(
+        &mut self,
+        folder_id: String,
+        file_path: String,
+        browse_item: BrowseItem,
+    ) {
+        // Find the folder
+        let folder = match self.folders.iter().find(|f| f.id == folder_id) {
+            Some(f) => f.clone(),
+            None => {
+                self.show_file_info = Some(FileInfoPopupState {
+                    folder_id,
+                    file_path,
+                    browse_item,
+                    file_details: None,
+                    file_content: Err("Folder not found".to_string()),
+                    exists_on_disk: false,
+                    is_binary: false,
+                    scroll_offset: 0,
+                });
+                return;
+            }
+        };
+
+        // Initialize popup state with loading message first
+        self.show_file_info = Some(FileInfoPopupState {
+            folder_id: folder_id.clone(),
+            file_path: file_path.clone(),
+            browse_item: browse_item.clone(),
+            file_details: None,
+            file_content: Err("Loading...".to_string()),
+            exists_on_disk: false,
+            is_binary: false,
+            scroll_offset: 0,
+        });
+
+        // 1. Fetch file details from API
+        let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
+
+        // 2. Read file content from disk
+        let (file_content, exists_on_disk, is_binary) =
+            Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
+
+        // 3. Update popup state with results
+        self.show_file_info = Some(FileInfoPopupState {
+            folder_id,
+            file_path,
+            browse_item,
+            file_details,
+            file_content,
+            exists_on_disk,
+            is_binary,
+            scroll_offset: 0,
+        });
+    }
+
+    async fn read_file_content_static(
+        path_map: &HashMap<String, String>,
+        folder: &Folder,
+        relative_path: &str,
+    ) -> (Result<String, String>, bool, bool) {
+        const MAX_SIZE: u64 = 20 * 1024 * 1024; // 20MB
+        const BINARY_CHECK_SIZE: usize = 8192; // First 8KB
+
+        // Translate container path to host path
+        let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
+        let mut host_path = container_path.clone();
+
+        // Try to map container path to host path using path_map
+        for (container_prefix, host_prefix) in path_map {
+            if container_path.starts_with(container_prefix) {
+                let remainder = container_path.strip_prefix(container_prefix).unwrap_or("");
+                host_path = format!("{}{}", host_prefix.trim_end_matches('/'), remainder);
+                break;
+            }
+        }
+
+        // Check if file exists
+        let metadata = match tokio::fs::metadata(&host_path).await {
+            Ok(m) => m,
+            Err(_) => return (Err("File not found on disk".to_string()), false, false),
+        };
+
+        let exists = true;
+
+        // Check if it's a directory
+        if metadata.is_dir() {
+            return (Ok("[Directory]".to_string()), exists, false);
+        }
+
+        // Check file size
+        if metadata.len() > MAX_SIZE {
+            return (
+                Err(format!("File too large ({}) - max 20MB", utils::format_bytes(metadata.len()))),
+                exists,
+                false
+            );
+        }
+
+        // Read file content
+        match tokio::fs::read(&host_path).await {
+            Ok(bytes) => {
+                // Check if binary (null bytes in first 8KB)
+                let check_size = std::cmp::min(bytes.len(), BINARY_CHECK_SIZE);
+                let is_binary = bytes[..check_size].contains(&0);
+
+                if is_binary {
+                    // Attempt text extraction (similar to 'strings' command)
+                    let extracted = Self::extract_text_from_binary(&bytes);
+                    (Ok(extracted), exists, true)
+                } else {
+                    // Try to decode as UTF-8
+                    match String::from_utf8(bytes.clone()) {
+                        Ok(content) => (Ok(content), exists, false),
+                        Err(_) => {
+                            // Try lossy conversion
+                            let content = String::from_utf8_lossy(&bytes).to_string();
+                            (Ok(content), exists, true)
+                        }
+                    }
+                }
+            }
+            Err(e) => (Err(format!("Failed to read file: {}", e)), exists, false),
+        }
+    }
+
+    fn extract_text_from_binary(bytes: &[u8]) -> String {
+        // Extract printable ASCII strings (similar to 'strings' command)
+        let mut result = String::new();
+        let mut current_string = String::new();
+        const MIN_STRING_LENGTH: usize = 4;
+
+        for &byte in bytes {
+            if (32..=126).contains(&byte) || byte == b'\n' || byte == b'\t' {
+                current_string.push(byte as char);
+            } else {
+                if current_string.len() >= MIN_STRING_LENGTH {
+                    result.push_str(&current_string);
+                    result.push('\n');
+                }
+                current_string.clear();
+            }
+        }
+
+        if current_string.len() >= MIN_STRING_LENGTH {
+            result.push_str(&current_string);
+        }
+
+        if result.is_empty() {
+            result = "[Binary file - no readable text found]".to_string();
+        } else {
+            result = format!("[Binary file - extracted text]\n\n{}", result);
+        }
+
+        result
+    }
+
     async fn toggle_ignore(&mut self) -> Result<()> {
         log_bug("toggle_ignore: START");
 
@@ -2882,6 +3058,82 @@ impl App {
             }
         }
 
+        // Handle file info popup
+        if let Some(popup_state) = &mut self.show_file_info {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') => {
+                    // Close popup
+                    self.show_file_info = None;
+                    return Ok(());
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    // Scroll down
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_add(1);
+                    return Ok(());
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    // Scroll up
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_sub(1);
+                    return Ok(());
+                }
+                KeyCode::PageDown => {
+                    // Scroll down by page (10 lines)
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_add(10);
+                    return Ok(());
+                }
+                KeyCode::PageUp => {
+                    // Scroll up by page (10 lines)
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_sub(10);
+                    return Ok(());
+                }
+                // Vim keybindings for scrolling
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl-d: Half page down
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_add(10);
+                    return Ok(());
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl-u: Half page up
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_sub(10);
+                    return Ok(());
+                }
+                KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl-f: Full page down
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_add(20);
+                    return Ok(());
+                }
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl-b: Full page up
+                    popup_state.scroll_offset = popup_state.scroll_offset.saturating_sub(20);
+                    return Ok(());
+                }
+                KeyCode::Char('g') => {
+                    // First 'g' in 'gg' sequence - need to track this
+                    if self.last_key_was_g {
+                        // This is the second 'g' - go to top
+                        popup_state.scroll_offset = 0;
+                        self.last_key_was_g = false;
+                    } else {
+                        // First 'g' - wait for second one
+                        self.last_key_was_g = true;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('G') => {
+                    // Go to bottom (set to a very large number, will be clamped by rendering)
+                    popup_state.scroll_offset = u16::MAX;
+                    self.last_key_was_g = false;
+                    return Ok(());
+                }
+                _ => {
+                    // Reset 'gg' sequence on any other key
+                    self.last_key_was_g = false;
+                    // Ignore other keys while popup is showing
+                    return Ok(());
+                }
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
@@ -2940,6 +3192,34 @@ impl App {
             KeyCode::Char('t') => {
                 // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
                 self.display_mode = self.display_mode.next();
+            }
+            KeyCode::Char('?') if self.focus_level > 0 => {
+                // Toggle file information popup
+                if self.show_file_info.is_some() {
+                    // Close popup
+                    self.show_file_info = None;
+                } else {
+                    // Open popup for selected item
+                    if let Some(level) = self.breadcrumb_trail.get(self.focus_level - 1) {
+                        if let Some(selected_idx) = level.state.selected() {
+                            if let Some(item) = level.items.get(selected_idx) {
+                                // Construct full path
+                                let file_path = if let Some(prefix) = &level.prefix {
+                                    format!("{}{}", prefix, item.name)
+                                } else {
+                                    item.name.clone()
+                                };
+
+                                // Fetch file info and content (await since it's async)
+                                self.fetch_file_info_and_content(
+                                    level.folder_id.clone(),
+                                    file_path,
+                                    item.clone(),
+                                ).await;
+                            }
+                        }
+                    }
+                }
             }
             // Vim keybindings
             KeyCode::Char('h') if self.vim_mode => {

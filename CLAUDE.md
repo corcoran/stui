@@ -56,6 +56,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### User Actions
 
+- `?`: Show detailed file info popup with metadata (sync state, permissions, device availability) and text preview (scrollable with vim keybindings)
 - `c`: Copy folder ID (folders) or file/directory path (files/folders, uses mapped host paths) to clipboard
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
@@ -181,12 +182,11 @@ CLI flags:
 - No comprehensive test suite yet
 
 ### Planned Features
-- Config file at `~/.config/synctui/config.yaml` with CLI override
 - Pause / Resume folder toggle hotkey + status (with confirmation)
 - Change Folder Type toggle hotkey + status (with confirmation)
 - File type filtering and ignored-only view
 - Event history viewer with persistent logging
-- File preview (text files and CLI image rendering)
+- Image preview in file info popup (CLI rendering)
 - Optional filesystem diff view
 - Batch operations (multi-select for ignore/delete/rescan)
 - Configurable keybindings via YAML/TOML

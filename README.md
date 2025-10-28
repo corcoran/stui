@@ -22,6 +22,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Ancestor Highlighting**: All parent folders stay highlighted (blue border) when drilling deeper
 - **Flexible Sorting**: Sort by sync state, name, timestamp, or size with one keypress
 - **File Info Display**: Toggle between no info, timestamps only, or timestamps + human-readable sizes
+- **Detailed File Preview**: Press `?` on any file to open a comprehensive popup showing metadata (sync state, permissions, device availability) and text preview with scrolling support (vim keybindings included)
 - **Ignore Management**: Add or remove files from `.stignore` patterns interactively
 - **Safe Deletions**: Confirmation prompts for all destructive operations
 
@@ -135,6 +136,7 @@ synctui --debug
 
 | Key | Action | Confirmation |
 |-----|--------|--------------|
+| `?` | Show detailed file info popup (metadata, sync state, preview) | No |
 | `c` | Copy folder ID (folders) or file/directory path (files/folders) to clipboard | No |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |
 | `I` | Ignore AND delete from disk | No (immediate) |
@@ -244,6 +246,7 @@ rm ~/.cache/synctui/cache.db
 
 - No async loading spinners (UI may briefly pause on large operations)
 - No file type filtering or batch operations yet
+- No image preview support (text files only)
 - Error handling and timeout management still being refined
 
 ## Contributing
