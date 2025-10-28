@@ -7,14 +7,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::ListState,
     Terminal,
 };
 use std::{collections::{HashMap, HashSet}, fs, io, sync::atomic::{AtomicBool, Ordering}, time::Instant};
-use unicode_width::UnicodeWidthStr;
 
 /// Syncthing TUI Manager
 #[derive(Parser, Debug)]
@@ -48,11 +44,12 @@ mod cache;
 mod config;
 mod event_listener;
 mod icons;
+mod ui;
 
 use api::{BrowseItem, ConnectionStats, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
 use cache::CacheDb;
 use config::Config;
-use icons::{FolderState, IconMode, IconRenderer, IconTheme};
+use icons::{IconMode, IconRenderer, IconTheme};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -88,25 +85,6 @@ fn log_bug(msg: &str) {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.2} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
 fn sync_state_priority(state: SyncState) -> u8 {
     // Lower number = higher priority (displayed first)
     match state {
@@ -119,103 +97,8 @@ fn sync_state_priority(state: SyncState) -> u8 {
     }
 }
 
-fn format_timestamp(timestamp: &str) -> String {
-    // Parse ISO timestamp and format as human-readable
-    // Input format: "2025-10-26T20:58:21.580021398Z"
-    // Output format: "2025-10-26 20:58"
-    if timestamp.is_empty() {
-        return String::new();
-    }
-
-    // Try to parse and format
-    if let Some(datetime_part) = timestamp.split('T').next() {
-        if let Some(time_part) = timestamp.split('T').nth(1) {
-            let time = time_part.split(':').take(2).collect::<Vec<_>>().join(":");
-            return format!("{} {}", datetime_part, time);
-        }
-        return datetime_part.to_string();
-    }
-
-    timestamp.to_string()
-}
-
-fn format_human_size(size: u64) -> String {
-    // Format size as human-readable, always 4 characters for alignment
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if size == 0 {
-        return "   0".to_string();
-    } else if size < KB {
-        // Show raw bytes as digits (no 'B' suffix)
-        return format!("{:>4}", size);
-    } else if size < MB {
-        let kb = size as f64 / KB as f64;
-        if kb < 10.0 {
-            return format!("{:.1}K", kb);
-        } else {
-            return format!("{:>3}K", (size / KB));
-        }
-    } else if size < GB {
-        let mb = size as f64 / MB as f64;
-        if mb < 10.0 {
-            return format!("{:.1}M", mb);
-        } else {
-            return format!("{:>3}M", (size / MB));
-        }
-    } else if size < TB {
-        let gb = size as f64 / GB as f64;
-        if gb < 10.0 {
-            return format!("{:.1}G", gb);
-        } else {
-            return format!("{:>3}G", (size / GB));
-        }
-    } else {
-        let tb = size as f64 / TB as f64;
-        if tb < 10.0 {
-            return format!("{:.1}T", tb);
-        } else {
-            return format!("{:>3}T", (size / TB));
-        }
-    }
-}
-
-fn format_uptime(seconds: u64) -> String {
-    // Format uptime as "3d 15h" or "15h 44m" or "44m 30s"
-    let days = seconds / 86400;
-    let hours = (seconds % 86400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-
-    if days > 0 {
-        format!("{}d {}h", days, hours)
-    } else if hours > 0 {
-        format!("{}h {}m", hours, minutes)
-    } else {
-        format!("{}m", minutes)
-    }
-}
-
-fn format_transfer_rate(bytes_per_sec: f64) -> String {
-    // Format transfer rate as human-readable (B/s, KB/s, MB/s, GB/s)
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-
-    if bytes_per_sec < KB {
-        format!("{:.0}B/s", bytes_per_sec)
-    } else if bytes_per_sec < MB {
-        format!("{:.1}K/s", bytes_per_sec / KB)
-    } else if bytes_per_sec < GB {
-        format!("{:.1}M/s", bytes_per_sec / MB)
-    } else {
-        format!("{:.2}G/s", bytes_per_sec / GB)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DisplayMode {
+pub enum DisplayMode {
     Off,              // No timestamp or size
     TimestampOnly,    // Show timestamp only
     TimestampAndSize, // Show both size and timestamp
@@ -232,7 +115,7 @@ impl DisplayMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SortMode {
+pub enum SortMode {
     VisualIndicator, // Sort by sync state icon (directories first, then by state priority)
     Alphabetical,    // Sort alphabetically
     LastModified,    // Sort by last modified time (if available)
@@ -249,7 +132,7 @@ impl SortMode {
         }
     }
 
-    fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             SortMode::VisualIndicator => "Icon",
             SortMode::Alphabetical => "A-Z",
@@ -260,36 +143,35 @@ impl SortMode {
 }
 
 #[derive(Clone)]
-struct BreadcrumbLevel {
-    folder_id: String,
-    folder_label: String,
-    folder_path: String,  // Cache the folder's container path
-    prefix: Option<String>,
-    items: Vec<BrowseItem>,
-    state: ListState,
-    translated_base_path: String,  // Cached translated base path for this level
-    file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
+pub struct BreadcrumbLevel {
+    pub folder_id: String,
+    pub folder_label: String,
+    pub folder_path: String,  // Cache the folder's container path
+    pub prefix: Option<String>,
+    pub items: Vec<BrowseItem>,
+    pub state: ListState,
+    pub translated_base_path: String,  // Cached translated base path for this level
+    pub file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
 }
 
-struct App {
+pub struct App {
     client: SyncthingClient,
     cache: CacheDb,
-    folders: Vec<Folder>,
-    folders_state: ListState,
-    folder_statuses: HashMap<String, FolderStatus>,
-    statuses_loaded: bool,
+    pub folders: Vec<Folder>,
+    pub folders_state: ListState,
+    pub folder_statuses: HashMap<String, FolderStatus>,
+    pub statuses_loaded: bool,
     last_status_update: Instant,
     path_map: HashMap<String, String>,
-    breadcrumb_trail: Vec<BreadcrumbLevel>,
-    focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
-    should_quit: bool,
-    display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
-    vim_mode: bool, // Enable vim keybindings
-    bug_mode: bool, // Enable targeted bug debugging logs
+    pub breadcrumb_trail: Vec<BreadcrumbLevel>,
+    pub focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
+    pub should_quit: bool,
+    pub display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
+    pub vim_mode: bool, // Enable vim keybindings
     last_key_was_g: bool, // Track 'g' key for 'gg' command
     last_user_action: Instant, // Track last user interaction for idle detection
-    sort_mode: SortMode,     // Current sort mode (session-wide)
-    sort_reverse: bool,      // Whether to reverse sort order (session-wide)
+    pub sort_mode: SortMode,     // Current sort mode (session-wide)
+    pub sort_reverse: bool,      // Whether to reverse sort order (session-wide)
     // Track in-flight operations to prevent duplicate fetches
     loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
     loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
@@ -298,12 +180,12 @@ struct App {
     last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
     last_known_receive_only_counts: HashMap<String, u64>, // Track receiveOnlyTotalItems to detect local-only file changes
     // Track last update info per folder (for display)
-    last_folder_updates: HashMap<String, (std::time::SystemTime, String)>, // folder_id -> (timestamp, last_changed_file)
+    pub last_folder_updates: HashMap<String, (std::time::SystemTime, String)>, // folder_id -> (timestamp, last_changed_file)
     // Confirmation prompt state
-    confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
-    confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
+    pub confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
+    pub confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
-    pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
+    pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
     // Track manually set states to prevent stale file_info updates from causing flashes
     manually_set_states: HashMap<String, Instant>, // "folder_id:path" -> timestamp when manually set
     // API service channels
@@ -313,18 +195,18 @@ struct App {
     invalidation_rx: tokio::sync::mpsc::UnboundedReceiver<event_listener::CacheInvalidation>,
     event_id_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
     // Performance metrics
-    last_load_time_ms: Option<u64>,  // Time to load current directory (milliseconds)
-    cache_hit: Option<bool>,          // Whether last load was a cache hit
+    pub last_load_time_ms: Option<u64>,  // Time to load current directory (milliseconds)
+    pub cache_hit: Option<bool>,          // Whether last load was a cache hit
     // Device/System status
-    system_status: Option<SystemStatus>,  // Device name, uptime, etc.
+    pub system_status: Option<SystemStatus>,  // Device name, uptime, etc.
     connection_stats: Option<ConnectionStats>,  // Global transfer stats
     last_connection_stats: Option<(ConnectionStats, Instant)>,  // Previous stats + timestamp for rate calc
-    device_name: Option<String>,      // Cached device name
+    pub device_name: Option<String>,      // Cached device name
     last_system_status_update: Instant,  // Track when we last fetched system status
     last_connection_stats_fetch: Instant,  // Track when we last fetched connection stats
-    last_transfer_rates: Option<(f64, f64)>,  // Cached transfer rates (download, upload) in bytes/sec
+    pub last_transfer_rates: Option<(f64, f64)>,  // Cached transfer rates (download, upload) in bytes/sec
     // Icon rendering
-    icon_renderer: IconRenderer,      // Centralized icon renderer
+    pub icon_renderer: IconRenderer,      // Centralized icon renderer
 }
 
 impl App {
@@ -344,7 +226,7 @@ impl App {
         container_path
     }
 
-    fn get_local_state_summary(&self) -> (u64, u64, u64) {
+    pub fn get_local_state_summary(&self) -> (u64, u64, u64) {
         // Calculate aggregate local state across all folders: (files, directories, bytes)
         let mut total_files = 0u64;
         let mut total_dirs = 0u64;
@@ -458,7 +340,6 @@ impl App {
             should_quit: false,
             display_mode: DisplayMode::TimestampAndSize, // Start with most info
             vim_mode: config.vim_mode,
-            bug_mode: false, // Will be set from CLI args
             last_key_was_g: false,
             last_user_action: Instant::now(),
             sort_mode: SortMode::Alphabetical,
@@ -2773,837 +2654,8 @@ async fn run_app<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     loop {
         terminal.draw(|f| {
-            let size = f.size();
+            ui::render(f, app);
 
-            // Create main layout: content area + status bar at bottom
-            let main_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(3),      // Content area
-                    Constraint::Length(3),   // Status bar (3 lines: top border, text, bottom border)
-                ])
-                .split(size);
-
-            let content_area = main_chunks[0];
-            let status_area = main_chunks[1];
-
-            // Calculate how many panes we need (folders + breadcrumb levels)
-            let num_panes = 1 + app.breadcrumb_trail.len();
-
-            // Determine visible panes based on terminal width
-            let min_pane_width = 20;
-            let max_visible_panes = (content_area.width / min_pane_width).max(2) as usize;
-
-            // Calculate which panes to show (prioritize right side)
-            let start_pane = if num_panes > max_visible_panes {
-                num_panes - max_visible_panes
-            } else {
-                0
-            };
-
-            let visible_panes = num_panes.min(max_visible_panes);
-
-            // Determine if we have breadcrumb trails to show legend for
-            let has_breadcrumbs = !app.breadcrumb_trail.is_empty();
-            let folders_visible = start_pane == 0;
-
-            // Create horizontal split for all panes
-            let constraints: Vec<Constraint> = (0..visible_panes)
-                .map(|_| Constraint::Ratio(1, visible_panes as u32))
-                .collect();
-
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(constraints)
-                .split(content_area);
-
-            // Split breadcrumb areas vertically if needed for legend
-            let (breadcrumb_chunks, legend_area) = if has_breadcrumbs && folders_visible && chunks.len() > 1 {
-                // Split all chunks except the first (folders) to make room for legend
-                let breadcrumb_area = ratatui::layout::Rect {
-                    x: chunks[1].x,
-                    y: chunks[1].y,
-                    width: content_area.width - chunks[0].width,
-                    height: content_area.height,
-                };
-
-                let split = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(3),      // Breadcrumb panes area
-                        Constraint::Length(3),   // Legend area (3 lines)
-                    ])
-                    .split(breadcrumb_area);
-
-                // Create new chunks for breadcrumb panels
-                let breadcrumb_constraints: Vec<Constraint> = (0..(visible_panes - 1))
-                    .map(|_| Constraint::Ratio(1, (visible_panes - 1) as u32))
-                    .collect();
-
-                let bc = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints(breadcrumb_constraints)
-                    .split(split[0]);
-
-                (Some(bc), Some(split[1]))
-            } else if has_breadcrumbs && !folders_visible {
-                // No folders visible - split entire area
-                let split = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(3),      // Panes area
-                        Constraint::Length(3),   // Legend area (3 lines)
-                    ])
-                    .split(content_area);
-
-                let breadcrumb_constraints: Vec<Constraint> = (0..visible_panes)
-                    .map(|_| Constraint::Ratio(1, visible_panes as u32))
-                    .collect();
-
-                let bc = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints(breadcrumb_constraints)
-                    .split(split[0]);
-
-                (Some(bc), Some(split[1]))
-            } else {
-                (None, None)
-            };
-
-            let mut chunk_idx = 0;
-
-            // Render folders pane if visible
-            if start_pane == 0 {
-                // Split folders pane into folders list (top) + device status bar (bottom)
-                let folders_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(3),      // Folders list content
-                        Constraint::Length(3),   // Device status bar (3 lines: top border, text, bottom border)
-                    ])
-                    .split(chunks[0]);
-
-                // Render Device Status Bar
-                let device_status_line = if let Some(ref sys_status) = app.system_status {
-                    let uptime_str = format_uptime(sys_status.uptime);
-
-                    // Calculate local state summary
-                    let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
-
-                    let mut spans = vec![
-                        Span::raw(app.device_name.as_deref().unwrap_or("Unknown")),
-                        Span::raw(" | "),
-                        Span::styled("Up:", Style::default().fg(Color::Yellow)),
-                        Span::raw(format!(" {}", uptime_str)),
-                    ];
-
-                    // Add local state (use trimmed size to avoid padding)
-                    let size_str = format_human_size(total_bytes).trim().to_string();
-                    spans.push(Span::raw(" | "));
-                    spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
-                    spans.push(Span::raw(format!(" {} files, {} dirs, {}", total_files, total_dirs, size_str)));
-
-                    // Add rates if available (display pre-calculated rates)
-                    if let Some((in_rate, out_rate)) = app.last_transfer_rates {
-                        spans.push(Span::raw(" | "));
-                        spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
-                        spans.push(Span::raw(format_transfer_rate(in_rate)));
-                        spans.push(Span::raw(" "));
-                        spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
-                        spans.push(Span::raw(format_transfer_rate(out_rate)));
-                    }
-
-                    Line::from(spans)
-                } else {
-                    Line::from(Span::raw("Device: Loading..."))
-                };
-
-                let device_status_widget = Paragraph::new(device_status_line)
-                    .block(Block::default().borders(Borders::ALL).title("System"))
-                    .style(Style::default().fg(Color::Gray));
-
-                let folders_items: Vec<ListItem> = app
-                    .folders
-                    .iter()
-                    .map(|folder| {
-                        let display_name = folder.label.as_ref().unwrap_or(&folder.id);
-
-                        // Determine folder state
-                        let folder_state = if !app.statuses_loaded {
-                            FolderState::Loading
-                        } else if folder.paused {
-                            FolderState::Paused
-                        } else if let Some(status) = app.folder_statuses.get(&folder.id) {
-                            if status.state == "" || status.state == "paused" {
-                                FolderState::Paused
-                            } else if status.state == "syncing" {
-                                FolderState::Syncing
-                            } else if status.need_total_items > 0 || status.receive_only_total_items > 0 {
-                                FolderState::OutOfSync
-                            } else if status.state == "idle" {
-                                FolderState::Synced
-                            } else if status.state.starts_with("sync") {
-                                FolderState::Syncing
-                            } else if status.state == "scanning" {
-                                FolderState::Scanning
-                            } else {
-                                FolderState::Unknown
-                            }
-                        } else {
-                            FolderState::Error
-                        };
-
-                        // Build the folder display with optional last update info
-                        let mut icon_spans = app.icon_renderer.folder_with_status(folder_state);
-                        icon_spans.push(Span::raw(display_name));
-                        let folder_line = Line::from(icon_spans);
-
-                        // Add last update info if available
-                        if let Some((timestamp, last_file)) = app.last_folder_updates.get(&folder.id) {
-                            // Calculate time since last update
-                            let elapsed = timestamp.elapsed().unwrap_or(std::time::Duration::from_secs(0));
-                            let time_str = if elapsed.as_secs() < 60 {
-                                format!("{}s ago", elapsed.as_secs())
-                            } else if elapsed.as_secs() < 3600 {
-                                format!("{}m ago", elapsed.as_secs() / 60)
-                            } else if elapsed.as_secs() < 86400 {
-                                format!("{}h ago", elapsed.as_secs() / 3600)
-                            } else {
-                                format!("{}d ago", elapsed.as_secs() / 86400)
-                            };
-
-                            // Truncate filename if too long
-                            let max_file_len = 40;
-                            let file_display = if last_file.len() > max_file_len {
-                                format!("...{}", &last_file[last_file.len() - max_file_len..])
-                            } else {
-                                last_file.clone()
-                            };
-
-                            // Multi-line item with update info
-                            ListItem::new(vec![
-                                folder_line,
-                                Line::from(Span::styled(
-                                    format!("  ↳ {} - {}", time_str, file_display),
-                                    Style::default().fg(Color::Rgb(150, 150, 150)) // Medium gray visible on both dark gray and black backgrounds
-                                ))
-                            ])
-                        } else {
-                            // Single-line item without update info
-                            ListItem::new(folder_line)
-                        }
-                    })
-                    .collect();
-
-                let is_focused = app.focus_level == 0;
-                let folders_list = List::new(folders_items)
-                    .block(
-                        Block::default()
-                            .title("Folders")
-                            .borders(Borders::ALL)
-                            .border_style(if is_focused {
-                                Style::default().fg(Color::Cyan)
-                            } else {
-                                Style::default().fg(Color::Gray)
-                            }),
-                    )
-                    .highlight_style(
-                        Style::default()
-                            .bg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .highlight_symbol("> ");
-
-                f.render_stateful_widget(folders_list, folders_chunks[0], &mut app.folders_state);
-
-                // Render Device Status Bar at bottom
-                f.render_widget(device_status_widget, folders_chunks[1]);
-
-                chunk_idx += 1;
-            }
-
-            // Render breadcrumb levels
-            let mut breadcrumb_idx = 0;
-            for (idx, level) in app.breadcrumb_trail.iter_mut().enumerate() {
-                if idx + 1 < start_pane {
-                    continue; // Skip panes that are off-screen to the left
-                }
-
-                // Get panel width for truncation
-                let panel_width = if let Some(ref bc) = breadcrumb_chunks {
-                    if breadcrumb_idx < bc.len() {
-                        bc[breadcrumb_idx].width
-                    } else {
-                        60 // fallback
-                    }
-                } else if chunk_idx < chunks.len() {
-                    chunks[chunk_idx].width
-                } else {
-                    60 // fallback
-                };
-
-                let items: Vec<ListItem> = level
-                    .items
-                    .iter()
-                    .map(|item| {
-                        // Use cached state directly (directories show their own metadata state, not aggregate)
-                        let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
-
-                        // Build icon as spans (for coloring)
-                        let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
-                        let icon_spans: Vec<Span> = if sync_state == SyncState::Ignored {
-                            // Special handling for ignored items - check if exists on disk
-                            let relative_path = if let Some(ref prefix) = level.prefix {
-                                format!("{}/{}", prefix, item.name)
-                            } else {
-                                item.name.clone()
-                            };
-                            let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
-                            let exists = std::path::Path::new(&host_path).exists();
-                            app.icon_renderer.ignored_item(exists)
-                        } else {
-                            app.icon_renderer.item_with_sync_state(is_directory, sync_state)
-                        };
-
-                        // Build display string with optional timestamp and/or size
-                        let display_str = if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
-                            let full_timestamp = format_timestamp(&item.mod_time);
-                            // For width calculation, create a temporary string from icons
-                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
-                            let icon_and_name = format!("{}{}", icon_string, item.name);
-                            let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
-
-                            // Calculate available space: panel_width - borders(2) - highlight(2) - padding(2)
-                            let available_width = panel_width.saturating_sub(6) as usize;
-                            let spacing = 2; // Minimum spacing between name and info
-
-                            // Use unicode width for proper emoji handling
-                            let name_width = icon_and_name.width();
-
-                            // Determine what to show based on display mode (omit size for directories)
-                            let info_string = match app.display_mode {
-                                DisplayMode::TimestampOnly => full_timestamp.clone(),
-                                DisplayMode::TimestampAndSize => {
-                                    if is_directory {
-                                        // Directories: show only timestamp
-                                        full_timestamp.clone()
-                                    } else {
-                                        // Files: show size + timestamp
-                                        let human_size = format_human_size(item.size);
-                                        format!("{} {}", human_size, full_timestamp)
-                                    }
-                                },
-                                DisplayMode::Off => String::new(),
-                            };
-
-                            let info_width = info_string.width();
-
-                            // If everything fits, show it all
-                            if name_width + spacing + info_width <= available_width {
-                                let padding = available_width - name_width - info_width;
-                                format!("{}{}{}", icon_and_name, " ".repeat(padding), info_string)
-                            } else {
-                                // Truncate info to make room for name
-                                let space_left = available_width.saturating_sub(name_width + spacing);
-
-                                if space_left >= 5 {
-                                    // Show truncated info (prioritize time over date)
-                                    let truncated_info = if app.display_mode == DisplayMode::TimestampAndSize && !is_directory {
-                                        // Files with size: Try "1.2K HH:MM" (10 chars) or just "HH:MM" (5 chars)
-                                        if space_left >= 10 && full_timestamp.len() >= 16 {
-                                            // Show size + time only
-                                            let human_size = format_human_size(item.size);
-                                            format!("{} {}", human_size, &full_timestamp[11..16])
-                                        } else if space_left >= 5 && full_timestamp.len() >= 16 {
-                                            // Show just time
-                                            full_timestamp[11..16].to_string()
-                                        } else {
-                                            String::new()
-                                        }
-                                    } else {
-                                        // TimestampOnly OR directory: progressively truncate timestamp
-                                        if space_left >= 16 {
-                                            full_timestamp
-                                        } else if space_left >= 10 && full_timestamp.len() >= 16 {
-                                            // Show "MM-DD HH:MM" (10 chars)
-                                            full_timestamp[5..16].to_string()
-                                        } else if space_left >= 5 && full_timestamp.len() >= 16 {
-                                            // Show just time "HH:MM" (5 chars)
-                                            full_timestamp[11..16].to_string()
-                                        } else {
-                                            String::new()
-                                        }
-                                    };
-
-                                    if !truncated_info.is_empty() {
-                                        let info_width = truncated_info.width();
-                                        let padding = available_width - name_width - info_width;
-                                        format!("{}{}{}", icon_and_name, " ".repeat(padding), truncated_info)
-                                    } else {
-                                        icon_and_name
-                                    }
-                                } else {
-                                    // Not enough room for info, just show name
-                                    icon_and_name
-                                }
-                            }
-                        } else {
-                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
-                            format!("{}{}", icon_string, item.name)
-                        };
-
-                        // Create ListItem with styled info (timestamp and/or size)
-                        if app.display_mode != DisplayMode::Off && !item.mod_time.is_empty() {
-                            let full_timestamp = format_timestamp(&item.mod_time);
-                            let icon_string: String = icon_spans.iter().map(|s| s.content.as_ref()).collect();
-                            let icon_and_name = format!("{}{}", icon_string, item.name);
-                            let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
-
-                            // Calculate available space
-                            let available_width = panel_width.saturating_sub(6) as usize;
-                            let spacing = 2;
-                            let name_width = icon_and_name.width();
-
-                            // Determine what to show based on display mode (omit size for directories)
-                            let info_string = match app.display_mode {
-                                DisplayMode::TimestampOnly => full_timestamp.clone(),
-                                DisplayMode::TimestampAndSize => {
-                                    if is_directory {
-                                        full_timestamp.clone()
-                                    } else {
-                                        let human_size = format_human_size(item.size);
-                                        format!("{} {}", human_size, full_timestamp)
-                                    }
-                                },
-                                DisplayMode::Off => String::new(),
-                            };
-
-                            let info_width = info_string.width();
-
-                            if name_width + spacing + info_width <= available_width {
-                                // Everything fits - use styled spans
-                                let padding = available_width - name_width - info_width;
-                                let mut line_spans = icon_spans.clone();
-                                line_spans.push(Span::raw(&item.name));
-                                line_spans.push(Span::raw(" ".repeat(padding)));
-                                line_spans.push(Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))));
-                                ListItem::new(Line::from(line_spans))
-                            } else {
-                                // Truncated info - calculate which one
-                                let space_left = available_width.saturating_sub(name_width + spacing);
-                                let truncated_info = if app.display_mode == DisplayMode::TimestampAndSize && !is_directory {
-                                    // Files with size: Try "1.2K HH:MM" (10 chars) or just "HH:MM" (5 chars)
-                                    if space_left >= 10 && full_timestamp.len() >= 16 {
-                                        let human_size = format_human_size(item.size);
-                                        format!("{} {}", human_size, &full_timestamp[11..16])
-                                    } else if space_left >= 5 && full_timestamp.len() >= 16 {
-                                        full_timestamp[11..16].to_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    // TimestampOnly OR directory: progressively truncate timestamp
-                                    if space_left >= 16 {
-                                        full_timestamp.clone()
-                                    } else if space_left >= 10 && full_timestamp.len() >= 16 {
-                                        full_timestamp[5..16].to_string()
-                                    } else if space_left >= 5 && full_timestamp.len() >= 16 {
-                                        full_timestamp[11..16].to_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                };
-
-                                if !truncated_info.is_empty() {
-                                    let info_width = truncated_info.width();
-                                    let padding = available_width - name_width - info_width;
-                                    let mut line_spans = icon_spans.clone();
-                                    line_spans.push(Span::raw(&item.name));
-                                    line_spans.push(Span::raw(" ".repeat(padding)));
-                                    line_spans.push(Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))));
-                                    ListItem::new(Line::from(line_spans))
-                                } else {
-                                    let mut line_spans = icon_spans.clone();
-                                    line_spans.push(Span::raw(&item.name));
-                                    ListItem::new(Line::from(line_spans))
-                                }
-                            }
-                        } else {
-                            let mut line_spans = icon_spans.clone();
-                            line_spans.push(Span::raw(&item.name));
-                            ListItem::new(Line::from(line_spans))
-                        }
-                    })
-                    .collect();
-
-                let title = if let Some(ref prefix) = level.prefix {
-                    // Show last part of path
-                    let parts: Vec<&str> = prefix.trim_end_matches('/').split('/').collect();
-                    parts.last().map(|s| s.to_string()).unwrap_or_else(|| level.folder_label.clone())
-                } else {
-                    level.folder_label.clone()
-                };
-
-                let is_focused = app.focus_level == idx + 1;
-                let list = List::new(items)
-                    .block(
-                        Block::default()
-                            .title(title)
-                            .borders(Borders::ALL)
-                            .border_style(if is_focused {
-                                Style::default().fg(Color::Cyan)
-                            } else {
-                                Style::default().fg(Color::Gray)
-                            }),
-                    )
-                    .highlight_style(
-                        Style::default()
-                            .bg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .highlight_symbol("> ");
-
-                // Use breadcrumb_chunks if available, otherwise use regular chunks
-                if let Some(ref bc) = breadcrumb_chunks {
-                    if breadcrumb_idx < bc.len() {
-                        f.render_stateful_widget(list, bc[breadcrumb_idx], &mut level.state);
-                        breadcrumb_idx += 1;
-                    }
-                } else if chunk_idx < chunks.len() {
-                    f.render_stateful_widget(list, chunks[chunk_idx], &mut level.state);
-                    chunk_idx += 1;
-                }
-            }
-
-            // Render hotkey legend spanning across breadcrumb panels
-            if let Some(legend_rect) = legend_area {
-                // Build a single line with all hotkeys that will wrap automatically
-                let mut hotkey_spans = vec![];
-
-                // Navigation keys
-                if app.vim_mode {
-                    hotkey_spans.extend(vec![
-                        Span::styled("hjkl", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Nav  "),
-                        Span::styled("gg/G", Style::default().fg(Color::Yellow)),
-                        Span::raw(":First/Last  "),
-                        Span::styled("^d/^u", Style::default().fg(Color::Yellow)),
-                        Span::raw(":½Page  "),
-                        Span::styled("^f/^b", Style::default().fg(Color::Yellow)),
-                        Span::raw(":FullPage  "),
-                    ]);
-                } else {
-                    hotkey_spans.extend(vec![
-                        Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Nav  "),
-                        Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Open  "),
-                        Span::styled("←", Style::default().fg(Color::Yellow)),
-                        Span::raw(":Back  "),
-                    ]);
-                }
-
-                // Common actions
-                hotkey_spans.extend(vec![
-                    Span::styled("s", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Sort  "),
-                    Span::styled("S", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Reverse  "),
-                    Span::styled("t", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Info  "),
-                    Span::styled("i", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Ignore  "),
-                    Span::styled("I", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Ign+Del  "),
-                    Span::styled("d", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Delete  "),
-                    Span::styled("r", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Rescan  "),
-                    Span::styled("R", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Restore  "),
-                    Span::styled("q", Style::default().fg(Color::Yellow)),
-                    Span::raw(":Quit"),
-                ]);
-
-                let hotkey_line = Line::from(hotkey_spans);
-
-                let legend = Paragraph::new(vec![hotkey_line])
-                    .block(Block::default().borders(Borders::ALL).title("Hotkeys"))
-                    .style(Style::default().fg(Color::Gray))
-                    .wrap(ratatui::widgets::Wrap { trim: false });
-
-                f.render_widget(legend, legend_rect);
-            }
-
-            // Render status bar at the bottom with columns
-            let status_line = if app.focus_level == 0 {
-                // Show selected folder status
-                if let Some(selected) = app.folders_state.selected() {
-                    if let Some(folder) = app.folders.get(selected) {
-                        let folder_name = folder.label.as_ref().unwrap_or(&folder.id);
-                        if folder.paused {
-                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                                format!("Folder: {}", folder_name),
-                                "Paused",
-                                "-",
-                                "-",
-                                "-"
-                            )
-                        } else if let Some(status) = app.folder_statuses.get(&folder.id) {
-                            let state_display = if status.state.is_empty() { "paused" } else { &status.state };
-                            let in_sync = status.global_total_items.saturating_sub(status.need_total_items);
-                            let items_display = format!("{}/{}", in_sync, status.global_total_items);
-
-                            // Build status message considering both remote needs and local additions
-                            let need_display = if status.receive_only_total_items > 0 {
-                                // Has local additions
-                                if status.need_total_items > 0 {
-                                    // Both local additions and remote needs
-                                    format!("↓{} ↑{} ({})",
-                                        status.need_total_items,
-                                        status.receive_only_total_items,
-                                        format_bytes(status.need_bytes + status.receive_only_changed_bytes)
-                                    )
-                                } else {
-                                    // Only local additions
-                                    format!("Local: {} items ({})",
-                                        status.receive_only_total_items,
-                                        format_bytes(status.receive_only_changed_bytes)
-                                    )
-                                }
-                            } else if status.need_total_items > 0 {
-                                // Only remote needs
-                                format!("{} items ({}) ", status.need_total_items, format_bytes(status.need_bytes))
-                            } else {
-                                "Up to date ".to_string()
-                            };
-
-                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                                format!("Folder: {}", folder_name),
-                                state_display,
-                                format_bytes(status.global_bytes),
-                                items_display,
-                                need_display
-                            )
-                        } else {
-                            format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                                format!("Folder: {}", folder_name),
-                                "Loading...",
-                                "-",
-                                "-",
-                                "-"
-                            )
-                        }
-                    } else {
-                        "No folder selected".to_string()
-                    }
-                } else {
-                    "No folder selected".to_string()
-                }
-            } else {
-                // Show current directory performance metrics
-                let level_idx = app.focus_level - 1;
-                if let Some(level) = app.breadcrumb_trail.get(level_idx) {
-                    let folder_name = &level.folder_label;
-                    let item_count = level.items.len();
-
-                    // Build performance metrics string
-                    let mut metrics = Vec::new();
-                    metrics.push(format!("Folder: {}", folder_name));
-                    metrics.push(format!("{} items", item_count));
-
-                    // Show sort mode
-                    let sort_display = format!("Sort: {}{}",
-                        app.sort_mode.as_str(),
-                        if app.sort_reverse { "↓" } else { "↑" }
-                    );
-                    metrics.push(sort_display);
-
-                    if let Some(load_time) = app.last_load_time_ms {
-                        metrics.push(format!("Load: {}ms", load_time));
-                    }
-
-                    if let Some(cache_hit) = app.cache_hit {
-                        metrics.push(format!("Cache: {}", if cache_hit { "HIT" } else { "MISS" }));
-                    }
-
-                    // Show selected item info if available
-                    if let Some(selected) = level.state.selected() {
-                        if let Some(item) = level.items.get(selected) {
-                            let item_type = match item.item_type.as_str() {
-                                "FILE_INFO_TYPE_DIRECTORY" => "Dir",
-                                "FILE_INFO_TYPE_FILE" => "File",
-                                _ => "Item",
-                            };
-                            metrics.push(format!("Selected: {} ({})", item.name, item_type));
-                        }
-                    }
-
-                    metrics.join(" | ")
-                } else {
-                    "".to_string()
-                }
-            };
-
-            // Parse status_line and color the labels (before colons)
-            let status_spans: Vec<Span> = if status_line.is_empty() {
-                vec![Span::raw("")]
-            } else {
-                let mut spans = vec![];
-                // Check for both separators: " │ " (focus_level 0) and " | " (focus_level > 0)
-                let parts: Vec<&str> = if status_line.contains(" │ ") {
-                    status_line.split(" │ ").collect()
-                } else {
-                    status_line.split(" | ").collect()
-                };
-
-                for (idx, part) in parts.iter().enumerate() {
-                    if idx > 0 {
-                        // Use the appropriate separator
-                        if status_line.contains(" │ ") {
-                            spans.push(Span::raw(" │ "));
-                        } else {
-                            spans.push(Span::raw(" | "));
-                        }
-                    }
-                    // Split on first colon to separate label from value
-                    if let Some(colon_pos) = part.find(':') {
-                        let label = &part[..=colon_pos];
-                        let value = &part[colon_pos + 1..];
-                        spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
-                        spans.push(Span::raw(value));
-                    } else {
-                        spans.push(Span::raw(*part));
-                    }
-                }
-                spans
-            };
-
-            let status_bar = Paragraph::new(Line::from(status_spans))
-                .block(Block::default().borders(Borders::ALL).title("Status"))
-                .style(Style::default().fg(Color::Gray));
-
-            f.render_widget(status_bar, status_area);
-
-            // Render confirmation prompt if active
-            if let Some((_folder_id, changed_files)) = &app.confirm_revert {
-                let file_list = changed_files.iter()
-                    .take(5)
-                    .map(|f| format!("  - {}", f))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                let more_text = if changed_files.len() > 5 {
-                    format!("\n  ... and {} more", changed_files.len() - 5)
-                } else {
-                    String::new()
-                };
-
-                let prompt_text = format!(
-                    "Revert folder to restore deleted files?\n\n\
-                    WARNING: This will remove {} local change(s):\n{}{}\n\n\
-                    Continue? (y/n)",
-                    changed_files.len(),
-                    file_list,
-                    more_text
-                );
-
-                // Center the prompt - adjust height based on number of files shown
-                let area = f.size();
-                let prompt_width = 60;
-                let base_height = 10;
-                let file_lines = changed_files.len().min(5);
-                let prompt_height = base_height + file_lines as u16;
-                let prompt_area = ratatui::layout::Rect {
-                    x: (area.width.saturating_sub(prompt_width)) / 2,
-                    y: (area.height.saturating_sub(prompt_height)) / 2,
-                    width: prompt_width,
-                    height: prompt_height,
-                };
-
-                let prompt = Paragraph::new(prompt_text)
-                    .block(Block::default()
-                        .borders(Borders::ALL)
-                        .title("Confirm Revert")
-                        .border_style(Style::default().fg(Color::Yellow)))
-                    .style(Style::default().fg(Color::White).bg(Color::Black))
-                    .wrap(ratatui::widgets::Wrap { trim: false });
-
-                f.render_widget(ratatui::widgets::Clear, prompt_area);
-                f.render_widget(prompt, prompt_area);
-            }
-
-            // Render delete confirmation prompt if active
-            if let Some((_host_path, display_name, is_dir)) = &app.confirm_delete {
-                let item_type = if *is_dir { "directory" } else { "file" };
-
-                let prompt_text = format!(
-                    "Delete {} from disk?\n\n\
-                    {}: {}\n\n\
-                    WARNING: This action cannot be undone!\n\n\
-                    Continue? (y/n)",
-                    item_type,
-                    if *is_dir { "Directory" } else { "File" },
-                    display_name
-                );
-
-                // Center the prompt
-                let area = f.size();
-                let prompt_width = 50;
-                let prompt_height = 11;
-                let prompt_area = ratatui::layout::Rect {
-                    x: (area.width.saturating_sub(prompt_width)) / 2,
-                    y: (area.height.saturating_sub(prompt_height)) / 2,
-                    width: prompt_width,
-                    height: prompt_height,
-                };
-
-                let prompt = Paragraph::new(prompt_text)
-                    .block(Block::default()
-                        .borders(Borders::ALL)
-                        .title("Confirm Delete")
-                        .border_style(Style::default().fg(Color::Red)))
-                    .style(Style::default().fg(Color::White).bg(Color::Black))
-                    .wrap(ratatui::widgets::Wrap { trim: false });
-
-                f.render_widget(ratatui::widgets::Clear, prompt_area);
-                f.render_widget(prompt, prompt_area);
-            }
-
-            // Render pattern selection menu if active
-            if let Some((_folder_id, _item_name, patterns, state)) = &mut app.pattern_selection {
-                let menu_items: Vec<ListItem> = patterns
-                    .iter()
-                    .map(|pattern| {
-                        ListItem::new(Span::raw(pattern.clone()))
-                            .style(Style::default().fg(Color::White))
-                    })
-                    .collect();
-
-                // Center the menu
-                let area = f.size();
-                let menu_width = 60;
-                let menu_height = (patterns.len() as u16 + 6).min(20); // +6 for borders and instructions
-                let menu_area = ratatui::layout::Rect {
-                    x: (area.width.saturating_sub(menu_width)) / 2,
-                    y: (area.height.saturating_sub(menu_height)) / 2,
-                    width: menu_width,
-                    height: menu_height,
-                };
-
-                let menu = List::new(menu_items)
-                    .block(Block::default()
-                        .borders(Borders::ALL)
-                        .title("Select Pattern to Remove (↑↓ to navigate, Enter to remove, Esc to cancel)")
-                        .border_style(Style::default().fg(Color::Yellow)))
-                    .highlight_style(Style::default()
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD))
-                    .highlight_symbol("► ");
-
-                f.render_widget(ratatui::widgets::Clear, menu_area);
-                f.render_stateful_widget(menu, menu_area, state);
-            }
         })?;
 
         if app.should_quit {
