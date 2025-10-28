@@ -166,7 +166,10 @@ pub struct ImageMetadata {
 
 pub enum ImagePreviewState {
     Loading,
-    Ready(Box<dyn ratatui_image::protocol::StatefulProtocol>),
+    Ready {
+        protocol: Box<dyn ratatui_image::protocol::StatefulProtocol>,
+        metadata: ImageMetadata,
+    },
     Failed { metadata: ImageMetadata },
 }
 
@@ -261,6 +264,9 @@ pub struct App {
     // Image preview protocol
     pub image_picker: Option<ratatui_image::picker::Picker>,  // Protocol picker for image rendering
     image_dpi_scale: f32,  // DPI scale factor for image preview
+    // Image update channel for non-blocking image loading
+    image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,  // Send (file_path, state) when image loads
+    image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>,  // Receive image updates
 }
 
 impl App {
@@ -363,6 +369,9 @@ impl App {
         // Create channels for event listener
         let (invalidation_tx, invalidation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (event_id_tx, event_id_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Create channel for image updates
+        let (image_update_tx, image_update_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Spawn event listener
         event_listener::spawn_event_listener(
@@ -477,6 +486,8 @@ impl App {
             icon_renderer,
             image_picker,
             image_dpi_scale: config.image_dpi_scale,
+            image_update_tx,
+            image_update_rx,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -2470,7 +2481,7 @@ impl App {
         // 1. Fetch file details from API
         let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
 
-        // 2. If image, try to load it; otherwise read as text
+        // 2. If image, spawn background loading; otherwise read as text
         let (file_content, exists_on_disk, is_binary, image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
@@ -2486,24 +2497,40 @@ impl App {
             let exists = tokio::fs::metadata(&host_path_buf).await.is_ok();
 
             if exists && self.image_picker.is_some() {
+                // Spawn background task to load image
                 let picker = self.image_picker.as_ref().unwrap().clone();
                 let max_size = 20; // TODO: Get from config
                 let dpi_scale = self.image_dpi_scale;
+                let image_tx = self.image_update_tx.clone();
+                let image_file_path = file_path.clone();
 
-                match Self::load_image_preview(host_path_buf, picker, max_size, dpi_scale).await {
-                    Ok(protocol) => (
-                        Ok("[Image preview - see right panel]".to_string()),
-                        true,
-                        true,
-                        Some(ImagePreviewState::Ready(protocol)),
-                    ),
-                    Err(metadata) => (
-                        Err("Image preview unavailable".to_string()),
-                        true,
-                        true,
-                        Some(ImagePreviewState::Failed { metadata }),
-                    ),
-                }
+                tokio::spawn(async move {
+                    log_debug(&format!("Background: Loading image {}", image_file_path));
+                    match Self::load_image_preview(host_path_buf, picker, max_size, dpi_scale).await {
+                        Ok((protocol, metadata)) => {
+                            log_debug(&format!("Background: Image loaded successfully {}", image_file_path));
+                            let _ = image_tx.send((
+                                image_file_path,
+                                ImagePreviewState::Ready { protocol, metadata },
+                            ));
+                        }
+                        Err(metadata) => {
+                            log_debug(&format!("Background: Image load failed {}", image_file_path));
+                            let _ = image_tx.send((
+                                image_file_path,
+                                ImagePreviewState::Failed { metadata },
+                            ));
+                        }
+                    }
+                });
+
+                // Return loading state immediately
+                (
+                    Ok("Loading image preview...".to_string()),
+                    true,
+                    true,
+                    Some(ImagePreviewState::Loading),
+                )
             } else if !exists {
                 (
                     Err("File not found on disk".to_string()),
@@ -2570,13 +2597,13 @@ impl App {
         mut picker: ratatui_image::picker::Picker,
         max_size_mb: u64,
         dpi_scale: f32,
-    ) -> Result<Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata> {
+    ) -> Result<(Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata), ImageMetadata> {
         let max_size_bytes = max_size_mb * 1024 * 1024;
 
         // Check file size
         let metadata = match tokio::fs::metadata(&host_path).await {
             Ok(m) => m,
-            Err(e) => {
+            Err(_e) => {
                 return Err(ImageMetadata {
                     dimensions: None,
                     format: None,
@@ -2658,7 +2685,14 @@ impl App {
         // Convert to protocol
         let protocol = picker.new_resize_protocol(upscaled);
 
-        Ok(protocol)
+        // Return both protocol and metadata
+        let metadata = ImageMetadata {
+            dimensions: Some(dimensions),
+            format: Some(format.to_string()),
+            file_size,
+        };
+
+        Ok((protocol, metadata))
     }
 
     async fn read_file_content_static(
@@ -3695,6 +3729,28 @@ async fn run_app<B: ratatui::backend::Backend>(
         while let Ok(event_id) = app.event_id_rx.try_recv() {
             // Persist event ID to cache periodically
             let _ = app.cache.save_last_event_id(event_id);
+        }
+
+        // Process image updates from background loading tasks (non-blocking)
+        while let Ok((file_path, image_state)) = app.image_update_rx.try_recv() {
+            // Update popup if it's still showing the same file
+            if let Some(ref mut popup_state) = app.show_file_info {
+                if popup_state.file_path == file_path {
+                    log_debug(&format!("Updating image state for {}", file_path));
+                    popup_state.image_state = Some(image_state);
+
+                    // Also update file_content to reflect loaded state
+                    match &popup_state.image_state {
+                        Some(ImagePreviewState::Ready { .. }) => {
+                            popup_state.file_content = Ok("[Image preview - see right panel]".to_string());
+                        }
+                        Some(ImagePreviewState::Failed { .. }) => {
+                            popup_state.file_content = Err("Image preview unavailable".to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         // NOTE: Removed periodic status polling - we now rely on events for cache invalidation

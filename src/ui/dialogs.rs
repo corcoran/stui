@@ -378,38 +378,106 @@ fn render_preview_column(
                     .style(Style::default().fg(Color::Yellow));
                 f.render_widget(paragraph, area);
             }
-            ImagePreviewState::Ready(_) => {
-                // Get mutable reference to protocol for rendering
-                if let Some(ImagePreviewState::Ready(ref mut protocol)) = state.image_state {
-                    // Create bordered block
+            ImagePreviewState::Ready { .. } => {
+                // Get mutable reference to protocol and metadata for rendering
+                if let Some(ImagePreviewState::Ready { ref mut protocol, ref metadata }) = state.image_state {
+                    // Create bordered block with dimensions in title
+                    let title = if let Some((w, h)) = metadata.dimensions {
+                        format!("Preview (Image | {}x{})", w, h)
+                    } else {
+                        "Preview (Image)".to_string()
+                    };
+
                     let block = Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan))
-                        .title("Preview (Image)");
+                        .title(title);
 
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image inside using StatefulImage, centered
+                    // Render image inside using StatefulImage, with smart aspect-ratio-based centering
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
-                    // Use flexible layout constraints to center the image
+                    // Calculate aspect ratios to determine optimal layout
+                    let (vertical_constraints, horizontal_constraints) = if let Some((img_w, img_h)) = metadata.dimensions {
+                        let image_aspect = img_w as f32 / img_h as f32;
+                        let area_aspect = inner_area.width as f32 / inner_area.height as f32;
+
+                        // Determine which dimension is the limiting factor
+                        // If image is wider than area (relative to their heights), limit by width
+                        // If image is taller than area (relative to their widths), limit by height
+
+                        if image_aspect > area_aspect {
+                            // Wide image: use more horizontal space, center vertically
+                            // Use 80% of width, calculate needed height based on aspect ratio
+                            let img_area_ratio = (area_aspect / image_aspect).min(1.0);
+                            let vertical_padding_ratio = ((1.0 - img_area_ratio) / 2.0).max(0.05); // At least 5% padding
+                            let vertical_image_ratio = 1.0 - (vertical_padding_ratio * 2.0);
+
+                            // Convert to ratios (multiply by 100 to get integer ratios)
+                            let padding_parts = (vertical_padding_ratio * 100.0) as u32;
+                            let image_parts = (vertical_image_ratio * 100.0) as u32;
+
+                            (
+                                vec![
+                                    Constraint::Ratio(padding_parts, 100),
+                                    Constraint::Ratio(image_parts, 100),
+                                    Constraint::Ratio(padding_parts, 100),
+                                ],
+                                vec![
+                                    Constraint::Ratio(10, 100),  // 10% left padding
+                                    Constraint::Ratio(80, 100),  // 80% image area
+                                    Constraint::Ratio(10, 100),  // 10% right padding
+                                ],
+                            )
+                        } else {
+                            // Tall image: use more vertical space, center horizontally
+                            let img_area_ratio = (image_aspect / area_aspect).min(1.0);
+                            let horizontal_padding_ratio = ((1.0 - img_area_ratio) / 2.0).max(0.05); // At least 5% padding
+                            let horizontal_image_ratio = 1.0 - (horizontal_padding_ratio * 2.0);
+
+                            // Convert to ratios
+                            let padding_parts = (horizontal_padding_ratio * 100.0) as u32;
+                            let image_parts = (horizontal_image_ratio * 100.0) as u32;
+
+                            (
+                                vec![
+                                    Constraint::Ratio(10, 100),  // 10% top padding
+                                    Constraint::Ratio(80, 100),  // 80% image area
+                                    Constraint::Ratio(10, 100),  // 10% bottom padding
+                                ],
+                                vec![
+                                    Constraint::Ratio(padding_parts, 100),
+                                    Constraint::Ratio(image_parts, 100),
+                                    Constraint::Ratio(padding_parts, 100),
+                                ],
+                            )
+                        }
+                    } else {
+                        // No dimensions available, use balanced centering (similar to old behavior)
+                        (
+                            vec![
+                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(1, 3),
+                            ],
+                            vec![
+                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(1, 3),
+                            ],
+                        )
+                    };
+
                     let vertical_layout = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Min(0),          // top padding (flex)
-                            Constraint::Percentage(100), // image area
-                            Constraint::Min(0),          // bottom padding (flex)
-                        ])
+                        .constraints(vertical_constraints)
                         .split(inner_area);
 
                     let horizontal_layout = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Min(0),          // left padding (flex)
-                            Constraint::Percentage(100), // image area
-                            Constraint::Min(0),          // right padding (flex)
-                        ])
+                        .constraints(horizontal_constraints)
                         .split(vertical_layout[1]);
 
                     let image = ratatui_image::StatefulImage::new(None);
