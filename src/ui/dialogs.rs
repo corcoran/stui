@@ -390,10 +390,30 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image inside using StatefulImage
+                    // Render image inside using StatefulImage, centered
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
+
+                    // Use flexible layout constraints to center the image
+                    let vertical_layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Min(0),          // top padding (flex)
+                            Constraint::Percentage(100), // image area
+                            Constraint::Min(0),          // bottom padding (flex)
+                        ])
+                        .split(inner_area);
+
+                    let horizontal_layout = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Min(0),          // left padding (flex)
+                            Constraint::Percentage(100), // image area
+                            Constraint::Min(0),          // right padding (flex)
+                        ])
+                        .split(vertical_layout[1]);
+
                     let image = ratatui_image::StatefulImage::new(None);
-                    f.render_stateful_widget(image, inner_area, protocol);
+                    f.render_stateful_widget(image, horizontal_layout[1], protocol);
                 }
             }
             ImagePreviewState::Failed { metadata } => {
