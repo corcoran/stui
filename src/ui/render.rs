@@ -142,7 +142,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
             let item_count = Some(level.items.len());
             let selected_item = level.state.selected().and_then(|sel| {
                 level.items.get(sel).map(|item| {
-                    (item.name.as_str(), item.item_type.as_str())
+                    let sync_state = level.file_sync_states.get(&item.name).copied();
+                    let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
+                    let exists = if is_ignored {
+                        level.ignored_exists.get(&item.name).copied()
+                    } else {
+                        None
+                    };
+                    (item.name.as_str(), item.item_type.as_str(), sync_state, exists)
                 })
             });
             (folder_label, item_count, selected_item)

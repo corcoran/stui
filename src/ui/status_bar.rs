@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashMap;
-use crate::api::{Folder, FolderStatus};
+use crate::api::{Folder, FolderStatus, SyncState};
 
 /// Format bytes into human-readable string (e.g., "1.2 KB", "5.3 MB")
 fn format_bytes(bytes: u64) -> String {
@@ -41,7 +41,7 @@ pub fn render_status_bar(
     // For breadcrumb level display
     breadcrumb_folder_label: Option<&str>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(&str, &str)>, // (name, type)
+    breadcrumb_selected_item: Option<(&str, &str, Option<SyncState>, Option<bool>)>, // (name, type, sync_state, exists)
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
@@ -139,13 +139,25 @@ pub fn render_status_bar(
         }
 
         // Show selected item info if available
-        if let Some((item_name, item_type)) = breadcrumb_selected_item {
-            let type_display = match item_type {
-                "FILE_INFO_TYPE_DIRECTORY" => "Dir",
-                "FILE_INFO_TYPE_FILE" => "File",
-                _ => "Item",
+        if let Some((item_name, item_type, sync_state, exists)) = breadcrumb_selected_item {
+            // Format name based on type: "dirname/" for directories, "filename" for files
+            let formatted_name = match item_type {
+                "FILE_INFO_TYPE_DIRECTORY" => format!("{}/", item_name),
+                _ => item_name.to_string(),
             };
-            metrics.push(format!("Selected: {} ({})", item_name, type_display));
+            metrics.push(format!("Selected: {}", formatted_name));
+
+            // Add ignored status if applicable
+            if sync_state == Some(SyncState::Ignored) {
+                if let Some(exists_val) = exists {
+                    let ignored_status = if exists_val {
+                        "Ignored, not deleted!"
+                    } else {
+                        "Ignored"
+                    };
+                    metrics.push(ignored_status.to_string());
+                }
+            }
         }
 
         metrics.join(" | ")
@@ -172,8 +184,13 @@ pub fn render_status_bar(
                     spans.push(Span::raw(" | "));
                 }
             }
-            // Split on first colon to separate label from value
-            if let Some(colon_pos) = part.find(':') {
+
+            // Check if this part is an ignored status (red text)
+            let part_trimmed = part.trim();
+            if part_trimmed == "Ignored" || part_trimmed == "Ignored, not deleted!" {
+                spans.push(Span::styled(*part, Style::default().fg(Color::Red)));
+            } else if let Some(colon_pos) = part.find(':') {
+                // Split on first colon to separate label from value
                 let label = &part[..=colon_pos];
                 let value = &part[colon_pos + 1..];
                 spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));

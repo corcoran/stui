@@ -601,8 +601,27 @@ impl App {
                                 .and_then(|sel_idx| level.items.get(sel_idx))
                                 .map(|item| item.name.clone());
 
+                            // Before replacing states, preserve any actively Syncing files
+                            let mut preserved_syncing: HashMap<String, SyncState> = HashMap::new();
+                            for (name, state) in &level.file_sync_states {
+                                if *state == SyncState::Syncing {
+                                    let file_path = format!("{}{}", target_prefix, name);
+                                    let sync_key = format!("{}:{}", folder_id, file_path);
+                                    // Only preserve if still actively syncing (ItemFinished hasn't fired yet)
+                                    if self.syncing_files.contains(&sync_key) {
+                                        preserved_syncing.insert(name.clone(), *state);
+                                        log_debug(&format!("DEBUG [Browse non-root]: Preserving Syncing state for {}", name));
+                                    }
+                                }
+                            }
+
                             level.items = items.clone();
                             level.file_sync_states = sync_states.clone();
+
+                            // Re-insert preserved Syncing states
+                            for (name, state) in preserved_syncing {
+                                level.file_sync_states.insert(name, state);
+                            }
 
                             // Sort and restore selection using the saved name
                             self.sort_level_with_selection(idx, selected_name);
@@ -641,7 +660,12 @@ impl App {
                         if file_path.starts_with(level_prefix) {
                             let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
 
-                            // Check if this was recently manually set - validate state transition
+                            // Get current state for validation
+                            let current_state = level.file_sync_states.get(item_name).copied();
+
+                            // Validate state transitions - reject illegal transitions
+
+                            // Check if this was recently manually set - validate based on user action
                             let state_key = format!("{}:{}", folder_id, file_path);
                             if let Some(&manual_change) = self.manually_set_states.get(&state_key) {
                                 // Validate transition based on what action was performed
@@ -670,8 +694,11 @@ impl App {
                                 }
                             }
 
-                            // Only update if state actually changed to avoid unnecessary re-renders
-                            let current_state = level.file_sync_states.get(item_name).copied();
+                            // Reject illegal state transitions (regardless of manual actions)
+                            if current_state == Some(SyncState::Syncing) && state == SyncState::Unknown {
+                                log_debug(&format!("DEBUG [FileInfo]: REJECTING illegal transition Syncing -> Unknown for {}", item_name));
+                                continue;
+                            }
 
                             // Don't overwrite Syncing state - ItemFinished will update it when sync completes
                             if current_state == Some(SyncState::Syncing) {
@@ -679,6 +706,21 @@ impl App {
                             } else if current_state != Some(state) {
                                 log_debug(&format!("DEBUG [FileInfo]: Updating {} {:?} -> {:?}", item_name, current_state, state));
                                 level.file_sync_states.insert(item_name.to_string(), state);
+
+                                // Update ignored_exists - do it inline to avoid borrow issues
+                                if state == SyncState::Ignored {
+                                    let relative_path = if let Some(ref prefix) = level.prefix {
+                                        format!("{}/{}", prefix, item_name)
+                                    } else {
+                                        item_name.to_string()
+                                    };
+                                    let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                                    let exists = std::path::Path::new(&host_path).exists();
+                                    level.ignored_exists.insert(item_name.to_string(), exists);
+                                } else {
+                                    level.ignored_exists.remove(item_name);
+                                }
+
                                 updated = true;
                             }
                         } else {
@@ -986,6 +1028,9 @@ impl App {
 
                             // Set state to Syncing unconditionally
                             level.file_sync_states.insert(item_name.to_string(), SyncState::Syncing);
+
+                            // Update ignored_exists (syncing files are not ignored) - do it inline to avoid borrow issues
+                            level.ignored_exists.remove(item_name);
 
                             // Remove from manually_set_states so file invalidation and file_info can update it
                             // (The Unknown state set during un-ignore should not block Syncing -> Synced transition)
@@ -1442,6 +1487,31 @@ impl App {
         }
 
         ignored_exists
+    }
+
+    /// Update ignored_exists status for a single file in a breadcrumb level
+    fn update_ignored_exists_for_file(
+        &mut self,
+        level_idx: usize,
+        file_name: &str,
+        new_state: SyncState,
+    ) {
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if new_state == SyncState::Ignored {
+                // File is now ignored - check if it exists
+                let relative_path = if let Some(ref prefix) = level.prefix {
+                    format!("{}/{}", prefix, file_name)
+                } else {
+                    file_name.to_string()
+                };
+                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                let exists = std::path::Path::new(&host_path).exists();
+                level.ignored_exists.insert(file_name.to_string(), exists);
+            } else {
+                // File is no longer ignored - remove from ignored_exists
+                level.ignored_exists.remove(file_name);
+            }
+        }
     }
 
     async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
@@ -2151,6 +2221,10 @@ impl App {
                 let state_key = format!("{}:{}", folder_id, relative_path);
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                     level.file_sync_states.insert(item_name.clone(), SyncState::Unknown);
+
+                    // Update ignored_exists (file is no longer ignored)
+                    self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Unknown);
+
                     self.manually_set_states.insert(state_key.clone(), ManualStateChange {
                         action: ManualAction::SetUnignored,
                         timestamp: Instant::now(),
@@ -2217,6 +2291,12 @@ impl App {
             // Immediately mark as ignored in UI and cache
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+
+                // Update ignored_exists (file is now ignored) - do it inline to avoid borrow issues
+                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                let exists = std::path::Path::new(&host_path).exists();
+                level.ignored_exists.insert(item_name.clone(), exists);
+
                 log_bug(&format!("toggle_ignore: set {} to Ignored", item_name));
 
                 // Update cache immediately so browse refresh doesn't overwrite with stale data
@@ -2306,6 +2386,10 @@ impl App {
                 let state_key = format!("{}:{}", folder_id, relative_path);
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                     level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+
+                    // Update ignored_exists (file is now ignored)
+                    self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
+
                     self.manually_set_states.insert(state_key, ManualStateChange {
                         action: ManualAction::SetIgnored,
                         timestamp: Instant::now(),
@@ -2346,6 +2430,10 @@ impl App {
             let state_key = format!("{}:{}", folder_id, relative_path);
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+
+                // Update ignored_exists (file is now ignored and will be deleted)
+                self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
+
                 self.manually_set_states.insert(state_key, ManualStateChange {
                     action: ManualAction::SetIgnored,
                     timestamp: Instant::now(),
@@ -2532,6 +2620,9 @@ impl App {
                             let level_idx = self.focus_level - 1;
                             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                                 level.file_sync_states.insert(item_name.clone(), SyncState::Unknown);
+
+                                // Update ignored_exists (file is no longer ignored) - do it inline to avoid borrow issues
+                                level.ignored_exists.remove(&item_name);
 
                                 // Remove from manually_set_states so updates can come through
                                 let relative_path = if let Some(ref prefix) = level.prefix {
