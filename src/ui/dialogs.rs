@@ -148,6 +148,7 @@ pub fn render_file_info(
     devices: &[Device],
     my_device_id: Option<&str>,
     icon_renderer: &IconRenderer,
+    image_font_size: Option<(u16, u16)>,
 ) {
     // Calculate centered area (90% width, 90% height)
     let area = f.size();
@@ -180,7 +181,7 @@ pub fn render_file_info(
     render_metadata_column(f, columns[0], state, devices, my_device_id, icon_renderer);
 
     // Render preview column
-    render_preview_column(f, columns[1], state);
+    render_preview_column(f, columns[1], state, image_font_size);
 }
 
 fn render_metadata_column(
@@ -380,6 +381,7 @@ fn render_preview_column(
     f: &mut Frame,
     area: Rect,
     state: &mut FileInfoPopupState,
+    image_font_size: Option<(u16, u16)>,
 ) {
     // Check if this is an image with an image state
     if state.is_image && state.image_state.is_some() {
@@ -414,34 +416,41 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image with centering
+                    // Render image with proper centering using font_size
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
-                    // Calculate centered rect for the image
-                    // The protocol will fit the image to whatever rect we give it,
-                    // so we need to calculate the fitted size and center that rect
-                    let render_rect = if let Some((img_w, img_h)) = metadata.dimensions {
-                        // Image aspect ratio
-                        let img_aspect = img_w as f32 / img_h as f32;
+                    let render_rect = if let (Some((img_w, img_h)), Some((font_w, font_h))) =
+                        (metadata.dimensions, image_font_size)
+                    {
+                        // Calculate how many cells the image needs (protocol's "desired" size)
+                        let desired_width = ((img_w as f32) / (font_w as f32)).ceil() as u16;
+                        let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
 
-                        // Available area aspect ratio
-                        let area_aspect = inner_area.width as f32 / inner_area.height as f32;
-
-                        // Calculate what size the image will be when fitted
-                        // (same logic the protocol uses for Resize::Fit)
-                        let (fit_width, fit_height) = if img_aspect > area_aspect {
-                            // Image is wider - width constrained
-                            let width = inner_area.width;
-                            let height = (width as f32 / img_aspect) as u16;
-                            (width, height)
+                        // Fit desired size to available area (Resize::Fit logic)
+                        let (fit_width, fit_height) = if desired_width <= inner_area.width &&
+                            desired_height <= inner_area.height
+                        {
+                            // Image fits - use desired size
+                            (desired_width, desired_height)
                         } else {
-                            // Image is taller - height constrained
-                            let height = inner_area.height;
-                            let width = (height as f32 * img_aspect) as u16;
-                            (width, height)
+                            // Image doesn't fit - scale down maintaining aspect ratio
+                            let desired_aspect = desired_width as f32 / desired_height as f32;
+                            let area_aspect = inner_area.width as f32 / inner_area.height as f32;
+
+                            if desired_aspect > area_aspect {
+                                // Width constrained
+                                let width = inner_area.width;
+                                let height = (width as f32 / desired_aspect) as u16;
+                                (width, height)
+                            } else {
+                                // Height constrained
+                                let height = inner_area.height;
+                                let width = (height as f32 * desired_aspect) as u16;
+                                (width, height)
+                            }
                         };
 
-                        // Center this fitted size within inner_area
+                        // Center the fitted rect
                         let x_offset = (inner_area.width.saturating_sub(fit_width)) / 2;
                         let y_offset = (inner_area.height.saturating_sub(fit_height)) / 2;
 
@@ -452,7 +461,7 @@ fn render_preview_column(
                             height: fit_height,
                         }
                     } else {
-                        // No dimensions available, use full area
+                        // No dimensions or font_size - use full area
                         inner_area
                     };
 

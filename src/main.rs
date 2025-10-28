@@ -263,6 +263,7 @@ pub struct App {
     pub icon_renderer: IconRenderer,      // Centralized icon renderer
     // Image preview protocol
     pub image_picker: Option<ratatui_image::picker::Picker>,  // Protocol picker for image rendering
+    pub image_font_size: Option<(u16, u16)>,  // Font size (width, height) for image cell calculations
     image_dpi_scale: f32,  // DPI scale factor for image preview
     // Image update channel for non-blocking image loading
     image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,  // Send (file_path, state) when image loads
@@ -391,7 +392,7 @@ impl App {
         let icon_renderer = IconRenderer::new(icon_mode, IconTheme::default());
 
         // Initialize image preview protocol picker
-        let image_picker = if config.image_preview_enabled {
+        let (image_picker, image_font_size) = if config.image_preview_enabled {
             // Get picker with terminal dimensions
             let mut picker = match ratatui_image::picker::Picker::from_termios() {
                 Ok(p) => p,
@@ -400,6 +401,10 @@ impl App {
                     ratatui_image::picker::Picker::new((8, 16)) // Fallback font size
                 }
             };
+
+            // Store font size for centering calculations
+            let font_size = picker.font_size;
+            log_debug(&format!("Image font size: {}x{}", font_size.0, font_size.1));
 
             // Apply protocol from config
             match config.image_protocol.to_lowercase().as_str() {
@@ -429,10 +434,10 @@ impl App {
                 }
             }
 
-            Some(picker)
+            (Some(picker), Some(font_size))
         } else {
             log_debug("Image preview disabled in config");
-            None
+            (None, None)
         };
 
         let mut app = App {
@@ -485,6 +490,7 @@ impl App {
             last_transfer_rates: None,
             icon_renderer,
             image_picker,
+            image_font_size,
             image_dpi_scale: config.image_dpi_scale,
             image_update_tx,
             image_update_rx,
