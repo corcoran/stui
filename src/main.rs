@@ -2634,16 +2634,28 @@ impl App {
             _ => "Unknown",
         };
 
-        // Pre-upscale image for sharper rendering if DPI scale > 1.0
+        // Define max preview dimensions (typical preview area is ~100 cells × 40 cells)
+        // With 8×16 font = 800×640 pixels baseline
+        const MAX_PREVIEW_WIDTH: u32 = 800;
+        const MAX_PREVIEW_HEIGHT: u32 = 640;
+
+        // Step 1: Resize to fit max preview dimensions (maintains aspect ratio)
+        let fitted = img.resize(
+            MAX_PREVIEW_WIDTH,
+            MAX_PREVIEW_HEIGHT,
+            image::imageops::FilterType::Lanczos3,
+        );
+
+        // Step 2: Apply DPI upscaling to fitted image for quality
         let upscaled = if dpi_scale > 1.0 {
-            let new_width = (img.width() as f32 * dpi_scale) as u32;
-            let new_height = (img.height() as f32 * dpi_scale) as u32;
-            img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
+            let new_width = (fitted.width() as f32 * dpi_scale) as u32;
+            let new_height = (fitted.height() as f32 * dpi_scale) as u32;
+            fitted.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
         } else {
-            img
+            fitted
         };
 
-        // Convert to protocol (will fit upscaled image into available space)
+        // Convert to protocol
         let protocol = picker.new_resize_protocol(upscaled);
 
         Ok(protocol)
