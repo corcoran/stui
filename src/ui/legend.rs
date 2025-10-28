@@ -6,11 +6,13 @@ use ratatui::{
     Frame,
 };
 
-/// Render the hotkey legend (dynamically changes based on vim mode)
+/// Render the hotkey legend (dynamically changes based on vim mode and focus level)
 pub fn render_legend(
     f: &mut Frame,
     area: Rect,
     vim_mode: bool,
+    focus_level: usize,
+    can_restore: bool,
 ) {
     // Build a single line with all hotkeys that will wrap automatically
     let mut hotkey_spans = vec![];
@@ -38,24 +40,40 @@ pub fn render_legend(
         ]);
     }
 
-    // Common actions (same for both modes)
+    // Actions that only apply to breadcrumbs (focus_level > 0), not folders
+    if focus_level > 0 {
+        hotkey_spans.extend(vec![
+            Span::styled("s", Style::default().fg(Color::Yellow)),
+            Span::raw(":Sort  "),
+            Span::styled("S", Style::default().fg(Color::Yellow)),
+            Span::raw(":Reverse  "),
+            Span::styled("t", Style::default().fg(Color::Yellow)),
+            Span::raw(":Info  "),
+            Span::styled("i", Style::default().fg(Color::Yellow)),
+            Span::raw(":Ignore  "),
+            Span::styled("I", Style::default().fg(Color::Yellow)),
+            Span::raw(":Ign+Del  "),
+            Span::styled("d", Style::default().fg(Color::Yellow)),
+            Span::raw(":Delete  "),
+        ]);
+    }
+
+    // Rescan - available in both folder list and breadcrumbs
     hotkey_spans.extend(vec![
-        Span::styled("s", Style::default().fg(Color::Yellow)),
-        Span::raw(":Sort  "),
-        Span::styled("S", Style::default().fg(Color::Yellow)),
-        Span::raw(":Reverse  "),
-        Span::styled("t", Style::default().fg(Color::Yellow)),
-        Span::raw(":Info  "),
-        Span::styled("i", Style::default().fg(Color::Yellow)),
-        Span::raw(":Ignore  "),
-        Span::styled("I", Style::default().fg(Color::Yellow)),
-        Span::raw(":Ign+Del  "),
-        Span::styled("d", Style::default().fg(Color::Yellow)),
-        Span::raw(":Delete  "),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::raw(":Rescan  "),
-        Span::styled("R", Style::default().fg(Color::Yellow)),
-        Span::raw(":Restore  "),
+    ]);
+
+    // Restore - only show when there are local changes to restore
+    if can_restore {
+        hotkey_spans.extend(vec![
+            Span::styled("R", Style::default().fg(Color::Yellow)),
+            Span::raw(":Restore  "),
+        ]);
+    }
+
+    // Quit - always available
+    hotkey_spans.extend(vec![
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::raw(":Quit"),
     ]);

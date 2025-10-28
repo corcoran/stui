@@ -3,7 +3,7 @@ use crate::App;
 
 use super::{
     breadcrumb::{self, DisplayMode},
-    dialogs, folder_list, layout, legend, status_bar,
+    dialogs, folder_list, layout, legend, status_bar, system_bar,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -15,11 +15,20 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let has_breadcrumbs = !app.breadcrumb_trail.is_empty();
     let layout_info = layout::calculate_layout(size, app.breadcrumb_trail.len(), has_breadcrumbs);
 
+    // Render system info bar at the top
+    let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
+    system_bar::render_system_bar(
+        f,
+        layout_info.system_area,
+        app.system_status.as_ref(),
+        app.device_name.as_deref(),
+        (total_files, total_dirs, total_bytes),
+        app.last_transfer_rates,
+    );
+
     // Render folders pane if visible
     if layout_info.folders_visible {
         if let Some(folders_area) = layout_info.folders_area {
-            let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
-
             folder_list::render_folder_list(
                 f,
                 folders_area,
@@ -30,10 +39,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 app.focus_level == 0,
                 &app.icon_renderer,
                 &app.last_folder_updates,
-                app.system_status.as_ref(),
-                app.device_name.as_deref(),
-                (total_files, total_dirs, total_bytes),
-                app.last_transfer_rates,
             );
         }
     }
@@ -105,7 +110,27 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render hotkey legend if there's space
     if let Some(legend_area) = layout_info.legend_area {
-        legend::render_legend(f, legend_area, app.vim_mode);
+        let has_breadcrumbs = !app.breadcrumb_trail.is_empty();
+
+        // Check if restore is available (only in breadcrumbs with local changes)
+        let can_restore = if app.focus_level > 0 && has_breadcrumbs {
+            // Get the folder ID from the breadcrumb trail
+            let folder_id = &app.breadcrumb_trail[0].folder_id;
+            // Check if the folder has local changes to restore
+            app.folder_statuses.get(folder_id)
+                .map(|status| status.receive_only_total_items > 0)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        legend::render_legend(
+            f,
+            legend_area,
+            app.vim_mode,
+            app.focus_level,
+            can_restore,
+        );
     }
 
     // Render status bar at the bottom
