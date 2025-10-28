@@ -132,6 +132,7 @@ impl IconRenderer {
             SyncState::LocalOnly => StatusType::LocalOnly,
             SyncState::RemoteOnly => StatusType::RemoteOnly,
             SyncState::Ignored => StatusType::Ignored,
+            SyncState::Syncing => StatusType::Syncing,
             SyncState::Unknown => StatusType::Unknown,
         };
 

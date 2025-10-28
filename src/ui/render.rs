@@ -69,17 +69,33 @@ pub fn render(f: &mut Frame, app: &mut App) {
             crate::DisplayMode::TimestampAndSize => DisplayMode::TimestampAndSize,
         };
 
+        // Check if any items in this level are currently syncing and update their state
+        for item in &level.items {
+            let item_path = if let Some(ref prefix) = level.prefix {
+                format!("{}/{}", prefix.trim_end_matches('/'), item.name)
+            } else {
+                item.name.clone()
+            };
+            let sync_key = format!("{}:{}", level.folder_id, item_path);
+
+            if app.syncing_files.contains(&sync_key) {
+                // Override state to Syncing if this file is actively syncing
+                level.file_sync_states.insert(item.name.clone(), crate::api::SyncState::Syncing);
+            }
+        }
+
         breadcrumb::render_breadcrumb_panel(
             f,
             area,
             &level.items,
             &level.file_sync_states,
-            &level.ignored_exists,
             &mut level.state,
             &title,
             is_focused,
             display_mode,
             &app.icon_renderer,
+            &level.translated_base_path,
+            level.prefix.as_deref(),
         );
 
         breadcrumb_idx += 1;

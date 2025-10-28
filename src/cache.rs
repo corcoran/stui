@@ -308,6 +308,7 @@ impl CacheDb {
             SyncState::LocalOnly => "LocalOnly".to_string(),
             SyncState::RemoteOnly => "RemoteOnly".to_string(),
             SyncState::Ignored => "Ignored".to_string(),
+            SyncState::Syncing => "Syncing".to_string(),
             SyncState::Unknown => "Unknown".to_string(),
         }
     }
@@ -319,6 +320,11 @@ impl CacheDb {
             "LocalOnly" => SyncState::LocalOnly,
             "RemoteOnly" => SyncState::RemoteOnly,
             "Ignored" => SyncState::Ignored,
+            // Syncing is transient - never persist across app restarts
+            "Syncing" => {
+                log_debug("WARNING: Found stale 'Syncing' state in cache, converting to Unknown");
+                SyncState::Unknown
+            },
             _ => SyncState::Unknown,
         }
     }

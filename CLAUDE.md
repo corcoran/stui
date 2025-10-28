@@ -7,8 +7,8 @@ Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing 
 ## claude instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
-- Furthermore, try to use debug logs as much as possible when an issue is encountered. Insert logs, have the user re-create the issue and then have the user produce the logs.
-- Make logging comprehensive.
+- Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
+- Make logging comprehensive but concise - debug logs should be informative without overwhelming
 - Always clean up debug logs for one-off issues but keep helpful logs that may be used later
 
 ## Architecture Context
@@ -50,7 +50,8 @@ Display visual indicators for file/folder states:
 - `⏸` Paused
 - `🚫⚠️` Ignored (exists on disk)
 - `🚫..` Ignored (doesn't exist)
-- `🔄` Loading/Unknown
+- `🔄` Syncing (actively downloading/uploading)
+- `❓` Unknown
 
 ### User Actions
 
@@ -115,9 +116,11 @@ CLI flags:
 - Granular invalidation: file-level, directory-level, folder-level
 - Event types handled:
   - `LocalIndexUpdated` (local changes with `filenames` array)
+  - `ItemStarted` (sync begins - shows Syncing state)
   - `ItemFinished` (sync completion)
   - `LocalChangeDetected`, `RemoteChangeDetected`
 - Persistent event ID across app restarts
+- Auto-recovery from stale event IDs (resets to 0 if high ID returns nothing)
 
 ### Performance Optimizations
 - **Async API Service**: Channel-based request queue with priority levels (High/Medium/Low)
@@ -134,6 +137,16 @@ CLI flags:
 - **Folder status cache**: Status with sequence, displayed stats (in_sync/total items)
 - **Event ID persistence**: Survives app restarts
 - **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/synctui/cache.db`)
+
+### State Transition Validation
+- **Logic-Based Protection**: Validates state transitions based on user actions, not arbitrary timeouts
+- **Action Tracking**: `ManualStateChange` struct tracks what action was performed (SetIgnored/SetUnignored) with timestamp
+- **Transition Rules**:
+  - After **SetIgnored**: Only accept `Ignored` state (reject stale Synced/RemoteOnly/etc)
+  - After **SetUnignored**: Accept any state except `Ignored` (reject stale Ignored state)
+- **Safety Valve**: 10-second timeout prevents permanent blocking in edge cases
+- **No Race Conditions**: Works regardless of network latency or event timing
+- **Syncing State Tracking**: `syncing_files` HashSet tracks actively syncing files between ItemStarted/ItemFinished events
 
 ## Current Limitations & Future Goals
 

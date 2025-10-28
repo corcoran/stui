@@ -9,7 +9,8 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 
 ### 🚀 Real-Time Sync Monitoring
 - **Live Status Updates**: Automatic cache invalidation using Syncthing's event stream
-- **Visual Sync States**: Instant feedback with pastel-colored icons (synced, remote-only, local-only, out-of-sync, ignored)
+- **Visual Sync States**: Instant feedback with pastel-colored icons (synced, syncing, remote-only, local-only, out-of-sync, ignored)
+- **Active Sync Indicator**: Files show spinning icon (🔄) during active downloads/uploads
 - **Icon Modes**: Choose between emoji or Nerd Fonts icons via config
 - **Smart Caching**: SQLite-backed cache for instant UI responsiveness with background updates
 - **System Status Bar**: Device name, uptime, local state summary, and live transfer rates
@@ -189,10 +190,11 @@ rm ~/.cache/synctui/cache.db
 
 ## Architecture
 
-- **Event-Driven**: Long-polls Syncthing's `/rest/events` endpoint for real-time updates
+- **Event-Driven**: Long-polls Syncthing's `/rest/events` endpoint for real-time updates with auto-recovery
 - **Async API Service**: Non-blocking request queue with priority levels
 - **Cache-First Rendering**: Instant display from cache, background validation
 - **Sequence-Based Validation**: Only refetches when Syncthing data actually changes
+- **Robust State Transitions**: Logic-based validation prevents flickering during ignore/unignore operations
 
 ## Troubleshooting
 

@@ -22,6 +22,21 @@ fn log_debug(msg: &str) {
     }
 }
 
+fn log_bug(msg: &str) {
+    // Only log if bug mode is enabled
+    if !crate::BUG_MODE.load(Ordering::Relaxed) {
+        return;
+    }
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-bug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct SyncthingEvent {
@@ -40,6 +55,10 @@ pub enum CacheInvalidation {
     File { folder_id: String, file_path: String },
     /// Invalidate an entire directory
     Directory { folder_id: String, dir_path: String },
+    /// Item started syncing
+    ItemStarted { folder_id: String, file_path: String },
+    /// Item finished syncing
+    ItemFinished { folder_id: String, file_path: String },
 }
 
 /// Spawn the event listener task
@@ -74,11 +93,16 @@ async fn event_listener_loop(
 ) -> Result<()> {
     let client = Client::new();
 
+    log_bug("EVENT LISTENER: Starting up");
     log_debug(&format!("DEBUG [EVENT LISTENER]: Starting event listener, base_url={} last_event_id={}", base_url, last_event_id));
+
+    // Track if we've tried resetting event ID (to avoid reset loop)
+    let mut tried_reset = false;
 
     loop {
         // Make long-polling request
         let url = format!("{}/rest/events?since={}&timeout=60", base_url, last_event_id);
+        log_bug(&format!("EVENT LISTENER: Polling Syncthing (last_event_id={})", last_event_id));
         log_debug(&format!("DEBUG [EVENT LISTENER]: Polling {}", url));
 
         match client
@@ -88,84 +112,147 @@ async fn event_listener_loop(
             .await
         {
             Ok(response) => {
-                log_debug(&format!("DEBUG [EVENT LISTENER]: Got response, status={}", response.status()));
+                let status = response.status();
+                log_debug(&format!("DEBUG [EVENT LISTENER]: Got response, status={}", status));
+                log_bug(&format!("EVENT LISTENER: Got response, status={}", status));
 
-                if let Ok(events) = response.json::<Vec<SyncthingEvent>>().await {
-                    log_debug(&format!("DEBUG [EVENT LISTENER]: Received {} events", events.len()));
+                match response.json::<Vec<SyncthingEvent>>().await {
+                    Ok(events) => {
+                        log_bug(&format!("EVENT LISTENER: Received {} events", events.len()));
+                        log_debug(&format!("DEBUG [EVENT LISTENER]: Received {} events", events.len()));
 
-                    for event in &events {
-                        // Debug: Log all events
-                        log_debug(&format!("DEBUG [EVENT]: id={} type={} data={}", event.id, event.event_type, event.data));
-
-                        // Check for missed events (gap in IDs)
-                        if event.id != last_event_id + 1 && last_event_id > 0 {
-                            log_debug(&format!("DEBUG [EVENT]: WARNING - Missed events! Last ID: {}, Current ID: {}", last_event_id, event.id));
+                        // If we've been getting 0 events and last_event_id is high,
+                        // Syncthing might have restarted - try resetting to 0 once
+                        if events.is_empty() && last_event_id > 1000 && !tried_reset {
+                            log_bug(&format!("EVENT LISTENER: No events with high event_id={}, trying reset to 0", last_event_id));
+                            last_event_id = 0;
+                            tried_reset = true;
+                            // Persist the reset so next startup uses 0
+                            let _ = event_id_tx.send(0);
+                            continue;
                         }
 
-                        // Process events we care about
-                        match event.event_type.as_str() {
-                            "LocalIndexUpdated" => {
-                                // LocalIndexUpdated has a "filenames" array instead of "item"
-                                if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                    if let Some(filenames) = event.data.get("filenames").and_then(|v| v.as_array()) {
-                                        for filename in filenames {
-                                            if let Some(file_path) = filename.as_str() {
-                                                let invalidation = CacheInvalidation::File {
-                                                    folder_id: folder_id.to_string(),
-                                                    file_path: file_path.to_string(),
-                                                };
+                        for event in &events {
+                            // Debug: Log all events
+                            log_debug(&format!("DEBUG [EVENT]: id={} type={} data={}", event.id, event.event_type, event.data));
+                            log_bug(&format!("EVENT: id={} type={}", event.id, event.event_type));
 
-                                                log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
-                                                let _ = invalidation_tx.send(invalidation);
+                            // Check for missed events (gap in IDs)
+                            if event.id != last_event_id + 1 && last_event_id > 0 {
+                                log_debug(&format!("DEBUG [EVENT]: WARNING - Missed events! Last ID: {}, Current ID: {}", last_event_id, event.id));
+                            }
+
+                            // Process events we care about
+                            match event.event_type.as_str() {
+                                "LocalIndexUpdated" => {
+                                    // LocalIndexUpdated has a "filenames" array instead of "item"
+                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
+                                        if let Some(filenames) = event.data.get("filenames").and_then(|v| v.as_array()) {
+                                            for filename in filenames {
+                                                if let Some(file_path) = filename.as_str() {
+                                                    let invalidation = CacheInvalidation::File {
+                                                        folder_id: folder_id.to_string(),
+                                                        file_path: file_path.to_string(),
+                                                    };
+
+                                                    log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
+                                                    let _ = invalidation_tx.send(invalidation);
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            "ItemFinished" | "LocalChangeDetected" | "RemoteChangeDetected" => {
-                                if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                    if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
-                                        // Check if it's a directory
-                                        let item_type = event.data.get("type").and_then(|v| v.as_str());
-
-                                        let invalidation = if item_type == Some("dir") || item_path.ends_with('/') {
-                                            // Directory change - invalidate entire directory
-                                            CacheInvalidation::Directory {
-                                                folder_id: folder_id.to_string(),
-                                                dir_path: item_path.to_string(),
-                                            }
-                                        } else {
-                                            // File change - invalidate single file
-                                            CacheInvalidation::File {
+                                "ItemStarted" => {
+                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
+                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                            let invalidation = CacheInvalidation::ItemStarted {
                                                 folder_id: folder_id.to_string(),
                                                 file_path: item_path.to_string(),
-                                            }
-                                        };
-
-                                        log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
-                                        let _ = invalidation_tx.send(invalidation);
+                                            };
+                                            log_debug(&format!("DEBUG [EVENT]: ItemStarted: {:?}", invalidation));
+                                            log_bug(&format!("EVENT: ItemStarted folder={} item={}", folder_id, item_path));
+                                            let _ = invalidation_tx.send(invalidation);
+                                        }
                                     }
                                 }
+                                "ItemFinished" => {
+                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
+                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                            // Send ItemFinished notification
+                                            let finished_invalidation = CacheInvalidation::ItemFinished {
+                                                folder_id: folder_id.to_string(),
+                                                file_path: item_path.to_string(),
+                                            };
+                                            log_debug(&format!("DEBUG [EVENT]: ItemFinished: {:?}", finished_invalidation));
+                                            log_bug(&format!("EVENT: ItemFinished folder={} item={}", folder_id, item_path));
+                                            let _ = invalidation_tx.send(finished_invalidation);
+
+                                            // Also send cache invalidation
+                                            let item_type = event.data.get("type").and_then(|v| v.as_str());
+                                            let cache_invalidation = if item_type == Some("dir") || item_path.ends_with('/') {
+                                                CacheInvalidation::Directory {
+                                                    folder_id: folder_id.to_string(),
+                                                    dir_path: item_path.to_string(),
+                                                }
+                                            } else {
+                                                CacheInvalidation::File {
+                                                    folder_id: folder_id.to_string(),
+                                                    file_path: item_path.to_string(),
+                                                }
+                                            };
+                                            log_debug(&format!("DEBUG [EVENT]: Sending cache invalidation: {:?}", cache_invalidation));
+                                            let _ = invalidation_tx.send(cache_invalidation);
+                                        }
+                                    }
+                                }
+                                "LocalChangeDetected" | "RemoteChangeDetected" => {
+                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
+                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                            // Check if it's a directory
+                                            let item_type = event.data.get("type").and_then(|v| v.as_str());
+
+                                            let invalidation = if item_type == Some("dir") || item_path.ends_with('/') {
+                                                // Directory change - invalidate entire directory
+                                                CacheInvalidation::Directory {
+                                                    folder_id: folder_id.to_string(),
+                                                    dir_path: item_path.to_string(),
+                                                }
+                                            } else {
+                                                // File change - invalidate single file
+                                                CacheInvalidation::File {
+                                                    folder_id: folder_id.to_string(),
+                                                    file_path: item_path.to_string(),
+                                                }
+                                            };
+
+                                            log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
+                                            let _ = invalidation_tx.send(invalidation);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Ignore other event types (but log them for debugging)
+                                    log_debug(&format!("DEBUG [EVENT]: Ignoring event type: {}", event.event_type));
+                                }
                             }
-                            _ => {
-                                // Ignore other event types (but log them for debugging)
-                                log_debug(&format!("DEBUG [EVENT]: Ignoring event type: {}", event.event_type));
-                            }
+
+                            last_event_id = event.id;
                         }
 
-                        last_event_id = event.id;
+                        // Persist event ID every batch (not every single event for performance)
+                        if !events.is_empty() {
+                            log_debug(&format!("DEBUG [EVENT LISTENER]: Persisting last_event_id={}", last_event_id));
+                            let _ = event_id_tx.send(last_event_id);
+                        }
                     }
-
-                    // Persist event ID every batch (not every single event for performance)
-                    if !events.is_empty() {
-                        log_debug(&format!("DEBUG [EVENT LISTENER]: Persisting last_event_id={}", last_event_id));
-                        let _ = event_id_tx.send(last_event_id);
+                    Err(_) => {
+                        log_bug("EVENT LISTENER: Failed to parse events JSON");
+                        log_debug("DEBUG [EVENT LISTENER]: Failed to parse events JSON");
                     }
-                } else {
-                    log_debug("DEBUG [EVENT LISTENER]: Failed to parse events JSON");
                 }
             }
             Err(e) => {
+                log_bug(&format!("EVENT LISTENER: Connection error: {}", e));
                 log_debug(&format!("DEBUG [EVENT LISTENER]: Connection error: {}", e));
                 // Wait before retrying
                 tokio::time::sleep(Duration::from_secs(5)).await;

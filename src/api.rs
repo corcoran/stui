@@ -44,6 +44,7 @@ pub enum SyncState {
     LocalOnly,    // 💻 Only on this device
     RemoteOnly,   // ☁️ Only on remote devices
     Ignored,      // 🚫 In .stignore
+    Syncing,      // 🔄 Currently syncing
     Unknown,      // ❓ Not yet determined
 }
 

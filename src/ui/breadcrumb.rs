@@ -202,12 +202,13 @@ pub fn render_breadcrumb_panel(
     area: Rect,
     items: &[BrowseItem],
     file_sync_states: &std::collections::HashMap<String, SyncState>,
-    ignored_exists: &std::collections::HashMap<String, bool>,
     state: &mut ratatui::widgets::ListState,
     title: &str,
     is_focused: bool,
     display_mode: DisplayMode,
     icon_renderer: &IconRenderer,
+    translated_base_path: &str,
+    prefix: Option<&str>,
 ) {
     let panel_width = area.width;
 
@@ -220,8 +221,14 @@ pub fn render_breadcrumb_panel(
             // Build icon as spans (for coloring)
             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
             let icon_spans: Vec<Span> = if sync_state == SyncState::Ignored {
-                // Use cached existence check (no blocking I/O during render)
-                let exists = ignored_exists.get(&item.name).copied().unwrap_or(false);
+                // Check if ignored file exists on disk (only for ignored files, typically very few)
+                let relative_path = if let Some(prefix_val) = prefix {
+                    format!("{}/{}", prefix_val, item.name)
+                } else {
+                    item.name.clone()
+                };
+                let host_path = format!("{}/{}", translated_base_path.trim_end_matches('/'), relative_path);
+                let exists = std::path::Path::new(&host_path).exists();
                 icon_renderer.ignored_item(exists)
             } else {
                 icon_renderer.item_with_sync_state(is_directory, sync_state)

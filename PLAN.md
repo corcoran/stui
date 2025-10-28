@@ -4,9 +4,38 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 
 ---
 
-## 📍 Current Status (Updated 2025-01-27)
+## 📍 Current Status (Updated 2025-01-28)
 
-**Recent Accomplishments (Session 2025-01-27):**
+**Recent Accomplishments (Session 2025-01-28):**
+
+**State Transition Validation System:**
+- ✅ Replaced arbitrary time-based heuristics (3s/5s timeouts) with logical state transition validation
+- ✅ Action tracking: `ManualStateChange` struct tracks SetIgnored/SetUnignored actions with timestamps
+- ✅ Transition validation: After SetIgnored only accepts Ignored state, after SetUnignored rejects Ignored state
+- ✅ No more race conditions - works regardless of network latency or event timing
+- ✅ Safety valve: 10-second timeout prevents permanent blocking in edge cases
+- ✅ Much more robust and predictable than time-based approach
+
+**Syncing State Implementation:**
+- ✅ Added `Syncing` variant to `SyncState` enum
+- ✅ Real-time syncing indicator using ItemStarted/ItemFinished events
+- ✅ Files show spinning icon (🔄) during active downloads/uploads
+- ✅ Protection against premature state clearing during sync operations
+- ✅ Smooth transitions: Unknown → RemoteOnly → Syncing → Synced
+
+**Ignored File State Handling:**
+- ✅ Fixed file invalidation clearing states inappropriately
+- ✅ Fixed browse results clearing Syncing states
+- ✅ Fixed Unknown state flashing on un-ignore operations
+- ✅ Fixed Ignored state flashing on ignore/delete operations
+- ✅ Fixed stuck states for already-synced files after un-ignore
+
+**Event Listener Improvements:**
+- ✅ Auto-recovery from stale event IDs (resets to 0 if high ID returns nothing)
+- ✅ Comprehensive ItemStarted/ItemFinished event handling
+- ✅ Clean, concise debug logging without overwhelming log files
+
+**Previous Accomplishments (Session 2025-01-27):**
 
 **System Status Bar:**
 - ✅ Device status bar at bottom of Folders panel
