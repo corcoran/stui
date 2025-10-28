@@ -404,68 +404,62 @@ fn render_preview_column(
                         let image_aspect = img_w as f32 / img_h as f32;
                         let area_aspect = inner_area.width as f32 / inner_area.height as f32;
 
-                        // Determine which dimension is the limiting factor
-                        // If image is wider than area (relative to their heights), limit by width
-                        // If image is taller than area (relative to their widths), limit by height
+                        // Strategy: Use 95% of available space in one dimension, calculate the other
+                        // based on aspect ratio to maintain proportions
+                        const MAIN_AXIS_USAGE: f32 = 0.95; // Use 95% of limiting dimension
+                        const MIN_PADDING: f32 = 0.025;    // Minimum 2.5% padding on each side
 
                         if image_aspect > area_aspect {
-                            // Wide image: use more horizontal space, center vertically
-                            // Use 80% of width, calculate needed height based on aspect ratio
-                            let img_area_ratio = (area_aspect / image_aspect).min(1.0);
-                            let vertical_padding_ratio = ((1.0 - img_area_ratio) / 2.0).max(0.05); // At least 5% padding
-                            let vertical_image_ratio = 1.0 - (vertical_padding_ratio * 2.0);
-
-                            // Convert to ratios (multiply by 100 to get integer ratios)
-                            let padding_parts = (vertical_padding_ratio * 100.0) as u32;
-                            let image_parts = (vertical_image_ratio * 100.0) as u32;
+                            // Image is wider than area (relative to heights)
+                            // Width is limiting factor - use 95% width, calculate height needed
+                            let width_ratio = MAIN_AXIS_USAGE;
+                            let height_ratio = width_ratio * (area_aspect / image_aspect);
+                            let vertical_padding = ((1.0 - height_ratio) / 2.0).max(MIN_PADDING);
 
                             (
                                 vec![
-                                    Constraint::Ratio(padding_parts, 100),
-                                    Constraint::Ratio(image_parts, 100),
-                                    Constraint::Ratio(padding_parts, 100),
+                                    Constraint::Ratio((vertical_padding * 100.0) as u32, 100),
+                                    Constraint::Ratio((height_ratio * 100.0) as u32, 100),
+                                    Constraint::Ratio((vertical_padding * 100.0) as u32, 100),
                                 ],
                                 vec![
-                                    Constraint::Ratio(10, 100),  // 10% left padding
-                                    Constraint::Ratio(80, 100),  // 80% image area
-                                    Constraint::Ratio(10, 100),  // 10% right padding
+                                    Constraint::Ratio(((1.0 - width_ratio) / 2.0 * 100.0) as u32, 100),
+                                    Constraint::Ratio((width_ratio * 100.0) as u32, 100),
+                                    Constraint::Ratio(((1.0 - width_ratio) / 2.0 * 100.0) as u32, 100),
                                 ],
                             )
                         } else {
-                            // Tall image: use more vertical space, center horizontally
-                            let img_area_ratio = (image_aspect / area_aspect).min(1.0);
-                            let horizontal_padding_ratio = ((1.0 - img_area_ratio) / 2.0).max(0.05); // At least 5% padding
-                            let horizontal_image_ratio = 1.0 - (horizontal_padding_ratio * 2.0);
-
-                            // Convert to ratios
-                            let padding_parts = (horizontal_padding_ratio * 100.0) as u32;
-                            let image_parts = (horizontal_image_ratio * 100.0) as u32;
+                            // Image is taller than area (relative to widths)
+                            // Height is limiting factor - use 95% height, calculate width needed
+                            let height_ratio = MAIN_AXIS_USAGE;
+                            let width_ratio = height_ratio * (image_aspect / area_aspect);
+                            let horizontal_padding = ((1.0 - width_ratio) / 2.0).max(MIN_PADDING);
 
                             (
                                 vec![
-                                    Constraint::Ratio(10, 100),  // 10% top padding
-                                    Constraint::Ratio(80, 100),  // 80% image area
-                                    Constraint::Ratio(10, 100),  // 10% bottom padding
+                                    Constraint::Ratio(((1.0 - height_ratio) / 2.0 * 100.0) as u32, 100),
+                                    Constraint::Ratio((height_ratio * 100.0) as u32, 100),
+                                    Constraint::Ratio(((1.0 - height_ratio) / 2.0 * 100.0) as u32, 100),
                                 ],
                                 vec![
-                                    Constraint::Ratio(padding_parts, 100),
-                                    Constraint::Ratio(image_parts, 100),
-                                    Constraint::Ratio(padding_parts, 100),
+                                    Constraint::Ratio((horizontal_padding * 100.0) as u32, 100),
+                                    Constraint::Ratio((width_ratio * 100.0) as u32, 100),
+                                    Constraint::Ratio((horizontal_padding * 100.0) as u32, 100),
                                 ],
                             )
                         }
                     } else {
-                        // No dimensions available, use balanced centering (similar to old behavior)
+                        // No dimensions available, use balanced centering with minimal padding
                         (
                             vec![
-                                Constraint::Ratio(1, 3),
-                                Constraint::Ratio(1, 3),
-                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(5, 100),   // 5% padding
+                                Constraint::Ratio(90, 100),  // 90% image
+                                Constraint::Ratio(5, 100),   // 5% padding
                             ],
                             vec![
-                                Constraint::Ratio(1, 3),
-                                Constraint::Ratio(1, 3),
-                                Constraint::Ratio(1, 3),
+                                Constraint::Ratio(5, 100),
+                                Constraint::Ratio(90, 100),
+                                Constraint::Ratio(5, 100),
                             ],
                         )
                     };
