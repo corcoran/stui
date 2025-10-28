@@ -4,6 +4,13 @@
 
 Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing folders, showing contents, adding .stignore rules, and deleting directories safely with Docker path-mapping support.
 
+## claude instructions
+
+- If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
+- Furthermore, try to use debug logs as much as possible when an issue is encountered. Insert logs, have the user re-create the issue and then have the user produce the logs.
+- Make logging comprehensive.
+- Always clean up debug logs for one-off issues but keep helpful logs that may be used later
+
 ## Architecture Context
 
 - **Syncthing Environment**: Runs in Docker container

@@ -24,6 +24,10 @@ struct Args {
     #[arg(short, long)]
     debug: bool,
 
+    /// Enable targeted bug debugging logs to /tmp/synctui-bug.log
+    #[arg(long)]
+    bug: bool,
+
     /// Enable vim keybindings (hjkl, ^D/U, ^F/B, gg/G)
     #[arg(long)]
     vim: bool,
@@ -35,6 +39,8 @@ struct Args {
 
 // Global flag for debug mode
 static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+// Global flag for targeted bug debugging
+static BUG_MODE: AtomicBool = AtomicBool::new(false);
 
 mod api;
 mod api_service;
@@ -60,6 +66,23 @@ fn log_debug(msg: &str) {
         .create(true)
         .append(true)
         .open("/tmp/synctui-debug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
+
+fn log_bug(msg: &str) {
+    // Only log if bug mode is enabled
+    if !BUG_MODE.load(Ordering::Relaxed) {
+        return;
+    }
+
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-bug.log")
     {
         let _ = writeln!(file, "{}", msg);
     }
@@ -262,6 +285,7 @@ struct App {
     should_quit: bool,
     display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
     vim_mode: bool, // Enable vim keybindings
+    bug_mode: bool, // Enable targeted bug debugging logs
     last_key_was_g: bool, // Track 'g' key for 'gg' command
     last_user_action: Instant, // Track last user interaction for idle detection
     sort_mode: SortMode,     // Current sort mode (session-wide)
@@ -280,6 +304,8 @@ struct App {
     confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
     pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
+    // Track manually set states to prevent stale file_info updates from causing flashes
+    manually_set_states: HashMap<String, Instant>, // "folder_id:path" -> timestamp when manually set
     // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
@@ -432,6 +458,7 @@ impl App {
             should_quit: false,
             display_mode: DisplayMode::TimestampAndSize, // Start with most info
             vim_mode: config.vim_mode,
+            bug_mode: false, // Will be set from CLI args
             last_key_was_g: false,
             last_user_action: Instant::now(),
             sort_mode: SortMode::Alphabetical,
@@ -446,6 +473,7 @@ impl App {
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
+            manually_set_states: HashMap::new(),
             api_tx,
             api_rx,
             invalidation_rx,
@@ -608,22 +636,43 @@ impl App {
                 if prefix.is_none() && self.focus_level == 1 && !self.breadcrumb_trail.is_empty() {
                     // Root level update
                     if self.breadcrumb_trail[0].folder_id == folder_id {
+                        log_bug(&format!("browse_result: ENTRY - HashMap has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
+
                         // Save currently selected item name BEFORE replacing items
                         let selected_name = self.breadcrumb_trail[0].state.selected()
                             .and_then(|idx| self.breadcrumb_trail[0].items.get(idx))
                             .map(|item| item.name.clone());
 
+                        let old_states_count = self.breadcrumb_trail[0].file_sync_states.len();
                         self.breadcrumb_trail[0].items = items.clone();
+                        log_bug(&format!("browse_result: after items replace - HashMap still has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
 
-                        // Load sync states from cache
-                        let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+                        // Load cached states
+                        let cached_states = self.load_sync_states_from_cache(&folder_id, &items, None);
 
-                        // Mark local-only items with LocalOnly sync state
-                        for local_item_name in &local_item_names {
-                            sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                        // Only replace if we got a reasonable number of cached states
+                        // If cache returned very few states, keep existing in-memory states to avoid flash
+                        if cached_states.len() >= old_states_count || old_states_count == 0 {
+                            // Cache has good data or we have no existing states, use it
+                            let mut sync_states = cached_states;
+                            for local_item_name in &local_item_names {
+                                sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                            }
+                            log_bug(&format!("browse_result: {} REPLACING old={} new={} (THIS CLEARS STATES!)", folder_id, old_states_count, sync_states.len()));
+                            self.breadcrumb_trail[0].file_sync_states = sync_states;
+                            log_bug(&format!("browse_result: REPLACED! New count={}", self.breadcrumb_trail[0].file_sync_states.len()));
+                        } else {
+                            // Cache is stale/empty, keep existing states and merge in local-only items
+                            log_bug(&format!("browse_result: {} KEEPING old={} (cache only had {})", folder_id, old_states_count, cached_states.len()));
+
+                            // Log a sample of what's currently in the HashMap
+                            let sample_keys: Vec<_> = self.breadcrumb_trail[0].file_sync_states.keys().take(5).cloned().collect();
+                            log_bug(&format!("browse_result: KEEPING - sample keys in HashMap: {:?}", sample_keys));
+
+                            for local_item_name in &local_item_names {
+                                self.breadcrumb_trail[0].file_sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                            }
                         }
-
-                        self.breadcrumb_trail[0].file_sync_states = sync_states;
 
                         // Sort and restore selection using the saved name
                         self.sort_level_with_selection(0, selected_name);
@@ -646,6 +695,7 @@ impl App {
                                 .map(|item| item.name.clone());
 
                             level.items = items.clone();
+                            log_bug(&format!("browse_result: SUBDIRECTORY REPLACE at level_idx={} old={} new={}", idx, level.file_sync_states.len(), sync_states.len()));
                             level.file_sync_states = sync_states.clone();
 
                             // Sort and restore selection using the saved name
@@ -677,16 +727,37 @@ impl App {
 
                 // Update UI if this file is visible in current level
                 let mut updated = false;
-                for level in &mut self.breadcrumb_trail {
+                for (level_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Check if this file path belongs to this level
                         let level_prefix = level.prefix.as_deref().unwrap_or("");
                         log_debug(&format!("DEBUG [FileInfoResult UI update]: checking level with prefix={:?}", level_prefix));
                         if file_path.starts_with(level_prefix) {
                             let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
-                            log_debug(&format!("DEBUG [FileInfoResult UI update]: MATCH! Updating item_name={} to state={:?}", item_name, state));
-                            level.file_sync_states.insert(item_name.to_string(), state);
-                            updated = true;
+
+                            // Check if this was recently manually set - if so, ignore stale updates for 5 seconds
+                            let state_key = format!("{}:{}", folder_id, file_path);
+                            if let Some(&manual_set_time) = self.manually_set_states.get(&state_key) {
+                                if manual_set_time.elapsed() < std::time::Duration::from_secs(5) {
+                                    log_bug(&format!("file_info: SKIP {} (manually set {}ms ago)", item_name, manual_set_time.elapsed().as_millis()));
+                                    continue;
+                                } else {
+                                    log_bug(&format!("file_info: manual set EXPIRED for {} ({}ms ago)", item_name, manual_set_time.elapsed().as_millis()));
+                                }
+                            } else {
+                                log_bug(&format!("file_info: no manual set tracked for key={}", state_key));
+                            }
+
+                            // Only update if state actually changed to avoid unnecessary re-renders
+                            let current_state = level.file_sync_states.get(item_name).copied();
+                            if current_state != Some(state) {
+                                log_debug(&format!("DEBUG [FileInfoResult UI update]: MATCH! Updating item_name={} to state={:?}", item_name, state));
+                                log_bug(&format!("file_info: update {} {:?}->{:?} at level_idx={}", item_name, current_state, state, level_idx));
+                                level.file_sync_states.insert(item_name.to_string(), state);
+                                updated = true;
+                            } else {
+                                log_bug(&format!("file_info: skip {} (already {:?}) at level_idx={}", item_name, state, level_idx));
+                            }
                         } else {
                             log_debug(&format!("DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}", file_path, level_prefix));
                         }
@@ -708,20 +779,26 @@ impl App {
                 // Check if sequence changed
                 if let Some(&last_seq) = self.last_known_sequences.get(&folder_id) {
                     if last_seq != sequence {
-                        // Sequence changed! Invalidate cached data for this folder
+                        // Log HashMap size BEFORE any operations
+                        if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                            log_bug(&format!("seq_change: BEFORE operations - HashMap has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
+                        }
+
+                        log_bug(&format!("seq_change: {} {}->{}", folder_id, last_seq, sequence));
                         let _ = self.cache.invalidate_folder(&folder_id);
 
-                        // Clear in-memory sync states for this folder
+                        // Log HashMap size AFTER cache invalidation
                         if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
-                            for level in &mut self.breadcrumb_trail {
-                                if level.folder_id == folder_id {
-                                    level.file_sync_states.clear();
-                                }
-                            }
+                            log_bug(&format!("seq_change: after cache.invalidate - HashMap has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
                         }
 
                         // Clear discovered directories for this folder (so they get re-discovered with new sequence)
                         self.discovered_dirs.retain(|key| !key.starts_with(&format!("{}:", folder_id)));
+
+                        // Log HashMap size after discovered_dirs.retain
+                        if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
+                            log_bug(&format!("seq_change: after discovered_dirs.retain - HashMap has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
+                        }
                     }
                 }
 
@@ -831,8 +908,6 @@ impl App {
             event_listener::CacheInvalidation::File { folder_id, file_path } => {
                 log_debug(&format!("DEBUG [Event]: Invalidating file: folder={} path={}", folder_id, file_path));
                 let _ = self.cache.invalidate_single_file(&folder_id, &file_path);
-
-                // Invalidate folder status cache to refresh receiveOnlyTotalItems count
                 let _ = self.cache.invalidate_folder_status(&folder_id);
 
                 // Request fresh folder status
@@ -857,8 +932,15 @@ impl App {
                 if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
                     for (_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
-                            // Clear in-memory sync state for this file
-                            level.file_sync_states.remove(&file_path);
+                            // Don't remove manually-set states to prevent flash
+                            let state_key = format!("{}:{}", folder_id, file_path);
+                            if self.manually_set_states.contains_key(&state_key) {
+                                log_bug(&format!("file invalidation: SKIP removing {} (manually set)", file_path));
+                                // Don't remove - let the manual state persist
+                            } else {
+                                // Clear in-memory sync state for this file
+                                level.file_sync_states.remove(&file_path);
+                            }
 
                             // Check if this level is showing the parent directory
                             let level_prefix = level.prefix.as_deref();
@@ -1987,6 +2069,8 @@ impl App {
     }
 
     async fn toggle_ignore(&mut self) -> Result<()> {
+        log_bug("toggle_ignore: START");
+
         // Only works when focused on a breadcrumb level (not folder list)
         if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
@@ -2000,6 +2084,7 @@ impl App {
         let level = &self.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
         let prefix = level.prefix.clone();
+        log_bug(&format!("toggle_ignore: folder={} states={}", folder_id, level.file_sync_states.len()));
 
         // Get selected item
         let selected = match level.state.selected() {
@@ -2014,6 +2099,7 @@ impl App {
         let item = &level.items[selected];
         let item_name = item.name.clone(); // Clone for later use
         let sync_state = level.file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
+        log_bug(&format!("toggle_ignore: item={} state={:?}", item_name, sync_state));
 
         // Build the relative path from folder root
         let relative_path = if let Some(ref prefix) = prefix {
@@ -2047,25 +2133,30 @@ impl App {
                 // Immediately show as Unknown to give user feedback
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                     level.file_sync_states.insert(item_name.clone(), SyncState::Unknown);
+                    log_bug(&format!("toggle_ignore: set {} to Unknown (un-ignoring)", item_name));
                 }
 
-                // Wait for rescan to complete so Syncthing processes the ignore change
-                self.client.rescan_folder(&folder_id).await?;
-
-                // Now fetch the fresh state
+                // Trigger rescan and state fetch in background (non-blocking)
+                let client = self.client.clone();
+                let folder_id_clone = folder_id.clone();
                 let file_path_for_api = if let Some(ref prefix) = prefix {
                     format!("{}/{}", prefix.trim_matches('/'), item_name)
                 } else {
                     item_name.clone()
                 };
+                let api_tx = self.api_tx.clone();
 
-                // Fetch and update state
-                if let Ok(file_details) = self.client.get_file_info(&folder_id, &file_path_for_api).await {
-                    let new_state = file_details.determine_sync_state();
-                    if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                        level.file_sync_states.insert(item_name, new_state);
-                    }
-                }
+                tokio::spawn(async move {
+                    // Wait for rescan to complete
+                    let _ = client.rescan_folder(&folder_id_clone).await;
+
+                    // Request fresh file info via API service (will update UI when done)
+                    let _ = api_tx.send(api_service::ApiRequest::GetFileInfo {
+                        folder_id: folder_id_clone,
+                        file_path: file_path_for_api,
+                        priority: api_service::Priority::High,
+                    });
+                });
             } else {
                 // Multiple patterns match - show selection menu
                 let mut selection_state = ListState::default();
@@ -2086,9 +2177,22 @@ impl App {
 
             self.client.set_ignore_patterns(&folder_id, updated_patterns).await?;
 
-            // Immediately mark as ignored in UI
+            // Immediately mark as ignored in UI and cache
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+                log_bug(&format!("toggle_ignore: set {} to Ignored", item_name));
+
+                // Update cache immediately so browse refresh doesn't overwrite with stale data
+                let _ = self.cache.save_sync_state(&folder_id, &relative_path, SyncState::Ignored, 0);
+                log_bug(&format!("toggle_ignore: saved Ignored to cache for {}", relative_path));
+
+                // Track that we manually set this state to prevent stale updates
+                let state_key = format!("{}:{}", folder_id, relative_path);
+                self.manually_set_states.insert(state_key, Instant::now());
+
+                // Verify it's actually in the HashMap
+                let verify = level.file_sync_states.get(&item_name);
+                log_bug(&format!("toggle_ignore: VERIFY {} is now {:?} in HashMap at level_idx={}", item_name, verify, level_idx));
             }
 
             // Trigger rescan in background
@@ -2099,6 +2203,12 @@ impl App {
             });
         }
 
+        // Log HashMap size when returning
+        if !self.breadcrumb_trail.is_empty() {
+            log_bug(&format!("toggle_ignore: END - HashMap now has {} states", self.breadcrumb_trail[0].file_sync_states.len()));
+        } else {
+            log_bug("toggle_ignore: END");
+        }
         Ok(())
     }
 
@@ -2609,9 +2719,14 @@ async fn main() -> Result<()> {
 
     // Set debug mode
     DEBUG_MODE.store(args.debug, Ordering::Relaxed);
+    BUG_MODE.store(args.bug, Ordering::Relaxed);
 
     if args.debug {
         log_debug("Debug mode enabled");
+    }
+
+    if args.bug {
+        log_bug("Bug mode enabled - logging to /tmp/synctui-bug.log");
     }
 
     // Determine config file path
