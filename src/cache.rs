@@ -62,7 +62,11 @@ impl CacheDb {
                 local_bytes INTEGER NOT NULL,
                 need_bytes INTEGER NOT NULL,
                 receive_only_changed_bytes INTEGER NOT NULL,
-                global_total_items INTEGER NOT NULL DEFAULT 0
+                global_total_items INTEGER NOT NULL DEFAULT 0,
+                local_files INTEGER NOT NULL DEFAULT 0,
+                local_directories INTEGER NOT NULL DEFAULT 0,
+                global_files INTEGER NOT NULL DEFAULT 0,
+                global_directories INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS browse_cache (
@@ -101,7 +105,8 @@ impl CacheDb {
     pub fn get_folder_status(&self, folder_id: &str) -> Result<Option<FolderStatus>> {
         let mut stmt = self.conn.prepare(
             "SELECT state, need_total_items, receive_only_total_items, global_bytes,
-                    local_bytes, need_bytes, receive_only_changed_bytes, global_total_items
+                    local_bytes, need_bytes, receive_only_changed_bytes, global_total_items,
+                    local_files, local_directories, global_files, global_directories
              FROM folder_status WHERE folder_id = ?1"
         )?;
 
@@ -116,16 +121,16 @@ impl CacheDb {
                 need_bytes: row.get(5)?,
                 receive_only_changed_bytes: row.get(6)?,
                 global_total_items: row.get(7)?,
+                local_files: row.get(8)?,
+                local_directories: row.get(9)?,
+                global_files: row.get(10)?,
+                global_directories: row.get(11)?,
                 // Other fields with default values
                 global_deleted: 0,
-                global_directories: 0,
-                global_files: 0,
                 global_symlinks: 0,
                 in_sync_bytes: 0,
                 in_sync_files: 0,
                 local_deleted: 0,
-                local_directories: 0,
-                local_files: 0,
                 local_symlinks: 0,
                 local_total_items: 0,
                 need_deletes: 0,
@@ -150,8 +155,9 @@ impl CacheDb {
         self.conn.execute(
             "INSERT OR REPLACE INTO folder_status
              (folder_id, sequence, state, need_total_items, receive_only_total_items,
-              global_bytes, local_bytes, need_bytes, receive_only_changed_bytes, global_total_items)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              global_bytes, local_bytes, need_bytes, receive_only_changed_bytes, global_total_items,
+              local_files, local_directories, global_files, global_directories)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 folder_id,
                 sequence as i64,
@@ -163,6 +169,10 @@ impl CacheDb {
                 status.need_bytes as i64,
                 status.receive_only_changed_bytes as i64,
                 status.global_total_items as i64,
+                status.local_files as i64,
+                status.local_directories as i64,
+                status.global_files as i64,
+                status.global_directories as i64,
             ],
         )?;
 
