@@ -389,7 +389,7 @@ impl App {
 
         if !app.folders.is_empty() {
             app.folders_state.select(Some(0));
-            app.load_root_level().await?;
+            app.load_root_level(true).await?;  // Preview mode - focus stays on folders
         }
 
         Ok(app)
@@ -1333,7 +1333,7 @@ impl App {
         }
     }
 
-    async fn load_root_level(&mut self) -> Result<()> {
+    async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
             if let Some(folder) = self.folders.get(selected) {
                 // Don't try to browse paused folders
@@ -1370,7 +1370,7 @@ impl App {
                     // Mark as loading
                     self.loading_browse.insert(browse_key.clone());
 
-                    // Cache miss - fetch from API (BLOCKING for root level)
+                    // Cache miss - fetch from API
                     self.cache_hit = Some(false);
                     let mut items = self.client.browse_folder(&folder.id, None).await?;
 
@@ -1416,7 +1416,11 @@ impl App {
                     translated_base_path,
                     file_sync_states,
                 }];
-                self.focus_level = 1;
+
+                // Only change focus if not in preview mode
+                if !preview_only {
+                    self.focus_level = 1;
+                }
 
                 // Apply initial sorting
                 self.sort_current_level();
@@ -1637,7 +1641,11 @@ impl App {
 
     fn sort_current_level(&mut self) {
         if self.focus_level == 0 {
-            return; // No sorting for folders list
+            // In preview mode (focus on folder list), sort the first breadcrumb if it exists
+            if !self.breadcrumb_trail.is_empty() {
+                self.sort_level(0);
+            }
+            return;
         }
         let level_idx = self.focus_level - 1;
         self.sort_level(level_idx);
@@ -1670,7 +1678,7 @@ impl App {
         self.sort_all_levels(); // Apply to all levels
     }
 
-    fn next_item(&mut self) {
+    async fn next_item(&mut self) {
         if self.focus_level == 0 {
             // Navigate folders
             let i = match self.folders_state.selected() {
@@ -1684,6 +1692,8 @@ impl App {
                 None => 0,
             };
             self.folders_state.select(Some(i));
+            // Auto-load the selected folder's root directory as preview (don't change focus)
+            let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.focus_level - 1;
@@ -1706,7 +1716,7 @@ impl App {
         }
     }
 
-    fn previous_item(&mut self) {
+    async fn previous_item(&mut self) {
         if self.focus_level == 0 {
             // Navigate folders
             let i = match self.folders_state.selected() {
@@ -1720,6 +1730,8 @@ impl App {
                 None => 0,
             };
             self.folders_state.select(Some(i));
+            // Auto-load the selected folder's root directory as preview (don't change focus)
+            let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.focus_level - 1;
@@ -1742,10 +1754,12 @@ impl App {
         }
     }
 
-    fn jump_to_first(&mut self) {
+    async fn jump_to_first(&mut self) {
         if self.focus_level == 0 {
             if !self.folders.is_empty() {
                 self.folders_state.select(Some(0));
+                // Auto-load the selected folder's root directory as preview (don't change focus)
+                let _ = self.load_root_level(true).await;
             }
         } else {
             let level_idx = self.focus_level - 1;
@@ -1757,10 +1771,12 @@ impl App {
         }
     }
 
-    fn jump_to_last(&mut self) {
+    async fn jump_to_last(&mut self) {
         if self.focus_level == 0 {
             if !self.folders.is_empty() {
                 self.folders_state.select(Some(self.folders.len() - 1));
+                // Auto-load the selected folder's root directory as preview (don't change focus)
+                let _ = self.load_root_level(true).await;
             }
         } else {
             let level_idx = self.focus_level - 1;
@@ -1772,7 +1788,7 @@ impl App {
         }
     }
 
-    fn page_down(&mut self, page_size: usize) {
+    async fn page_down(&mut self, page_size: usize) {
         if self.focus_level == 0 {
             if self.folders.is_empty() {
                 return;
@@ -1782,6 +1798,8 @@ impl App {
                 None => 0,
             };
             self.folders_state.select(Some(i));
+            // Auto-load the selected folder's root directory as preview (don't change focus)
+            let _ = self.load_root_level(true).await;
         } else {
             let level_idx = self.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
@@ -1797,7 +1815,7 @@ impl App {
         }
     }
 
-    fn page_up(&mut self, page_size: usize) {
+    async fn page_up(&mut self, page_size: usize) {
         if self.focus_level == 0 {
             if self.folders.is_empty() {
                 return;
@@ -1807,6 +1825,8 @@ impl App {
                 None => 0,
             };
             self.folders_state.select(Some(i));
+            // Auto-load the selected folder's root directory as preview (don't change focus)
+            let _ = self.load_root_level(true).await;
         } else {
             let level_idx = self.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
@@ -1822,12 +1842,12 @@ impl App {
         }
     }
 
-    fn half_page_down(&mut self, visible_height: usize) {
-        self.page_down(visible_height / 2);
+    async fn half_page_down(&mut self, visible_height: usize) {
+        self.page_down(visible_height / 2).await;
     }
 
-    fn half_page_up(&mut self, visible_height: usize) {
-        self.page_up(visible_height / 2);
+    async fn half_page_up(&mut self, visible_height: usize) {
+        self.page_up(visible_height / 2).await;
     }
 
     fn rescan_selected_folder(&mut self) -> Result<()> {
@@ -2411,19 +2431,19 @@ impl App {
             // Vim keybindings with Ctrl modifiers (check before 'd' and other letters)
             KeyCode::Char('d') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.last_key_was_g = false;
-                self.half_page_down(20); // Use reasonable default, will be more precise with frame height
+                self.half_page_down(20).await; // Use reasonable default, will be more precise with frame height
             }
             KeyCode::Char('u') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.last_key_was_g = false;
-                self.half_page_up(20);
+                self.half_page_up(20).await;
             }
             KeyCode::Char('f') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.last_key_was_g = false;
-                self.page_down(40);
+                self.page_down(40).await;
             }
             KeyCode::Char('b') if self.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.last_key_was_g = false;
-                self.page_up(40);
+                self.page_up(40).await;
             }
             KeyCode::Char('d') => {
                 // Delete file from disk (with confirmation)
@@ -2456,16 +2476,16 @@ impl App {
             }
             KeyCode::Char('j') if self.vim_mode => {
                 self.last_key_was_g = false;
-                self.next_item();
+                self.next_item().await;
             }
             KeyCode::Char('k') if self.vim_mode => {
                 self.last_key_was_g = false;
-                self.previous_item();
+                self.previous_item().await;
             }
             KeyCode::Char('l') if self.vim_mode => {
                 self.last_key_was_g = false;
                 if self.focus_level == 0 {
-                    self.load_root_level().await?;
+                    self.load_root_level(false).await?;  // Not preview - actually enter folder
                 } else {
                     self.enter_directory().await?;
                 }
@@ -2473,7 +2493,7 @@ impl App {
             KeyCode::Char('g') if self.vim_mode => {
                 if self.last_key_was_g {
                     // gg - jump to first
-                    self.jump_to_first();
+                    self.jump_to_first().await;
                     self.last_key_was_g = false;
                 } else {
                     // First 'g' press
@@ -2482,32 +2502,32 @@ impl App {
             }
             KeyCode::Char('G') if self.vim_mode => {
                 self.last_key_was_g = false;
-                self.jump_to_last();
+                self.jump_to_last().await;
             }
             // Standard navigation keys (not advertised)
             KeyCode::PageDown => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.page_down(40);
+                self.page_down(40).await;
             }
             KeyCode::PageUp => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.page_up(40);
+                self.page_up(40).await;
             }
             KeyCode::Home => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.jump_to_first();
+                self.jump_to_first().await;
             }
             KeyCode::End => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.jump_to_last();
+                self.jump_to_last().await;
             }
             KeyCode::Left | KeyCode::Backspace => {
                 if self.vim_mode {
@@ -2520,7 +2540,7 @@ impl App {
                     self.last_key_was_g = false;
                 }
                 if self.focus_level == 0 {
-                    self.load_root_level().await?;
+                    self.load_root_level(false).await?;  // Not preview - actually enter folder
                 } else {
                     self.enter_directory().await?;
                 }
@@ -2529,13 +2549,13 @@ impl App {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.previous_item();
+                self.previous_item().await;
             }
             KeyCode::Down => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
-                self.next_item();
+                self.next_item().await;
             }
             _ => {
                 // Reset last_key_was_g on any other key

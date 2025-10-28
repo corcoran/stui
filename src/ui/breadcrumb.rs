@@ -85,12 +85,21 @@ fn build_list_item<'a>(
     icon_spans: Vec<Span<'a>>,
     panel_width: u16,
     display_mode: DisplayMode,
+    add_spacing: bool,
 ) -> ListItem<'a> {
     let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
 
+    // Add spacing prefix if requested (for non-focused breadcrumbs)
+    let spacing_prefix = if add_spacing {
+        vec![Span::raw("  ")]  // Two spaces to match "> " width
+    } else {
+        vec![]
+    };
+
     // If no display mode, just show icon + name
     if display_mode == DisplayMode::Off || item.mod_time.is_empty() {
-        let mut line_spans = icon_spans;
+        let mut line_spans = spacing_prefix;
+        line_spans.extend(icon_spans);
         line_spans.push(Span::raw(&item.name));
         return ListItem::new(Line::from(line_spans));
     }
@@ -128,7 +137,8 @@ fn build_list_item<'a>(
     // If everything fits, show it all with styled info
     if name_width + spacing + info_width <= available_width {
         let padding = available_width - name_width - info_width;
-        let mut line_spans = icon_spans;
+        let mut line_spans = spacing_prefix.clone();
+        line_spans.extend(icon_spans);
         line_spans.push(Span::raw(&item.name));
         line_spans.push(Span::raw(" ".repeat(padding)));
         line_spans.push(Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))));
@@ -170,7 +180,8 @@ fn build_list_item<'a>(
         if !truncated_info.is_empty() {
             let info_width = truncated_info.width();
             let padding = available_width - name_width - info_width;
-            let mut line_spans = icon_spans;
+            let mut line_spans = spacing_prefix.clone();
+            line_spans.extend(icon_spans);
             line_spans.push(Span::raw(&item.name));
             line_spans.push(Span::raw(" ".repeat(padding)));
             line_spans.push(Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))));
@@ -179,7 +190,8 @@ fn build_list_item<'a>(
     }
 
     // Not enough room for info, just show name
-    let mut line_spans = icon_spans;
+    let mut line_spans = spacing_prefix;
+    line_spans.extend(icon_spans);
     line_spans.push(Span::raw(&item.name));
     ListItem::new(Line::from(line_spans))
 }
@@ -227,27 +239,37 @@ pub fn render_breadcrumb_panel(
                 icon_spans,
                 panel_width,
                 display_mode,
+                !is_focused,  // Add spacing when not focused
             )
         })
         .collect();
 
-    let list = List::new(list_items)
+    // Build list widget with conditional styling
+    let border_color = if is_focused { Color::Cyan } else { Color::Gray };
+    let mut list = List::new(list_items)
         .block(
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(if is_focused {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::Gray)
-                }),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("> ");
+                .border_style(Style::default().fg(border_color)),
+        );
 
-    f.render_stateful_widget(list, area, state);
+    // Only add highlight when focused (spacing is baked into items when not focused)
+    if is_focused {
+        list = list
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            )
+            .highlight_symbol("> ");
+    }
+
+    // Render with state when focused, without state when not focused
+    if is_focused {
+        f.render_stateful_widget(list, area, state);
+    } else {
+        let mut empty_state = ratatui::widgets::ListState::default();
+        f.render_stateful_widget(list, area, &mut empty_state);
+    }
 }
