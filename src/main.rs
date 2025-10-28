@@ -1390,10 +1390,8 @@ impl App {
                 // Record load time
                 self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
-                let mut state = ListState::default();
-                if !items.is_empty() {
-                    state.select(Some(0));
-                }
+                // Create state without selecting anything - sort_current_level will handle selection
+                let state = ListState::default();
 
                 // Compute translated base path once
                 let translated_base_path = self.translate_path(folder, "");
@@ -1500,10 +1498,8 @@ impl App {
                 // Record load time
                 self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
-                let mut state = ListState::default();
-                if !items.is_empty() {
-                    state.select(Some(0));
-                }
+                // Create state without selecting anything - sort_current_level will handle selection
+                let state = ListState::default();
 
                 // Compute translated base path once for this level
                 let full_relative_path = new_prefix.trim_end_matches('/');
