@@ -396,31 +396,44 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image inside with centering
-                    // The protocol handles sizing/aspect ratio, we just need to center the result
+                    // Render image with proper centering
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
-                    // Use simple percentage-based centering - give it 90% of space centered
-                    let vertical_layout = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Percentage(5),   // Top padding
-                            Constraint::Percentage(90),  // Image area
-                            Constraint::Percentage(5),   // Bottom padding
-                        ])
-                        .split(inner_area);
+                    // Calculate the actual size the image will be rendered at
+                    // The protocol fits the image maintaining aspect ratio
+                    let render_rect = if let Some((img_w, img_h)) = metadata.dimensions {
+                        let img_aspect = img_w as f32 / img_h as f32;
+                        let area_aspect = inner_area.width as f32 / inner_area.height as f32;
 
-                    let horizontal_layout = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Percentage(5),   // Left padding
-                            Constraint::Percentage(90),  // Image area
-                            Constraint::Percentage(5),   // Right padding
-                        ])
-                        .split(vertical_layout[1]);
+                        let (render_width, render_height) = if img_aspect > area_aspect {
+                            // Image is wider - width is constrained
+                            let width = inner_area.width;
+                            let height = (width as f32 / img_aspect) as u16;
+                            (width, height.min(inner_area.height))
+                        } else {
+                            // Image is taller - height is constrained
+                            let height = inner_area.height;
+                            let width = (height as f32 * img_aspect) as u16;
+                            (width.min(inner_area.width), height)
+                        };
+
+                        // Center the calculated render rect within inner_area
+                        let x_offset = (inner_area.width.saturating_sub(render_width)) / 2;
+                        let y_offset = (inner_area.height.saturating_sub(render_height)) / 2;
+
+                        Rect {
+                            x: inner_area.x + x_offset,
+                            y: inner_area.y + y_offset,
+                            width: render_width,
+                            height: render_height,
+                        }
+                    } else {
+                        // No dimensions, just use full inner area
+                        inner_area
+                    };
 
                     let image = ratatui_image::StatefulImage::new(None);
-                    f.render_stateful_widget(image, horizontal_layout[1], protocol);
+                    f.render_stateful_widget(image, render_rect, protocol);
                 }
             }
             ImagePreviewState::Failed { metadata } => {
