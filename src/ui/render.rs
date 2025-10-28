@@ -3,7 +3,7 @@ use crate::App;
 
 use super::{
     breadcrumb::{self, DisplayMode},
-    dialogs, folder_list, layout, legend, status_bar, system_bar,
+    dialogs, folder_list, layout, legend, status_bar, system_bar, toast,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -131,6 +131,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             app.vim_mode,
             app.focus_level,
             can_restore,
+            app.open_command.is_some(),
         );
     }
 
@@ -187,5 +188,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     if let Some((_folder_id, _item_name, patterns, state)) = &mut app.pattern_selection {
         dialogs::render_pattern_selection(f, patterns, state);
+    }
+
+    // Render toast notification if active
+    if let Some((message, _timestamp)) = &app.toast_message {
+        toast::render_toast(f, size, message);
     }
 }

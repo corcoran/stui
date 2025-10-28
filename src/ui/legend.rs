@@ -13,6 +13,7 @@ pub fn render_legend(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
+    has_open_command: bool,
 ) {
     // Build a single line with all hotkeys that will wrap automatically
     let mut hotkey_spans = vec![];
@@ -40,6 +41,12 @@ pub fn render_legend(
         ]);
     }
 
+    // Copy - available in both folders and breadcrumbs
+    hotkey_spans.extend(vec![
+        Span::styled("c", Style::default().fg(Color::Yellow)),
+        Span::raw(":Copy path  "),
+    ]);
+
     // Actions that only apply to breadcrumbs (focus_level > 0), not folders
     if focus_level > 0 {
         hotkey_spans.extend(vec![
@@ -49,6 +56,17 @@ pub fn render_legend(
             Span::raw(":Reverse  "),
             Span::styled("t", Style::default().fg(Color::Yellow)),
             Span::raw(":Info  "),
+        ]);
+
+        // Open - only show if open_command is configured
+        if has_open_command {
+            hotkey_spans.extend(vec![
+                Span::styled("o", Style::default().fg(Color::Yellow)),
+                Span::raw(":Open  "),
+            ]);
+        }
+
+        hotkey_spans.extend(vec![
             Span::styled("i", Style::default().fg(Color::Yellow)),
             Span::raw(":Ignore  "),
             Span::styled("I", Style::default().fg(Color::Yellow)),

@@ -56,8 +56,10 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### User Actions
 
+- `c`: Copy folder ID (folders) or file/directory path (files/folders, uses mapped host paths) to clipboard
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
+- `o`: Open file/directory with configured command (e.g., `xdg-open`, `code`, `vim`)
 - `d`: Delete file/directory from disk (with confirmation prompt)
 - `r`: Rescan folder via `POST /rest/db/scan`
 - `R`: Restore deleted files (revert receive-only folder)
@@ -101,6 +103,8 @@ YAML config file (currently `./config.yaml`, planned: `~/.config/synctui/config.
 - Base URL
 - `path_map` (container-to-host path translations)
 - `vim_mode` (optional, boolean to enable vim keybindings)
+- `open_command` (optional, string): Command to execute for opening files/directories (e.g., `xdg-open`, `code`, `vim`)
+- `clipboard_command` (optional, string): Command to copy text to clipboard via stdin (e.g., `wl-copy`, `xclip`, `pbcopy`).
 
 CLI flags:
 - `--debug`: Enable debug logging to `/tmp/synctui-debug.log`

@@ -2,6 +2,8 @@ api_key: "P3bR2oc3Dte2GCtcYvpAkbytTnR7iWSC"
 base_url: "http://127.0.0.1:8384"
 icon_mode: "emoji"  # Options: "emoji" or "nerdfont"
 vim_mode: false
+open_command: "xdg-open"  # xdg-open, open, explorer
+clipboard_command: "wl-copy"  # wl-copy (Wayland), xclip, xsel, pbcopy (macOS), clip.exe (Windows)
 path_map:
   "/data": "/home/jeff/sync"
   "/photos": "/home/jeff/Photos"

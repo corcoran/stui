@@ -11,6 +11,10 @@ pub struct Config {
     pub vim_mode: bool,
     #[serde(default = "default_icon_mode")]
     pub icon_mode: String,
+    #[serde(default)]
+    pub open_command: Option<String>,
+    #[serde(default)]
+    pub clipboard_command: Option<String>,
 }
 
 fn default_icon_mode() -> String {

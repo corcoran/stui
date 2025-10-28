@@ -64,6 +64,14 @@ base_url: "http://127.0.0.1:8384"
 # Optional: Icon display mode ("emoji" or "nerdfont")
 icon_mode: "nerdfont"
 
+# Optional: Command to open files/directories (e.g., xdg-open, code, vim)
+# Linux: "xdg-open", macOS: "open", Windows: "explorer"
+open_command: "xdg-open"
+
+# Optional: Command to copy to clipboard (receives text via stdin)
+# Wayland: "wl-copy", X11: "xclip" or "xsel", macOS: "pbcopy", Windows: "clip.exe"
+clipboard_command: "wl-copy"
+
 # Optional: Map container paths to host paths (for Docker setups)
 path_map:
   "/data": "/home/user/syncthing-data"
@@ -126,8 +134,10 @@ synctui --debug
 
 | Key | Action | Confirmation |
 |-----|--------|--------------|
+| `c` | Copy folder ID (folders) or file/directory path (files/folders) to clipboard | No |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |
 | `I` | Ignore AND delete from disk | No (immediate) |
+| `o` | Open file/directory with configured command | No |
 | `d` | Delete file/directory from disk | Yes |
 | `r` | Rescan folder (refresh from disk) | No |
 | `R` | Restore deleted files (revert receive-only folder) | Yes |

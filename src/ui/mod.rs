@@ -10,6 +10,7 @@
 // - legend: Renders hotkey legend
 // - status_bar: Renders bottom status bar with metrics
 // - dialogs: Renders confirmation dialogs (revert, delete, pattern selection)
+// - toast: Renders toast notifications (brief pop-up messages)
 
 pub mod icons;
 pub mod dialogs;
@@ -20,6 +21,7 @@ pub mod folder_list;
 pub mod breadcrumb;
 pub mod layout;
 pub mod render;
+pub mod toast;
 
 // Re-export main render function for convenience
 pub use render::render;

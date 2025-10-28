@@ -183,6 +183,8 @@ pub struct App {
     pub should_quit: bool,
     pub display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
     pub vim_mode: bool, // Enable vim keybindings
+    open_command: Option<String>, // Optional command to open files/directories
+    clipboard_command: Option<String>, // Optional command to copy to clipboard (receives text via stdin)
     last_key_was_g: bool, // Track 'g' key for 'gg' command
     last_user_action: Instant, // Track last user interaction for idle detection
     pub sort_mode: SortMode,     // Current sort mode (session-wide)
@@ -201,6 +203,8 @@ pub struct App {
     pub confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
     // Pattern selection menu for removing ignores
     pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
+    // Toast notification
+    pub toast_message: Option<(String, Instant)>, // If Some, shows toast notification (message, timestamp)
     // Track manually set states to prevent stale file_info updates from causing flashes
     manually_set_states: HashMap<String, ManualStateChange>, // "folder_id:path" -> action + timestamp
     // Track actively syncing files (from ItemStarted/ItemFinished events)
@@ -357,6 +361,8 @@ impl App {
             should_quit: false,
             display_mode: DisplayMode::TimestampAndSize, // Start with most info
             vim_mode: config.vim_mode,
+            open_command: config.open_command,
+            clipboard_command: config.clipboard_command,
             last_key_was_g: false,
             last_user_action: Instant::now(),
             sort_mode: SortMode::Alphabetical,
@@ -371,6 +377,7 @@ impl App {
             confirm_revert: None,
             confirm_delete: None,
             pattern_selection: None,
+            toast_message: None,
             manually_set_states: HashMap::new(),
             syncing_files: HashSet::new(),
             api_tx,
@@ -2153,6 +2160,187 @@ impl App {
         Ok(())
     }
 
+    fn open_selected_item(&mut self) -> Result<()> {
+        // Check if open_command is configured
+        let Some(ref open_cmd) = self.open_command else {
+            self.toast_message = Some(("Error: open_command not configured".to_string(), Instant::now()));
+            return Ok(());
+        };
+
+        // Only works when focused on a breadcrumb level (not folder list)
+        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+            return Ok(());
+        }
+
+        let level_idx = self.focus_level - 1;
+        if level_idx >= self.breadcrumb_trail.len() {
+            return Ok(());
+        }
+
+        let level = &self.breadcrumb_trail[level_idx];
+
+        // Get selected item
+        let selected = match level.state.selected() {
+            Some(idx) => idx,
+            None => return Ok(()),
+        };
+
+        if selected >= level.items.len() {
+            return Ok(());
+        }
+
+        let item = &level.items[selected];
+
+        // Build the full host path
+        // Note: translated_base_path already includes the full path to this directory level
+        let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), item.name);
+
+        // Check if file/directory exists on disk before trying to open
+        if !std::path::Path::new(&host_path).exists() {
+            log_debug(&format!("open_selected_item: Path does not exist: {}", host_path));
+            return Ok(()); // Nothing to open
+        }
+
+        // Execute command in background (spawn, don't wait for completion)
+        // This allows GUI apps and editors to open without blocking the TUI
+        let result = std::process::Command::new(open_cmd)
+            .arg(&host_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match result {
+            Ok(_child) => {
+                // Log in debug mode
+                if crate::DEBUG_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+                    log_debug(&format!("open_command: spawned {} {}", open_cmd, host_path));
+                }
+                // Show toast notification with full path
+                let toast_msg = format!("Opened: {}", host_path);
+                self.toast_message = Some((toast_msg, Instant::now()));
+            }
+            Err(e) => {
+                log_debug(&format!("Failed to execute open_command '{}': {}", open_cmd, e));
+                // Show error toast
+                let toast_msg = format!("Error: Failed to open with '{}'", open_cmd);
+                self.toast_message = Some((toast_msg, Instant::now()));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn copy_to_clipboard(&mut self) -> Result<()> {
+        let text_to_copy = if self.focus_level == 0 {
+            // In folder list - copy folder ID
+            if let Some(selected) = self.folders_state.selected() {
+                if let Some(folder) = self.folders.get(selected) {
+                    Some(folder.id.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            // In breadcrumbs - copy file/directory path (mapped host path)
+            if self.breadcrumb_trail.is_empty() {
+                return Ok(());
+            }
+
+            let level_idx = self.focus_level - 1;
+            if level_idx >= self.breadcrumb_trail.len() {
+                return Ok(());
+            }
+
+            let level = &self.breadcrumb_trail[level_idx];
+
+            // Get selected item
+            let selected = match level.state.selected() {
+                Some(idx) => idx,
+                None => return Ok(()),
+            };
+
+            if selected >= level.items.len() {
+                return Ok(());
+            }
+
+            let item = &level.items[selected];
+
+            // Build the full host path
+            // Note: translated_base_path already includes the full path to this directory level
+            let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), item.name);
+
+            Some(host_path)
+        };
+
+        // Copy to clipboard if we have text
+        if let Some(text) = text_to_copy {
+            // Always log clipboard operations (not just in debug mode) since they can fail silently
+            use std::io::Write;
+            let log_file = std::path::Path::new("/tmp/synctui-debug.log");
+
+            if let Some(ref clipboard_cmd) = self.clipboard_command {
+                // Use user-configured clipboard command (text sent via stdin)
+                // Spawn in background and write to stdin without waiting
+                let result = std::process::Command::new(clipboard_cmd)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .and_then(|mut child| {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin.write_all(text.as_bytes())?;
+                            // Close stdin to signal EOF
+                            drop(stdin);
+                        }
+                        Ok(())
+                    });
+
+                match result {
+                    Ok(_) => {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(log_file)
+                            .and_then(|mut f| {
+                                writeln!(f, "Copied to clipboard via {}: {}", clipboard_cmd, text)
+                            });
+                        // Show toast notification with full path
+                        let toast_msg = format!("Copied: {}", text);
+                        self.toast_message = Some((toast_msg, Instant::now()));
+                    }
+                    Err(e) => {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(log_file)
+                            .and_then(|mut f| {
+                                writeln!(f, "ERROR: Failed to execute clipboard command '{}': {}", clipboard_cmd, e)
+                            });
+                        // Show error toast
+                        let toast_msg = format!("Error: Failed to copy with '{}'", clipboard_cmd);
+                        self.toast_message = Some((toast_msg, Instant::now()));
+                    }
+                }
+            } else {
+                // No clipboard command configured - log message
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_file)
+                    .and_then(|mut f| {
+                        writeln!(f, "No clipboard_command configured - set clipboard_command in config.yaml")
+                    });
+                // Show error toast
+                self.toast_message = Some(("Error: clipboard_command not configured".to_string(), Instant::now()));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn toggle_ignore(&mut self) -> Result<()> {
         log_bug("toggle_ignore: START");
 
@@ -2733,6 +2921,14 @@ impl App {
                 // Ignore file AND delete from disk
                 let _ = self.ignore_and_delete().await;
             }
+            KeyCode::Char('o') => {
+                // Open file/directory with configured command
+                let _ = self.open_selected_item();
+            }
+            KeyCode::Char('c') => {
+                // Copy folder ID (folders) or file/directory path (breadcrumbs)
+                let _ = self.copy_to_clipboard();
+            }
             KeyCode::Char('s') => {
                 // Cycle through sort modes
                 self.cycle_sort_mode();
@@ -2948,6 +3144,13 @@ async fn run_app<B: ratatui::backend::Backend>(
             ui::render(f, app);
 
         })?;
+
+        // Auto-dismiss toast after 1.5 seconds
+        if let Some((_, timestamp)) = app.toast_message {
+            if timestamp.elapsed().as_millis() >= 1500 {
+                app.toast_message = None;
+            }
+        }
 
         if app.should_quit {
             break;
