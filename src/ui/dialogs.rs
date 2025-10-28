@@ -465,7 +465,9 @@ fn render_preview_column(
                         inner_area
                     };
 
-                    let image = ratatui_image::StatefulImage::new(None);
+                    // Use Lanczos3 for high-quality downscaling (default is Nearest which is blurry)
+                    let image = ratatui_image::StatefulImage::new(None)
+                        .resize(ratatui_image::Resize::Fit(Some(image::imageops::FilterType::Lanczos3)));
                     f.render_stateful_widget(image, render_rect, protocol);
                 }
             }
