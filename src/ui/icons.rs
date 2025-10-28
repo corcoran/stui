@@ -29,7 +29,8 @@ pub enum FolderState {
 #[derive(Debug, Clone)]
 pub struct IconTheme {
     // File type colors
-    pub folder_color: Color,
+    pub sync_folder_color: Color,  // Syncthing folders (left panel)
+    pub folder_color: Color,        // Subdirectories
     pub file_color: Color,
 
     // Status colors
@@ -49,8 +50,9 @@ impl Default for IconTheme {
     fn default() -> Self {
         Self {
             // File types
-            folder_color: Color::Rgb(180, 140, 210), // Pastel purple
-            file_color: Color::Rgb(150, 180, 220),   // Pastel blue
+            sync_folder_color: Color::Rgb(220, 140, 170), // Pink for Syncthing folders
+            folder_color: Color::Rgb(180, 140, 210),      // Pastel purple for subdirectories
+            file_color: Color::Rgb(150, 180, 220),        // Pastel blue
 
             // Status colors (pastels)
             synced_color: Color::Rgb(150, 220, 180),      // Pastel green
@@ -95,7 +97,7 @@ impl IconRenderer {
 
     /// Render a folder with its status
     pub fn folder_with_status(&self, state: FolderState) -> Vec<Span<'static>> {
-        let mut spans = vec![self.folder_icon()];
+        let mut spans = vec![self.sync_folder_icon()];
 
         let status_span = match state {
             FolderState::Loading => self.status_icon(StatusType::Scanning),
@@ -174,7 +176,19 @@ impl IconRenderer {
         }
     }
 
-    /// Get folder icon span
+    /// Get sync folder icon span (for Syncthing folders in left panel)
+    fn sync_folder_icon(&self) -> Span<'static> {
+        match self.mode {
+            IconMode::Emoji => {
+                Span::styled("📂", Style::default().fg(self.theme.sync_folder_color))
+            }
+            IconMode::NerdFont => {
+                Span::styled("\u{F07C}", Style::default().fg(self.theme.sync_folder_color))
+            }
+        }
+    }
+
+    /// Get folder icon span (for subdirectories)
     fn folder_icon(&self) -> Span<'static> {
         match self.mode {
             IconMode::Emoji => {
