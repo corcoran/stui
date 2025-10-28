@@ -222,6 +222,24 @@ fn render_metadata_column(
         Span::raw(&state.browse_item.mod_time),
     ]));
 
+    // Image resolution (if this is an image with loaded metadata)
+    if state.is_image {
+        if let Some(ref image_state) = state.image_state {
+            match image_state {
+                crate::ImagePreviewState::Ready { metadata, .. } |
+                crate::ImagePreviewState::Failed { metadata } => {
+                    if let Some((width, height)) = metadata.dimensions {
+                        lines.push(Line::from(vec![
+                            Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
+                            Span::raw(format!("{}x{}", width, height)),
+                        ]));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     lines.push(Line::from(""));
 
     // File details from API
