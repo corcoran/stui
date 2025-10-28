@@ -205,6 +205,7 @@ pub fn render_breadcrumb_panel(
     state: &mut ratatui::widgets::ListState,
     title: &str,
     is_focused: bool,
+    is_parent_selected: bool,
     display_mode: DisplayMode,
     icon_renderer: &IconRenderer,
     translated_base_path: &str,
@@ -239,13 +240,20 @@ pub fn render_breadcrumb_panel(
                 icon_spans,
                 panel_width,
                 display_mode,
-                !is_focused,  // Add spacing when not focused
+                !is_focused && !is_parent_selected,  // Add spacing when neither focused nor parent selected
             )
         })
         .collect();
 
     // Build list widget with conditional styling
-    let border_color = if is_focused { Color::Cyan } else { Color::Gray };
+    let border_color = if is_focused {
+        Color::Cyan
+    } else if is_parent_selected {
+        Color::Blue  // Distinct color for parent selection
+    } else {
+        Color::Gray
+    };
+
     let mut list = List::new(list_items)
         .block(
             Block::default()
@@ -254,7 +262,7 @@ pub fn render_breadcrumb_panel(
                 .border_style(Style::default().fg(border_color)),
         );
 
-    // Only add highlight when focused (spacing is baked into items when not focused)
+    // Add highlight when focused (with arrow) or parent selected (without arrow)
     if is_focused {
         list = list
             .highlight_style(
@@ -263,10 +271,15 @@ pub fn render_breadcrumb_panel(
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("> ");
-    }
-
-    // Render with state when focused, without state when not focused
-    if is_focused {
+        f.render_stateful_widget(list, area, state);
+    } else if is_parent_selected {
+        list = list
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            )
+            .highlight_symbol("  ");  // Two spaces to maintain alignment
         f.render_stateful_widget(list, area, state);
     } else {
         let mut empty_state = ratatui::widgets::ListState::default();

@@ -633,7 +633,7 @@ impl App {
 
                 // Update UI if this file is visible in current level
                 let mut updated = false;
-                for (level_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                for (_level_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Check if this file path belongs to this level
                         let level_prefix = level.prefix.as_deref().unwrap_or("");

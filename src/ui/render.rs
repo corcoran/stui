@@ -61,6 +61,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
         };
 
         let is_focused = app.focus_level == idx + 1;
+        // All ancestor breadcrumbs should remain highlighted when drilling deeper
+        let is_parent_selected = app.focus_level > idx + 1;
 
         // Convert DisplayMode from main.rs to ui::breadcrumb::DisplayMode
         let display_mode = match app.display_mode {
@@ -92,6 +94,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             &mut level.state,
             &title,
             is_focused,
+            is_parent_selected,
             display_mode,
             &app.icon_renderer,
             &level.translated_base_path,

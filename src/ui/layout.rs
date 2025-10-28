@@ -52,9 +52,22 @@ pub fn calculate_layout(
     let folders_visible = start_pane == 0;
 
     // Create horizontal split for all panes
-    let constraints: Vec<Constraint> = (0..visible_panes)
-        .map(|_| Constraint::Ratio(1, visible_panes as u32))
-        .collect();
+    // Give more space to the rightmost (current) pane
+    let constraints: Vec<Constraint> = if visible_panes == 1 {
+        vec![Constraint::Percentage(100)]
+    } else if visible_panes == 2 {
+        // 40% for parent, 60% for current
+        vec![Constraint::Percentage(40), Constraint::Percentage(60)]
+    } else {
+        // For 3+ panes: current gets 50%, rest split the remaining 50%
+        let mut c = Vec::new();
+        let parent_panes = visible_panes - 1;
+        for _ in 0..parent_panes {
+            c.push(Constraint::Ratio(1, parent_panes as u32 * 2)); // Each parent gets 1/(2*parent_panes)
+        }
+        c.push(Constraint::Percentage(50)); // Current gets 50%
+        c
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -79,10 +92,24 @@ pub fn calculate_layout(
             ])
             .split(breadcrumb_area);
 
-        // Create new chunks for breadcrumb panels
-        let breadcrumb_constraints: Vec<Constraint> = (0..(visible_panes - 1))
-            .map(|_| Constraint::Ratio(1, (visible_panes - 1) as u32))
-            .collect();
+        // Create new chunks for breadcrumb panels (folders already takes first chunk)
+        // Give more space to the rightmost (current) breadcrumb
+        let num_breadcrumbs = visible_panes - 1;
+        let breadcrumb_constraints: Vec<Constraint> = if num_breadcrumbs == 1 {
+            vec![Constraint::Percentage(100)]
+        } else if num_breadcrumbs == 2 {
+            // 40% for parent, 60% for current
+            vec![Constraint::Percentage(40), Constraint::Percentage(60)]
+        } else {
+            // For 3+ breadcrumbs: current gets 50%, rest split the remaining 50%
+            let mut c = Vec::new();
+            let parent_panes = num_breadcrumbs - 1;
+            for _ in 0..parent_panes {
+                c.push(Constraint::Ratio(1, parent_panes as u32 * 2));
+            }
+            c.push(Constraint::Percentage(50));
+            c
+        };
 
         let bc = Layout::default()
             .direction(Direction::Horizontal)
@@ -100,9 +127,22 @@ pub fn calculate_layout(
             ])
             .split(content_area);
 
-        let breadcrumb_constraints: Vec<Constraint> = (0..visible_panes)
-            .map(|_| Constraint::Ratio(1, visible_panes as u32))
-            .collect();
+        // Give more space to the rightmost (current) breadcrumb
+        let breadcrumb_constraints: Vec<Constraint> = if visible_panes == 1 {
+            vec![Constraint::Percentage(100)]
+        } else if visible_panes == 2 {
+            // 40% for parent, 60% for current
+            vec![Constraint::Percentage(40), Constraint::Percentage(60)]
+        } else {
+            // For 3+ breadcrumbs: current gets 50%, rest split the remaining 50%
+            let mut c = Vec::new();
+            let parent_panes = visible_panes - 1;
+            for _ in 0..parent_panes {
+                c.push(Constraint::Ratio(1, parent_panes as u32 * 2));
+            }
+            c.push(Constraint::Percentage(50));
+            c
+        };
 
         let bc = Layout::default()
             .direction(Direction::Horizontal)
