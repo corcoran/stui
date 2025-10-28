@@ -96,13 +96,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
             area,
             &level.items,
             &level.file_sync_states,
-            &level.ignored_exists,
             &mut level.state,
             &title,
             is_focused,
             is_parent_selected,
             display_mode,
             &app.icon_renderer,
+            &level.translated_base_path,
+            level.prefix.as_deref(),
         );
 
         breadcrumb_idx += 1;

@@ -3,13 +3,15 @@
 ## Project Overview
 
 Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing folders, showing contents, adding .stignore rules, and deleting directories safely with Docker path-mapping support.
+What makes this app unique is the file management part (breadcrumbs, directories, files) part. Being able to navigate your files and selectively ignore and see if the file is ignored but still exists on the disk is a feature missing across most Syncthing apps. It is one of the most important features and should be modified with care ONLY.
 
 ## claude instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
 - Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
 - Make logging comprehensive but concise - debug logs should be informative without overwhelming
-- Always clean up debug logs for one-off issues but keep helpful logs that may be used later
+- Always clean up `bug` logs for one-off issues but keep helpful logs (convert into debug) that may be used later
+
 
 ## Architecture Context
 
