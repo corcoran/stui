@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::{FileInfoPopupState, api::Device};
+use crate::{FileInfoPopupState, ImagePreviewState, api::Device};
 use crate::utils;
 use super::icons::IconRenderer;
 
@@ -186,7 +186,7 @@ pub fn render_file_info(
 fn render_metadata_column(
     f: &mut Frame,
     area: Rect,
-    state: &FileInfoPopupState,
+    state: &mut FileInfoPopupState,
     devices: &[Device],
     my_device_id: Option<&str>,
     icon_renderer: &IconRenderer,
@@ -363,71 +363,161 @@ fn render_preview_column(
     area: Rect,
     state: &mut FileInfoPopupState,
 ) {
-    let content = match &state.file_content {
-        Ok(text) => text.clone(),
-        Err(msg) => format!("Error: {}", msg),
-    };
-
-    // Calculate the effective width for text (accounting for borders)
-    let text_width = area.width.saturating_sub(2) as usize; // -2 for borders
-
-    // Count total lines considering wrapping
-    let total_lines = content.lines()
-        .map(|line| {
-            if line.is_empty() {
-                1
-            } else {
-                // Calculate how many display lines this line will take when wrapped
-                ((line.len() + text_width - 1) / text_width).max(1)
+    // Check if this is an image with an image state
+    if state.is_image && state.image_state.is_some() {
+        match state.image_state.as_ref().unwrap() {
+            ImagePreviewState::Loading => {
+                // Show loading message
+                let paragraph = Paragraph::new("Loading image...")
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Cyan))
+                            .title("Preview")
+                    )
+                    .style(Style::default().fg(Color::Yellow));
+                f.render_widget(paragraph, area);
             }
-        })
-        .sum::<usize>();
+            ImagePreviewState::Ready(_) => {
+                // Get mutable reference to protocol for rendering
+                if let Some(ImagePreviewState::Ready(ref mut protocol)) = state.image_state {
+                    // Create bordered block
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title("Preview (Image)");
 
-    // Viewport height (visible lines)
-    let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
+                    // Render block first
+                    f.render_widget(block, area);
 
-    // Calculate max scroll position (can't scroll past the last line)
-    let max_scroll = if total_lines > viewport_height {
-        total_lines - viewport_height
+                    // Render image inside using StatefulImage
+                    let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
+                    let image = ratatui_image::StatefulImage::new(None);
+                    f.render_stateful_widget(image, inner_area, protocol);
+                }
+            }
+            ImagePreviewState::Failed { metadata } => {
+                // Show image metadata as fallback
+                render_image_metadata(f, area, metadata);
+            }
+        }
     } else {
-        0
-    };
+        // Original text preview logic
+        let content = match &state.file_content {
+            Ok(text) => text.clone(),
+            Err(msg) => format!("Error: {}", msg),
+        };
 
-    // Clamp scroll offset to valid range
-    let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
+        // Calculate the effective width for text (accounting for borders)
+        let text_width = area.width.saturating_sub(2) as usize; // -2 for borders
 
-    // Write the clamped value back to state to prevent offset drift
-    state.scroll_offset = clamped_scroll;
+        // Count total lines considering wrapping
+        let total_lines = content.lines()
+            .map(|line| {
+                if line.is_empty() {
+                    1
+                } else {
+                    // Calculate how many display lines this line will take when wrapped
+                    ((line.len() + text_width - 1) / text_width).max(1)
+                }
+            })
+            .sum::<usize>();
 
-    // Enable text wrapping with Wrap { trim: false } and scrolling
-    let paragraph = Paragraph::new(content)
+        // Viewport height (visible lines)
+        let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
+
+        // Calculate max scroll position (can't scroll past the last line)
+        let max_scroll = if total_lines > viewport_height {
+            total_lines - viewport_height
+        } else {
+            0
+        };
+
+        // Clamp scroll offset to valid range
+        let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
+
+        // Write the clamped value back to state to prevent offset drift
+        state.scroll_offset = clamped_scroll;
+
+        // Enable text wrapping with Wrap { trim: false } and scrolling
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)")
+            )
+            .style(Style::default().fg(Color::White)) // Use terminal default background
+            .wrap(Wrap { trim: false }) // Enable line wrapping!
+            .scroll((clamped_scroll, 0)); // Enable scrolling with clamped offset!
+
+        f.render_widget(paragraph, area);
+
+        // Render scrollbar if content is longer than viewport
+        if total_lines > viewport_height {
+            let mut scrollbar_state = ScrollbarState::new(max_scroll)
+                .position(clamped_scroll as usize);
+
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█");
+
+            f.render_stateful_widget(
+                scrollbar,
+                area.inner(Margin { horizontal: 0, vertical: 1 }), // Keep scrollbar inside borders
+                &mut scrollbar_state,
+            );
+        }
+    }
+}
+
+fn render_image_metadata(
+    f: &mut Frame,
+    area: Rect,
+    metadata: &crate::ImageMetadata,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Image preview unavailable",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    // Format
+    if let Some(format) = &metadata.format {
+        lines.push(Line::from(vec![
+            Span::styled("Format: ", Style::default().fg(Color::Cyan)),
+            Span::raw(format),
+        ]));
+    }
+
+    // Dimensions
+    if let Some((width, height)) = metadata.dimensions {
+        lines.push(Line::from(vec![
+            Span::styled("Dimensions: ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{}x{}", width, height)),
+        ]));
+    }
+
+    // File size
+    if metadata.file_size > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("File Size: ", Style::default().fg(Color::Cyan)),
+            Span::raw(utils::format_bytes(metadata.file_size)),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)")
+                .title("Preview (Metadata Only)")
         )
-        .style(Style::default().fg(Color::White)) // Use terminal default background
-        .wrap(Wrap { trim: false }) // Enable line wrapping!
-        .scroll((clamped_scroll, 0)); // Enable scrolling with clamped offset!
+        .style(Style::default().fg(Color::White));
 
     f.render_widget(paragraph, area);
-
-    // Render scrollbar if content is longer than viewport
-    if total_lines > viewport_height {
-        let mut scrollbar_state = ScrollbarState::new(max_scroll)
-            .position(clamped_scroll as usize);
-
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"))
-            .track_symbol(Some("│"))
-            .thumb_symbol("█");
-
-        f.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin { horizontal: 0, vertical: 1 }), // Keep scrollbar inside borders
-            &mut scrollbar_state,
-        );
-    }
 }

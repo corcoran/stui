@@ -158,6 +158,18 @@ impl SortMode {
 }
 
 #[derive(Clone)]
+pub struct ImageMetadata {
+    pub dimensions: Option<(u32, u32)>,
+    pub format: Option<String>,
+    pub file_size: u64,
+}
+
+pub enum ImagePreviewState {
+    Loading,
+    Ready(Box<dyn ratatui_image::protocol::StatefulProtocol>),
+    Failed { metadata: ImageMetadata },
+}
+
 pub struct FileInfoPopupState {
     pub folder_id: String,
     pub file_path: String,
@@ -166,7 +178,9 @@ pub struct FileInfoPopupState {
     pub file_content: Result<String, String>, // Ok(content) or Err(error message)
     pub exists_on_disk: bool,
     pub is_binary: bool,
+    pub is_image: bool,
     pub scroll_offset: u16, // Vertical scroll offset for preview
+    pub image_state: Option<ImagePreviewState>,
 }
 
 #[derive(Clone)]
@@ -244,6 +258,8 @@ pub struct App {
     pub last_transfer_rates: Option<(f64, f64)>,  // Cached transfer rates (download, upload) in bytes/sec
     // Icon rendering
     pub icon_renderer: IconRenderer,      // Centralized icon renderer
+    // Image preview protocol
+    pub image_picker: Option<ratatui_image::picker::Picker>,  // Protocol picker for image rendering
 }
 
 impl App {
@@ -364,6 +380,41 @@ impl App {
         };
         let icon_renderer = IconRenderer::new(icon_mode, IconTheme::default());
 
+        // Initialize image preview protocol picker
+        let image_picker = if config.image_preview_enabled {
+            match config.image_protocol.to_lowercase().as_str() {
+                "auto" => {
+                    // Auto-detect best protocol for terminal using from_termios
+                    match ratatui_image::picker::Picker::from_termios() {
+                        Ok(picker) => {
+                            log_debug("Image preview: Auto-detected terminal protocol");
+                            Some(picker)
+                        }
+                        Err(e) => {
+                            log_debug(&format!("Image preview: Failed to detect protocol: {}", e));
+                            None
+                        }
+                    }
+                }
+                protocol_name => {
+                    // Try to use specific protocol
+                    match ratatui_image::picker::Picker::from_termios() {
+                        Ok(picker) => {
+                            log_debug(&format!("Image preview: Using protocol '{}'", protocol_name));
+                            Some(picker)
+                        }
+                        Err(e) => {
+                            log_debug(&format!("Image preview: Failed to initialize protocol '{}': {}", protocol_name, e));
+                            None
+                        }
+                    }
+                }
+            }
+        } else {
+            log_debug("Image preview disabled in config");
+            None
+        };
+
         let mut app = App {
             client,
             cache,
@@ -413,6 +464,7 @@ impl App {
             last_connection_stats_fetch: Instant::now(),
             last_transfer_rates: None,
             icon_renderer,
+            image_picker,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -2378,11 +2430,16 @@ impl App {
                     file_content: Err("Folder not found".to_string()),
                     exists_on_disk: false,
                     is_binary: false,
+                    is_image: false,
                     scroll_offset: 0,
+                    image_state: None,
                 });
                 return;
             }
         };
+
+        // Check if file is an image
+        let is_image = Self::is_image_file(&file_path);
 
         // Initialize popup state with loading message first
         self.show_file_info = Some(FileInfoPopupState {
@@ -2393,15 +2450,80 @@ impl App {
             file_content: Err("Loading...".to_string()),
             exists_on_disk: false,
             is_binary: false,
+            is_image,
             scroll_offset: 0,
+            image_state: if is_image { Some(ImagePreviewState::Loading) } else { None },
         });
 
         // 1. Fetch file details from API
         let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
 
-        // 2. Read file content from disk
-        let (file_content, exists_on_disk, is_binary) =
-            Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
+        // 2. If image, try to load it; otherwise read as text
+        let (file_content, exists_on_disk, is_binary, image_state) = if is_image {
+            // Translate path for image loading
+            let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
+            let mut host_path = container_path.clone();
+            for (container_prefix, host_prefix) in &self.path_map {
+                if let Some(suffix) = container_path.strip_prefix(container_prefix) {
+                    host_path = format!("{}{}", host_prefix, suffix);
+                    break;
+                }
+            }
+
+            let host_path_buf = std::path::PathBuf::from(&host_path);
+            let exists = tokio::fs::metadata(&host_path_buf).await.is_ok();
+
+            if exists && self.image_picker.is_some() {
+                let picker = self.image_picker.as_ref().unwrap().clone();
+                let max_size = 20; // TODO: Get from config
+
+                match Self::load_image_preview(host_path_buf, picker, max_size).await {
+                    Ok(protocol) => (
+                        Ok("[Image preview - see right panel]".to_string()),
+                        true,
+                        true,
+                        Some(ImagePreviewState::Ready(protocol)),
+                    ),
+                    Err(metadata) => (
+                        Err("Image preview unavailable".to_string()),
+                        true,
+                        true,
+                        Some(ImagePreviewState::Failed { metadata }),
+                    ),
+                }
+            } else if !exists {
+                (
+                    Err("File not found on disk".to_string()),
+                    false,
+                    false,
+                    Some(ImagePreviewState::Failed {
+                        metadata: ImageMetadata {
+                            dimensions: None,
+                            format: Some("File not found".to_string()),
+                            file_size: 0,
+                        },
+                    }),
+                )
+            } else {
+                (
+                    Err("Image preview disabled".to_string()),
+                    true,
+                    true,
+                    Some(ImagePreviewState::Failed {
+                        metadata: ImageMetadata {
+                            dimensions: None,
+                            format: Some("Image preview disabled in config".to_string()),
+                            file_size: 0,
+                        },
+                    }),
+                )
+            }
+        } else {
+            // Read as text
+            let (content, exists, binary) =
+                Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
+            (content, exists, binary, None)
+        };
 
         // 3. Update popup state with results
         self.show_file_info = Some(FileInfoPopupState {
@@ -2412,8 +2534,96 @@ impl App {
             file_content,
             exists_on_disk,
             is_binary,
+            is_image,
             scroll_offset: 0,
+            image_state,
         });
+    }
+
+    fn is_image_file(path: &str) -> bool {
+        let path_lower = path.to_lowercase();
+        path_lower.ends_with(".png")
+            || path_lower.ends_with(".jpg")
+            || path_lower.ends_with(".jpeg")
+            || path_lower.ends_with(".gif")
+            || path_lower.ends_with(".bmp")
+            || path_lower.ends_with(".webp")
+            || path_lower.ends_with(".tiff")
+            || path_lower.ends_with(".tif")
+    }
+
+    async fn load_image_preview(
+        host_path: std::path::PathBuf,
+        mut picker: ratatui_image::picker::Picker,
+        max_size_mb: u64,
+    ) -> Result<Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata> {
+        let max_size_bytes = max_size_mb * 1024 * 1024;
+
+        // Check file size
+        let metadata = match tokio::fs::metadata(&host_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(ImageMetadata {
+                    dimensions: None,
+                    format: None,
+                    file_size: 0,
+                });
+            }
+        };
+
+        let file_size = metadata.len();
+        if file_size > max_size_bytes {
+            return Err(ImageMetadata {
+                dimensions: None,
+                format: Some("Too large".to_string()),
+                file_size,
+            });
+        }
+
+        // Load image
+        let img_result = tokio::task::spawn_blocking(move || {
+            image::open(&host_path)
+        })
+        .await;
+
+        let img = match img_result {
+            Ok(Ok(img)) => img,
+            Ok(Err(e)) => {
+                return Err(ImageMetadata {
+                    dimensions: None,
+                    format: Some(format!("Load error: {}", e)),
+                    file_size,
+                });
+            }
+            Err(e) => {
+                return Err(ImageMetadata {
+                    dimensions: None,
+                    format: Some(format!("Task error: {}", e)),
+                    file_size,
+                });
+            }
+        };
+
+        // Extract metadata
+        let dimensions = (img.width(), img.height());
+        let format = match img.color() {
+            image::ColorType::L8 => "Grayscale 8-bit",
+            image::ColorType::La8 => "Grayscale+Alpha 8-bit",
+            image::ColorType::Rgb8 => "RGB 8-bit",
+            image::ColorType::Rgba8 => "RGBA 8-bit",
+            image::ColorType::L16 => "Grayscale 16-bit",
+            image::ColorType::La16 => "Grayscale+Alpha 16-bit",
+            image::ColorType::Rgb16 => "RGB 16-bit",
+            image::ColorType::Rgba16 => "RGBA 16-bit",
+            image::ColorType::Rgb32F => "RGB 32-bit float",
+            image::ColorType::Rgba32F => "RGBA 32-bit float",
+            _ => "Unknown",
+        };
+
+        // Convert to dynamic image and resize using picker
+        let protocol = picker.new_resize_protocol(img);
+
+        Ok(protocol)
     }
 
     async fn read_file_content_static(
