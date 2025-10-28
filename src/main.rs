@@ -2596,7 +2596,7 @@ impl App {
         host_path: std::path::PathBuf,
         mut picker: ratatui_image::picker::Picker,
         max_size_mb: u64,
-        dpi_scale: f32,
+        _dpi_scale: f32,  // Unused: protocol handles all resizing
     ) -> Result<(Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata), ImageMetadata> {
         let max_size_bytes = max_size_mb * 1024 * 1024;
 
@@ -2645,7 +2645,7 @@ impl App {
             }
         };
 
-        // Extract metadata (original dimensions before any resizing)
+        // Extract metadata (original dimensions)
         let dimensions = (img.width(), img.height());
         let format = match img.color() {
             image::ColorType::L8 => "Grayscale 8-bit",
@@ -2661,22 +2661,14 @@ impl App {
             _ => "Unknown",
         };
 
-        // Apply DPI scaling if requested
-        // DPI scaling is used to increase pixel density for high-DPI displays (Retina, etc.)
-        let final_image = if dpi_scale > 1.0 {
-            let new_width = (img.width() as f32 * dpi_scale) as u32;
-            let new_height = (img.height() as f32 * dpi_scale) as u32;
-            log_debug(&format!(
-                "Applying DPI scale {}: {}x{} -> {}x{}",
-                dpi_scale, img.width(), img.height(), new_width, new_height
-            ));
-            img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
-        } else {
-            img
-        };
+        log_debug(&format!(
+            "Loading image: {}x{} pixels",
+            img.width(), img.height()
+        ));
 
-        // Convert to protocol - the protocol will handle resizing to fit the area
-        let protocol = picker.new_resize_protocol(final_image);
+        // Pass original image to protocol - it will handle ALL resizing
+        // The protocol converts pixels → cells using font_size, then resizes to fit the render area
+        let protocol = picker.new_resize_protocol(img);
 
         // Return both protocol and metadata
         let metadata = ImageMetadata {
