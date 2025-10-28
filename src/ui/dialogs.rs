@@ -414,15 +414,50 @@ fn render_preview_column(
                     // Render block first
                     f.render_widget(block, area);
 
-                    // Render image - let the protocol handle all sizing and fitting
+                    // Render image with centering
                     let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
 
-                    // StatefulImage with Resize::Fit (default) will:
-                    // 1. Calculate cells needed based on image pixels / font_size
-                    // 2. Fit to inner_area maintaining aspect ratio
-                    // 3. Render at maximum size that fits
+                    // Calculate centered rect for the image
+                    // The protocol will fit the image to whatever rect we give it,
+                    // so we need to calculate the fitted size and center that rect
+                    let render_rect = if let Some((img_w, img_h)) = metadata.dimensions {
+                        // Image aspect ratio
+                        let img_aspect = img_w as f32 / img_h as f32;
+
+                        // Available area aspect ratio
+                        let area_aspect = inner_area.width as f32 / inner_area.height as f32;
+
+                        // Calculate what size the image will be when fitted
+                        // (same logic the protocol uses for Resize::Fit)
+                        let (fit_width, fit_height) = if img_aspect > area_aspect {
+                            // Image is wider - width constrained
+                            let width = inner_area.width;
+                            let height = (width as f32 / img_aspect) as u16;
+                            (width, height)
+                        } else {
+                            // Image is taller - height constrained
+                            let height = inner_area.height;
+                            let width = (height as f32 * img_aspect) as u16;
+                            (width, height)
+                        };
+
+                        // Center this fitted size within inner_area
+                        let x_offset = (inner_area.width.saturating_sub(fit_width)) / 2;
+                        let y_offset = (inner_area.height.saturating_sub(fit_height)) / 2;
+
+                        Rect {
+                            x: inner_area.x + x_offset,
+                            y: inner_area.y + y_offset,
+                            width: fit_width,
+                            height: fit_height,
+                        }
+                    } else {
+                        // No dimensions available, use full area
+                        inner_area
+                    };
+
                     let image = ratatui_image::StatefulImage::new(None);
-                    f.render_stateful_widget(image, inner_area, protocol);
+                    f.render_stateful_widget(image, render_rect, protocol);
                 }
             }
             ImagePreviewState::Failed { metadata } => {
