@@ -13,6 +13,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Active Sync Indicator**: Files show spinning icon (🔄) during active downloads/uploads
 - **Ignored File Detection**: Separate icons for ignored files that exist (`📄⚠️`) vs deleted (`📄🚫`)
 - **Icon Modes**: Choose between emoji or Nerd Fonts icons via config
+- **Terminal Theme Support**: All colors use standard terminal colors, customizable through your terminal theme
 - **Smart Caching**: SQLite-backed cache for instant UI responsiveness with background updates
 - **System Status Bar**: Device name, uptime, local state summary, and live transfer rates at top of screen
 

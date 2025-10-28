@@ -25,7 +25,7 @@ pub enum FolderState {
     Error,
 }
 
-/// Icon theme with pastel colors
+/// Icon theme using terminal colors (respects user's terminal theme)
 #[derive(Debug, Clone)]
 pub struct IconTheme {
     // File type colors
@@ -49,22 +49,22 @@ pub struct IconTheme {
 impl Default for IconTheme {
     fn default() -> Self {
         Self {
-            // File types
-            sync_folder_color: Color::Rgb(220, 140, 170), // Pink for Syncthing folders
-            folder_color: Color::Rgb(180, 140, 210),      // Pastel purple for subdirectories
-            file_color: Color::Rgb(150, 180, 220),        // Pastel blue
+            // File types - use terminal colors that respect user's theme
+            sync_folder_color: Color::Magenta,    // Syncthing folders
+            folder_color: Color::Blue,            // Subdirectories
+            file_color: Color::Cyan,              // Files
 
-            // Status colors (pastels)
-            synced_color: Color::Rgb(150, 220, 180),      // Pastel green
-            out_of_sync_color: Color::Rgb(230, 220, 150), // Pastel yellow
-            local_only_color: Color::Rgb(180, 180, 180),  // Pastel grey
-            remote_only_color: Color::Rgb(220, 220, 220), // Pastel white
-            ignored_color: Color::Rgb(220, 150, 150),     // Pastel red
-            syncing_color: Color::Rgb(230, 180, 140),     // Pastel orange
-            scanning_color: Color::Rgb(200, 170, 220),    // Pastel purple
-            unknown_color: Color::Rgb(220, 150, 150),     // Pastel red
-            error_color: Color::Rgb(220, 150, 150),       // Pastel red
-            paused_color: Color::Rgb(180, 180, 180),      // Pastel grey
+            // Status colors - use terminal colors
+            synced_color: Color::Green,           // Successfully synced
+            out_of_sync_color: Color::Yellow,     // Needs syncing
+            local_only_color: Color::Gray,        // Only on this device
+            remote_only_color: Color::White,      // Only on remote
+            ignored_color: Color::Red,            // Ignored files
+            syncing_color: Color::Yellow,         // Currently syncing
+            scanning_color: Color::Magenta,       // Scanning for changes
+            unknown_color: Color::Red,            // Unknown state
+            error_color: Color::Red,              // Error state
+            paused_color: Color::Gray,            // Paused folder
         }
     }
 }

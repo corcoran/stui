@@ -2308,7 +2308,7 @@ impl App {
                                 writeln!(f, "Copied to clipboard via {}: {}", clipboard_cmd, text)
                             });
                         // Show toast notification with full path
-                        let toast_msg = format!("Copied: {}", text);
+                        let toast_msg = format!("Copied to clipboard: {}", text);
                         self.toast_message = Some((toast_msg, Instant::now()));
                     }
                     Err(e) => {
