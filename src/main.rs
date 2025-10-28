@@ -151,6 +151,7 @@ pub struct BreadcrumbLevel {
     pub state: ListState,
     pub translated_base_path: String,  // Cached translated base path for this level
     pub file_sync_states: HashMap<String, SyncState>,  // Cache sync states by filename
+    pub ignored_exists: HashMap<String, bool>,  // Track if ignored files exist on disk (checked once on load)
 }
 
 pub struct App {
@@ -1333,6 +1334,32 @@ impl App {
         }
     }
 
+    /// Check which ignored files exist on disk (done once on directory load, not per-frame)
+    fn check_ignored_existence(
+        &self,
+        items: &[BrowseItem],
+        file_sync_states: &HashMap<String, SyncState>,
+        translated_base_path: &str,
+        prefix: Option<&str>,
+    ) -> HashMap<String, bool> {
+        let mut ignored_exists = HashMap::new();
+
+        for item in items {
+            if let Some(SyncState::Ignored) = file_sync_states.get(&item.name) {
+                let relative_path = if let Some(prefix_val) = prefix {
+                    format!("{}/{}", prefix_val, item.name)
+                } else {
+                    item.name.clone()
+                };
+                let host_path = format!("{}/{}", translated_base_path.trim_end_matches('/'), relative_path);
+                let exists = std::path::Path::new(&host_path).exists();
+                ignored_exists.insert(item.name.clone(), exists);
+            }
+        }
+
+        ignored_exists
+    }
+
     async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
             if let Some(folder) = self.folders.get(selected) {
@@ -1406,6 +1433,9 @@ impl App {
                     let _ = self.cache.save_sync_state(&folder.id, local_item_name, SyncState::LocalOnly, 0);
                 }
 
+                // Check which ignored files exist on disk (one-time check, not per-frame)
+                let ignored_exists = self.check_ignored_existence(&items, &file_sync_states, &translated_base_path, None);
+
                 self.breadcrumb_trail = vec![BreadcrumbLevel {
                     folder_id: folder.id.clone(),
                     folder_label: folder.label.clone().unwrap_or_else(|| folder.id.clone()),
@@ -1415,6 +1445,7 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
+                    ignored_exists,
                 }];
 
                 // Only change focus if not in preview mode
@@ -1532,6 +1563,9 @@ impl App {
                     let _ = self.cache.save_sync_state(&folder_id, &file_path, SyncState::LocalOnly, 0);
                 }
 
+                // Check which ignored files exist on disk (one-time check, not per-frame)
+                let ignored_exists = self.check_ignored_existence(&items, &file_sync_states, &translated_base_path, Some(&new_prefix));
+
                 // Add new level
                 self.breadcrumb_trail.push(BreadcrumbLevel {
                     folder_id,
@@ -1542,6 +1576,7 @@ impl App {
                     state,
                     translated_base_path,
                     file_sync_states,
+                    ignored_exists,
                 });
 
                 self.focus_level += 1;
