@@ -167,7 +167,7 @@ pub struct ImageMetadata {
 pub enum ImagePreviewState {
     Loading,
     Ready {
-        protocol: Box<dyn ratatui_image::protocol::StatefulProtocol>,
+        protocol: ratatui_image::protocol::StatefulProtocol,
         metadata: ImageMetadata,
     },
     Failed { metadata: ImageMetadata },
@@ -395,42 +395,42 @@ impl App {
         // Initialize image preview protocol picker
         let (image_picker, image_font_size) = if config.image_preview_enabled {
             // Get picker with terminal dimensions
-            let mut picker = match ratatui_image::picker::Picker::from_termios() {
+            let mut picker = match ratatui_image::picker::Picker::from_query_stdio() {
                 Ok(p) => p,
                 Err(e) => {
                     log_debug(&format!("Image preview: Failed to detect terminal: {}", e));
-                    ratatui_image::picker::Picker::new((8, 16)) // Fallback font size
+                    ratatui_image::picker::Picker::from_fontsize((8, 16)) // Fallback font size
                 }
             };
 
             // Store font size for centering calculations
-            let font_size = picker.font_size;
+            let font_size = picker.font_size();
             log_debug(&format!("Image font size: {}x{}", font_size.0, font_size.1));
 
             // Apply protocol from config
             match config.image_protocol.to_lowercase().as_str() {
                 "auto" => {
-                    picker.guess_protocol();
+                    // Protocol already auto-detected by from_query_stdio()
                     log_debug("Image preview: Auto-detected protocol");
                 }
                 "iterm2" => {
-                    picker.protocol_type = ratatui_image::picker::ProtocolType::Iterm2;
+                    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);
                     log_debug("Image preview: Using iTerm2 protocol");
                 }
                 "kitty" => {
-                    picker.protocol_type = ratatui_image::picker::ProtocolType::Kitty;
+                    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
                     log_debug("Image preview: Using Kitty protocol");
                 }
                 "sixel" => {
-                    picker.protocol_type = ratatui_image::picker::ProtocolType::Sixel;
+                    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);
                     log_debug("Image preview: Using Sixel protocol");
                 }
                 "halfblocks" => {
-                    picker.protocol_type = ratatui_image::picker::ProtocolType::Halfblocks;
+                    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks);
                     log_debug("Image preview: Using Halfblocks protocol");
                 }
                 unknown => {
-                    picker.guess_protocol();
+                    // Protocol already auto-detected, just log the warning
                     log_debug(&format!("Image preview: Unknown protocol '{}', using auto-detect", unknown));
                 }
             }
@@ -2599,8 +2599,8 @@ impl App {
 
     async fn load_image_preview(
         host_path: std::path::PathBuf,
-        mut picker: ratatui_image::picker::Picker,
-    ) -> Result<(Box<dyn ratatui_image::protocol::StatefulProtocol>, ImageMetadata), ImageMetadata> {
+        picker: ratatui_image::picker::Picker,
+    ) -> Result<(ratatui_image::protocol::StatefulProtocol, ImageMetadata), ImageMetadata> {
         let max_size_bytes = 20 * 1024 * 1024;  // 20MB limit
 
         // Check file size
@@ -2671,7 +2671,7 @@ impl App {
         ));
 
         // Pre-downscale large images with adaptive quality/performance balance
-        let font_size = picker.font_size;
+        let font_size = picker.font_size();
 
         // Estimate maximum reasonable size: ~200 cells × ~60 cells (typical large terminal)
         // Use 1.25x headroom for quality (balanced for performance)

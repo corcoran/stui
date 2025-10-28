@@ -37,7 +37,7 @@ pub fn render_revert_confirmation(
     );
 
     // Center the prompt - adjust height based on number of files shown
-    let area = f.size();
+    let area = f.area();
     let prompt_width = 60;
     let base_height = 10;
     let file_lines = changed_files.len().min(5);
@@ -80,7 +80,7 @@ pub fn render_delete_confirmation(
     );
 
     // Center the prompt
-    let area = f.size();
+    let area = f.area();
     let prompt_width = 50;
     let prompt_height = 11;
     let prompt_area = Rect {
@@ -117,7 +117,7 @@ pub fn render_pattern_selection(
         .collect();
 
     // Center the menu
-    let area = f.size();
+    let area = f.area();
     let menu_width = 60;
     let menu_height = (patterns.len() as u16 + 6).min(20); // +6 for borders and instructions
     let menu_area = Rect {
@@ -151,7 +151,7 @@ pub fn render_file_info(
     image_font_size: Option<(u16, u16)>,
 ) {
     // Calculate centered area (90% width, 90% height)
-    let area = f.size();
+    let area = f.area();
     let popup_width = (area.width as f32 * 0.9) as u16;
     let popup_height = (area.height as f32 * 0.9) as u16;
     let popup_x = (area.width.saturating_sub(popup_width)) / 2;
@@ -485,7 +485,7 @@ fn render_preview_column(
                         image::imageops::FilterType::CatmullRom
                     };
 
-                    let image = ratatui_image::StatefulImage::new(None)
+                    let image = ratatui_image::StatefulImage::new()
                         .resize(ratatui_image::Resize::Fit(Some(filter)));
                     f.render_stateful_widget(image, render_rect, protocol);
                 }

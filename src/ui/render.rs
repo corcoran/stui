@@ -9,7 +9,7 @@ use super::{
 /// Main render function - orchestrates all UI rendering
 /// This replaces the large terminal.draw() closure in main.rs
 pub fn render(f: &mut Frame, app: &mut App) {
-    let size = f.size();
+    let size = f.area();
 
     // Calculate layout
     let has_breadcrumbs = !app.breadcrumb_trail.is_empty();

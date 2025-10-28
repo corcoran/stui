@@ -10,7 +10,6 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
  -  Remote Devices (Name, Download / Upload rate, Folders)
  -  Add event history viewer with persistent logging
  -  Add filtering functionality (show only ignored files, by type, etc.)
- -  Add image preview support to file info popup (CLI rendering)
  -  Build comprehensive test suite
  -  Improve error handling, display, and timeouts
  -  Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
