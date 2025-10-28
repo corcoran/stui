@@ -7,7 +7,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 use crate::api::{BrowseItem, SyncState};
-use crate::icons::IconRenderer;
+use super::icons::IconRenderer;
 
 /// Display mode for file info (timestamp and/or size)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

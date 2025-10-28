@@ -43,13 +43,12 @@ mod api_service;
 mod cache;
 mod config;
 mod event_listener;
-mod icons;
 mod ui;
 
 use api::{BrowseItem, ConnectionStats, Folder, FolderStatus, SyncState, SyncthingClient, SystemStatus};
 use cache::CacheDb;
 use config::Config;
-use icons::{IconMode, IconRenderer, IconTheme};
+use ui::icons::{IconMode, IconRenderer, IconTheme};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled

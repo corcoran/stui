@@ -7,7 +7,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use crate::api::{Folder, FolderStatus, SystemStatus};
-use crate::icons::{FolderState, IconRenderer};
+use super::icons::{FolderState, IconRenderer};
 
 /// Format uptime seconds into human-readable string (e.g., "3d 15h", "15h 44m", "44m 30s")
 fn format_uptime(seconds: u64) -> String {
