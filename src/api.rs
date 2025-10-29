@@ -246,14 +246,19 @@ impl SyncthingClient {
     }
 
     pub async fn get_device_name(&self) -> Result<String> {
+        // Get local device ID from system status
+        let system_status = self.get_system_status().await?;
+        let my_id = system_status.my_id;
+
+        // Get all devices from config
         let config = self.get_system_config().await?;
 
-        // Find the local device (first device is usually local)
-        if let Some(device) = config.devices.first() {
-            Ok(device.name.clone())
-        } else {
-            Err(anyhow::anyhow!("No devices found in config"))
-        }
+        // Find the device that matches our local ID
+        config.devices
+            .iter()
+            .find(|device| device.id == my_id)
+            .map(|device| device.name.clone())
+            .ok_or_else(|| anyhow::anyhow!("Local device ID not found in config"))
     }
 
     pub async fn browse_folder(
