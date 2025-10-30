@@ -39,14 +39,6 @@ static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
 // Global flag for targeted bug debugging
 static BUG_MODE: AtomicBool = AtomicBool::new(false);
 
-/// Optimistic update tracking for conflict detection
-/// Used to detect when external .stignore modifications conflict with user actions
-#[derive(Debug, Clone, Copy)]
-struct OptimisticUpdate {
-    expected_state: SyncState,
-    timestamp: Instant,
-}
-
 mod api;
 mod api_service;
 mod cache;
@@ -238,8 +230,6 @@ pub struct App {
     pub show_file_info: Option<FileInfoPopupState>, // If Some, shows file information popup
     // Toast notification
     pub toast_message: Option<(String, Instant)>, // If Some, shows toast notification (message, timestamp)
-    // Track optimistic updates for conflict detection (5-second TTL)
-    optimistic_updates: HashMap<String, OptimisticUpdate>, // "folder_id:path" -> expected state + timestamp
     // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
@@ -476,7 +466,6 @@ impl App {
             pattern_selection: None,
             show_file_info: None,
             toast_message: None,
-            optimistic_updates: HashMap::new(),
             api_tx,
             api_rx,
             invalidation_rx,
@@ -839,27 +828,6 @@ impl App {
                             // Get current state for tracking changes
                             let current_state = level.file_sync_states.get(item_name).copied();
 
-                            // Check for conflict with optimistic update (external .stignore modification)
-                            let state_key = format!("{}:{}", folder_id, file_path);
-                            if let Some(optimistic) = self.optimistic_updates.get(&state_key) {
-                                if optimistic.timestamp.elapsed() < Duration::from_secs(5) {
-                                    if state != optimistic.expected_state {
-                                        // External change detected - API response differs from user action
-                                        log_debug(&format!("DEBUG [FileInfo]: External change detected for {} (expected {:?}, got {:?})",
-                                            item_name, optimistic.expected_state, state));
-                                        self.toast_message = Some((
-                                            format!(
-                                                "External change: {} is {:?}",
-                                                item_name, state
-                                            ),
-                                            Instant::now(),
-                                        ));
-                                    }
-                                }
-                                // Always remove after checking (accept API result regardless)
-                                self.optimistic_updates.remove(&state_key);
-                            }
-
                             // Update state if it changed
                             if current_state != Some(state) {
                                 log_debug(&format!(
@@ -1107,17 +1075,12 @@ impl App {
                 {
                     for (_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
-                            // Don't remove optimistic updates to prevent flash
-                            let state_key = format!("{}:{}", folder_id, file_path);
-
-                            if !self.optimistic_updates.contains_key(&state_key) {
-                                // Clear in-memory sync state for this file
-                                level.file_sync_states.remove(&file_path);
-                                log_debug(&format!(
-                                    "DEBUG [Event]: Cleared state for {}",
-                                    file_path
-                                ));
-                            }
+                            // Clear in-memory sync state for this file
+                            level.file_sync_states.remove(&file_path);
+                            log_debug(&format!(
+                                "DEBUG [Event]: Cleared state for {}",
+                                file_path
+                            ));
 
                             // Check if this level is showing the parent directory
                             let level_prefix = level.prefix.as_deref();
@@ -1234,45 +1197,15 @@ impl App {
                 folder_id,
                 file_path,
             } => {
+                // Skip ItemStarted processing entirely during bulk syncs
+                // The Syncing state adds visual feedback but isn't essential
+                // Files will show correct final state after ItemFinished/LocalIndexUpdated
+                // This prevents O(n×m) iteration overhead during bulk operations
+
                 log_debug(&format!(
-                    "DEBUG [Event]: ItemStarted: folder={} path={}",
+                    "DEBUG [Event]: ItemStarted: folder={} path={} (skipped UI update)",
                     folder_id, file_path
                 ));
-
-                // Only update UI if we're viewing this folder
-                if !self.breadcrumb_trail.is_empty()
-                    && self.breadcrumb_trail[0].folder_id == folder_id
-                {
-                    // Check each visible breadcrumb level
-                    for level in self.breadcrumb_trail.iter_mut() {
-                        if level.folder_id == folder_id {
-                            let level_prefix = level.prefix.as_deref().unwrap_or("");
-
-                            // Skip if file doesn't belong to this level
-                            if !file_path.starts_with(level_prefix) {
-                                continue;
-                            }
-
-                            let relative_path = &file_path[level_prefix.len()..];
-
-                            // Only show Syncing state if this exact item is in the current level's list
-                            // This prevents showing Syncing for files in subdirectories
-                            if level.items.iter().any(|item| item.name == relative_path) {
-                                level.file_sync_states.insert(
-                                    relative_path.to_string(),
-                                    SyncState::Syncing,
-                                );
-                                level.ignored_exists.remove(relative_path);
-
-                                log_debug(&format!(
-                                    "DEBUG [Event]: Set {} to Syncing in level with prefix {:?}",
-                                    relative_path, level_prefix
-                                ));
-                                break; // Found matching level, no need to check others
-                            }
-                        }
-                    }
-                }
             }
             event_listener::CacheInvalidation::ItemFinished {
                 folder_id,
@@ -3471,17 +3404,7 @@ impl App {
                 .set_ignore_patterns(&folder_id, updated_patterns)
                 .await?;
 
-            // Add optimistic update expecting Ignored state
-            let state_key = format!("{}:{}", folder_id, relative_path);
-            self.optimistic_updates.insert(
-                state_key.clone(),
-                OptimisticUpdate {
-                    expected_state: SyncState::Ignored,
-                    timestamp: Instant::now(),
-                },
-            );
-
-            // Immediately mark as ignored in UI (optimistic update)
+            // Immediately mark as ignored in UI
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 level
                     .file_sync_states
@@ -3498,7 +3421,7 @@ impl App {
                 level.ignored_exists.insert(item_name.clone(), exists);
 
                 log_bug(&format!(
-                    "toggle_ignore: set {} to Ignored (optimistic), added optimistic update",
+                    "toggle_ignore: set {} to Ignored",
                     item_name
                 ));
 
@@ -3584,16 +3507,6 @@ impl App {
                     .set_ignore_patterns(&folder_id, updated_patterns)
                     .await?;
 
-                // Add optimistic update expecting Ignored state
-                let state_key = format!("{}:{}", folder_id, relative_path);
-                self.optimistic_updates.insert(
-                    state_key.clone(),
-                    OptimisticUpdate {
-                        expected_state: SyncState::Ignored,
-                        timestamp: Instant::now(),
-                    },
-                );
-
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                     level
                         .file_sync_states
@@ -3634,16 +3547,6 @@ impl App {
         };
 
         if delete_result.is_ok() {
-            // Add optimistic update expecting Ignored state
-            let state_key = format!("{}:{}", folder_id, relative_path);
-            self.optimistic_updates.insert(
-                state_key.clone(),
-                OptimisticUpdate {
-                    expected_state: SyncState::Ignored,
-                    timestamp: Instant::now(),
-                },
-            );
-
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 level
                     .file_sync_states
@@ -4333,8 +4236,19 @@ async fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Process cache invalidation messages from event listener (non-blocking)
+        // Throttle to max 50 events per frame to prevent UI freezing during bulk syncs
+        let mut events_processed = 0;
+        const MAX_EVENTS_PER_FRAME: usize = 50;
+
         while let Ok(invalidation) = app.invalidation_rx.try_recv() {
             app.handle_cache_invalidation(invalidation);
+            events_processed += 1;
+
+            if events_processed >= MAX_EVENTS_PER_FRAME {
+                // Stop processing events this frame, continue next frame
+                // This keeps UI responsive during event floods (hundreds of ItemStarted/ItemFinished)
+                break;
+            }
         }
 
         // Process event ID updates from event listener (non-blocking)

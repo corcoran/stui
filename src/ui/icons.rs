@@ -62,7 +62,7 @@ impl Default for IconTheme {
             ignored_color: Color::Red,        // Ignored files
             syncing_color: Color::Yellow,     // Currently syncing
             scanning_color: Color::Magenta,   // Scanning for changes
-            unknown_color: Color::Red,        // Unknown state
+            unknown_color: Color::Gray,       // Unknown state (transient)
             error_color: Color::Red,          // Error state
             paused_color: Color::Gray,        // Paused folder
         }
