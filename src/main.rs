@@ -259,6 +259,7 @@ pub struct App {
     last_system_status_update: Instant,  // Track when we last fetched system status
     last_connection_stats_fetch: Instant,  // Track when we last fetched connection stats
     pub last_transfer_rates: Option<(f64, f64)>,  // Cached transfer rates (download, upload) in bytes/sec
+    last_directory_update: Instant,  // Track when we last ran update_directory_states() for throttling
     // Icon rendering
     pub icon_renderer: IconRenderer,      // Centralized icon renderer
     // Image preview protocol
@@ -489,6 +490,7 @@ impl App {
             last_system_status_update: Instant::now(),
             last_connection_stats_fetch: Instant::now(),
             last_transfer_rates: None,
+            last_directory_update: Instant::now(),
             icon_renderer,
             image_picker,
             image_font_size,
@@ -671,46 +673,64 @@ impl App {
                             .and_then(|idx| self.breadcrumb_trail[0].items.get(idx))
                             .map(|item| item.name.clone());
 
-                        let old_states_count = self.breadcrumb_trail[0].file_sync_states.len();
                         self.breadcrumb_trail[0].items = items.clone();
 
                         // Load cached states
                         let cached_states = self.load_sync_states_from_cache(&folder_id, &items, None);
 
-                        // Before replacing states, preserve any actively Syncing files
-                        let mut preserved_syncing: HashMap<String, SyncState> = HashMap::new();
+                        // Preserve existing in-memory states that shouldn't be wiped by browse results
+                        // This prevents browse results from downgrading RemoteOnly/Syncing/etc to Unknown
+                        let mut preserved_states: HashMap<String, SyncState> = HashMap::new();
                         for (name, state) in &self.breadcrumb_trail[0].file_sync_states {
+                            // Check if this is a directory (directories should be re-evaluated from cache/FileInfo)
+                            let is_directory = items.iter().any(|item| &item.name == name && item.item_type == "FILE_INFO_TYPE_DIRECTORY");
+
+                            // Check if cache has a state for this item
+                            let cache_has_state = cached_states.contains_key(name);
+
+                            // Preserve if cache doesn't have this item's state AND state is worth preserving
+                            let should_preserve = if is_directory {
+                                // For directories: only preserve states that are about the directory itself
+                                // (Ignored = directory is ignored, not about children)
+                                // Don't preserve aggregate states (Syncing/RemoteOnly/etc) - those will be computed
+                                matches!(*state, SyncState::Ignored)
+                            } else {
+                                // For files: preserve any non-Unknown state
+                                *state != SyncState::Unknown
+                            };
+
+                            if !cache_has_state && should_preserve {
+                                preserved_states.insert(name.clone(), *state);
+                                log_debug(&format!("DEBUG [Browse]: Preserving {:?} state for {} (not in cache)", state, name));
+                            }
+
+                            // Always preserve actively Syncing files/dirs (even if cache has stale data)
                             if *state == SyncState::Syncing {
                                 let sync_key = format!("{}:{}", folder_id, name);
-                                // Only preserve if still actively syncing (ItemFinished hasn't fired yet)
                                 if self.syncing_files.contains(&sync_key) {
-                                    preserved_syncing.insert(name.clone(), *state);
-                                    log_debug(&format!("DEBUG [Browse]: Preserving Syncing state for {}", name));
+                                    preserved_states.insert(name.clone(), *state);
+                                    log_debug(&format!("DEBUG [Browse]: Preserving Syncing state for {} (actively syncing)", name));
                                 }
                             }
                         }
 
-                        // Only replace if we got a reasonable number of cached states
-                        // If cache returned very few states, keep existing in-memory states to avoid flash
-                        if cached_states.len() >= old_states_count || old_states_count == 0 {
-                            // Cache has good data or we have no existing states, use it
-                            let mut sync_states = cached_states;
-                            for local_item_name in &local_item_names {
-                                sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
-                            }
-                            self.breadcrumb_trail[0].file_sync_states = sync_states;
-                        } else {
-                            // Cache is stale/empty, keep existing states and merge in local-only items
+                        // Start with cached states
+                        let mut sync_states = cached_states;
 
-                            for local_item_name in &local_item_names {
-                                self.breadcrumb_trail[0].file_sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
-                            }
+                        // Merge in local-only items
+                        for local_item_name in &local_item_names {
+                            sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
                         }
 
-                        // Re-insert preserved Syncing states
-                        for (name, state) in preserved_syncing {
-                            self.breadcrumb_trail[0].file_sync_states.insert(name, state);
+                        // Overlay preserved states (they take priority over cache)
+                        for (name, state) in preserved_states {
+                            sync_states.insert(name, state);
                         }
+
+                        self.breadcrumb_trail[0].file_sync_states = sync_states;
+
+                        // Update directory states based on their children
+                        self.update_directory_states(0);
 
                         // Sort and restore selection using the saved name
                         self.sort_level_with_selection(0, selected_name);
@@ -727,12 +747,7 @@ impl App {
 
                     if let Some(idx) = matching_level_idx {
                         // Only load sync states if this directory is actually open in the UI
-                        let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
-
-                        // Mark local-only items with LocalOnly sync state
-                        for local_item_name in &local_item_names {
-                            sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
-                        }
+                        let cached_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
 
                         if let Some(level) = self.breadcrumb_trail.get_mut(idx) {
                             // Save currently selected item name BEFORE replacing items
@@ -740,27 +755,60 @@ impl App {
                                 .and_then(|sel_idx| level.items.get(sel_idx))
                                 .map(|item| item.name.clone());
 
-                            // Before replacing states, preserve any actively Syncing files
-                            let mut preserved_syncing: HashMap<String, SyncState> = HashMap::new();
+                            // Preserve existing in-memory states that shouldn't be wiped by browse results
+                            let mut preserved_states: HashMap<String, SyncState> = HashMap::new();
                             for (name, state) in &level.file_sync_states {
+                                // Check if this is a directory (directories should be re-evaluated from cache/FileInfo)
+                                let is_directory = items.iter().any(|item| &item.name == name && item.item_type == "FILE_INFO_TYPE_DIRECTORY");
+
+                                // Check if cache has a state for this item
+                                let cache_has_state = cached_states.contains_key(name);
+
+                                // Preserve if cache doesn't have this item's state AND state is worth preserving
+                                let should_preserve = if is_directory {
+                                    // For directories: only preserve states that are about the directory itself
+                                    // (Ignored = directory is ignored, not about children)
+                                    // Don't preserve aggregate states (Syncing/RemoteOnly/etc) - those will be computed
+                                    matches!(*state, SyncState::Ignored)
+                                } else {
+                                    // For files: preserve any non-Unknown state
+                                    *state != SyncState::Unknown
+                                };
+
+                                if !cache_has_state && should_preserve {
+                                    preserved_states.insert(name.clone(), *state);
+                                    log_debug(&format!("DEBUG [Browse non-root]: Preserving {:?} state for {} (not in cache)", state, name));
+                                }
+
+                                // Always preserve actively Syncing files/dirs (even if cache has stale data)
                                 if *state == SyncState::Syncing {
                                     let file_path = format!("{}{}", target_prefix, name);
                                     let sync_key = format!("{}:{}", folder_id, file_path);
-                                    // Only preserve if still actively syncing (ItemFinished hasn't fired yet)
                                     if self.syncing_files.contains(&sync_key) {
-                                        preserved_syncing.insert(name.clone(), *state);
-                                        log_debug(&format!("DEBUG [Browse non-root]: Preserving Syncing state for {}", name));
+                                        preserved_states.insert(name.clone(), *state);
+                                        log_debug(&format!("DEBUG [Browse non-root]: Preserving Syncing state for {} (actively syncing)", name));
                                     }
                                 }
                             }
 
-                            level.items = items.clone();
-                            level.file_sync_states = sync_states.clone();
+                            // Start with cached states
+                            let mut sync_states = cached_states;
 
-                            // Re-insert preserved Syncing states
-                            for (name, state) in preserved_syncing {
-                                level.file_sync_states.insert(name, state);
+                            // Merge in local-only items
+                            for local_item_name in &local_item_names {
+                                sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
                             }
+
+                            // Overlay preserved states (they take priority over cache)
+                            for (name, state) in preserved_states {
+                                sync_states.insert(name, state);
+                            }
+
+                            level.items = items.clone();
+                            level.file_sync_states = sync_states;
+
+                            // Update directory states based on their children
+                            self.update_directory_states(idx);
 
                             // Sort and restore selection using the saved name
                             self.sort_level_with_selection(idx, selected_name);
@@ -856,21 +904,25 @@ impl App {
                                 continue;
                             }
 
-                            // Don't overwrite Syncing state - ItemFinished will update it when sync completes
-                            if current_state == Some(SyncState::Syncing) {
-                                log_debug(&format!("DEBUG [FileInfo]: Skipping {} (currently Syncing)", item_name));
-                            } else if current_state != Some(state) {
+                            // Check if this file is currently syncing
+                            let sync_key = format!("{}:{}", folder_id, file_path);
+                            let was_syncing = self.syncing_files.contains(&sync_key);
+
+                            // Update state if it changed
+                            if current_state != Some(state) {
                                 log_debug(&format!("DEBUG [FileInfo]: Updating {} {:?} -> {:?}", item_name, current_state, state));
                                 level.file_sync_states.insert(item_name.to_string(), state);
 
+                                // If this file was syncing and now has a final state, remove from syncing_files
+                                if was_syncing && state != SyncState::Syncing {
+                                    self.syncing_files.remove(&sync_key);
+                                    log_debug(&format!("DEBUG [FileInfo]: Removed {} from syncing_files after confirming final state {:?}", item_name, state));
+                                }
+
                                 // Update ignored_exists - do it inline to avoid borrow issues
                                 if state == SyncState::Ignored {
-                                    let relative_path = if let Some(ref prefix) = level.prefix {
-                                        format!("{}/{}", prefix, item_name)
-                                    } else {
-                                        item_name.to_string()
-                                    };
-                                    let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                                    // translated_base_path already includes the full path to this directory level
+                                    let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), item_name);
                                     let exists = std::path::Path::new(&host_path).exists();
                                     level.ignored_exists.insert(item_name.to_string(), exists);
                                 } else {
@@ -878,6 +930,10 @@ impl App {
                                 }
 
                                 updated = true;
+                            } else if was_syncing && current_state == Some(state) {
+                                // State didn't change but file was syncing - still remove from syncing_files
+                                self.syncing_files.remove(&sync_key);
+                                log_debug(&format!("DEBUG [FileInfo]: Removed {} from syncing_files (state unchanged: {:?})", item_name, state));
                             }
                         } else {
                             log_debug(&format!("DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}", file_path, level_prefix));
@@ -1175,24 +1231,31 @@ impl App {
                 if !self.breadcrumb_trail.is_empty() && self.breadcrumb_trail[0].folder_id == folder_id {
                     for (_level_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
-                            // Extract just the filename from the full path
-                            let item_name = if let Some(last_slash) = file_path.rfind('/') {
-                                &file_path[last_slash + 1..]
-                            } else {
-                                &file_path
-                            };
+                            // Check if this file belongs to this level
+                            let level_prefix = level.prefix.as_deref().unwrap_or("");
 
-                            // Set state to Syncing unconditionally
-                            level.file_sync_states.insert(item_name.to_string(), SyncState::Syncing);
+                            // File must start with this level's prefix
+                            if file_path.starts_with(level_prefix) {
+                                // Extract the item name relative to this level
+                                let relative_path = &file_path[level_prefix.len()..];
 
-                            // Update ignored_exists (syncing files are not ignored) - do it inline to avoid borrow issues
-                            level.ignored_exists.remove(item_name);
+                                // The item name is the path without any further subdirectories
+                                // For root level showing "dir/file.txt", item_name is "dir/file.txt"
+                                // For level with prefix="dir/", item_name is "file.txt"
+                                let item_name = relative_path;
 
-                            // Remove from manually_set_states so file invalidation and file_info can update it
-                            // (The Unknown state set during un-ignore should not block Syncing -> Synced transition)
-                            self.manually_set_states.remove(&sync_key);
+                                // Set state to Syncing unconditionally
+                                level.file_sync_states.insert(item_name.to_string(), SyncState::Syncing);
 
-                            log_debug(&format!("DEBUG [Event]: Set {} to Syncing", item_name));
+                                // Update ignored_exists (syncing files are not ignored) - do it inline to avoid borrow issues
+                                level.ignored_exists.remove(item_name);
+
+                                // Remove from manually_set_states so file invalidation and file_info can update it
+                                // (The Unknown state set during un-ignore should not block Syncing -> Synced transition)
+                                self.manually_set_states.remove(&sync_key);
+
+                                log_debug(&format!("DEBUG [Event]: Set {} to Syncing in level with prefix {:?}", item_name, level_prefix));
+                            }
                         }
                     }
                 }
@@ -1200,11 +1263,18 @@ impl App {
             event_listener::CacheInvalidation::ItemFinished { folder_id, file_path } => {
                 log_debug(&format!("DEBUG [Event]: ItemFinished: folder={} path={}", folder_id, file_path));
 
-                // Remove from syncing files set
-                let sync_key = format!("{}:{}", folder_id, file_path);
-                self.syncing_files.remove(&sync_key);
+                // Don't remove from syncing_files yet - keep it protected until FileInfo confirms final state
+                // The file invalidation event that follows will be protected because file is still in syncing_files
+                // FileInfo handler will remove from syncing_files after confirming the final state
 
-                // The cache invalidation will be sent separately, which will trigger a refresh
+                // Request immediate FileInfo fetch to get final state (high priority)
+                let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                    folder_id: folder_id.clone(),
+                    file_path: file_path.clone(),
+                    priority: api_service::Priority::High,
+                });
+
+                log_debug(&format!("DEBUG [Event]: ItemFinished - keeping {} in syncing_files until FileInfo confirms state", file_path));
             }
         }
     }
@@ -1278,6 +1348,110 @@ impl App {
 
         log_debug(&format!("DEBUG [load_sync_states_from_cache]: END returning {} states", sync_states.len()));
         sync_states
+    }
+
+    /// Update directory states based on their children's states
+    /// Directories should reflect the "worst" state of their children (Syncing > RemoteOnly > OutOfSync > Synced)
+    /// Throttled to run at most once every 2 seconds to prevent excessive cache queries
+    fn update_directory_states(&mut self, level_idx: usize) {
+        // Throttle: only run once every 2 seconds to prevent continuous cache queries
+        if self.last_directory_update.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.last_directory_update = Instant::now();
+
+        if level_idx >= self.breadcrumb_trail.len() {
+            return;
+        }
+
+        let level = &self.breadcrumb_trail[level_idx];
+        let mut dir_states: HashMap<String, SyncState> = HashMap::new();
+
+        // Collect directory names first
+        let directory_names: Vec<String> = level.items.iter()
+            .filter(|item| item.item_type == "FILE_INFO_TYPE_DIRECTORY")
+            .map(|item| item.name.clone())
+            .collect();
+
+        // For each directory, determine its state based on children
+        for dir_name in &directory_names {
+            // Get the directory's current direct state (from FileInfo)
+            let direct_state = level.file_sync_states.get(dir_name).copied();
+
+            // Start with the direct state, or default to Synced if not set
+            let mut aggregate_state = direct_state.unwrap_or(SyncState::Synced);
+
+            // If the directory itself is RemoteOnly or Ignored, that takes precedence
+            // (it means the directory itself doesn't exist locally or is ignored)
+            if matches!(aggregate_state, SyncState::RemoteOnly | SyncState::Ignored) {
+                dir_states.insert(dir_name.clone(), aggregate_state);
+                continue;
+            }
+
+            // Check if we have cached children states
+            let dir_prefix = if let Some(ref prefix) = level.prefix {
+                format!("{}{}/", prefix, dir_name)
+            } else {
+                format!("{}/", dir_name)
+            };
+
+            // Get folder sequence for cache validation
+            let folder_sequence = self.folder_statuses.get(&level.folder_id)
+                .map(|status| status.sequence)
+                .unwrap_or_else(|| {
+                    log_debug(&format!("DEBUG [update_directory_states]: folder_id '{}' not found in folder_statuses, using sequence=0", level.folder_id));
+                    0
+                });
+
+            // Try to get cached browse items for this directory
+            if let Ok(Some(children)) = self.cache.get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence) {
+                // Check children states
+                let mut has_syncing = false;
+                let mut has_remote_only = false;
+                let mut has_out_of_sync = false;
+                let mut has_local_only = false;
+
+                for child in &children {
+                    let child_path = format!("{}{}", dir_prefix, child.name);
+                    if let Ok(Some(child_state)) = self.cache.get_sync_state_unvalidated(&level.folder_id, &child_path) {
+                        match child_state {
+                            SyncState::Syncing => has_syncing = true,
+                            SyncState::RemoteOnly => has_remote_only = true,
+                            SyncState::OutOfSync => has_out_of_sync = true,
+                            SyncState::LocalOnly => has_local_only = true,
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Determine aggregate state (priority order: Syncing > RemoteOnly > OutOfSync > LocalOnly > Synced)
+                aggregate_state = if has_syncing {
+                    SyncState::Syncing
+                } else if has_remote_only {
+                    SyncState::RemoteOnly
+                } else if has_out_of_sync {
+                    SyncState::OutOfSync
+                } else if has_local_only {
+                    SyncState::LocalOnly
+                } else {
+                    // All children synced, use the directory's direct state
+                    direct_state.unwrap_or(SyncState::Synced)
+                };
+            }
+
+            dir_states.insert(dir_name.clone(), aggregate_state);
+        }
+
+        // Apply computed states
+        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            for (dir_name, state) in dir_states {
+                let current = level.file_sync_states.get(&dir_name).copied();
+                if current != Some(state) {
+                    log_debug(&format!("DEBUG [update_directory_states]: Setting {} to {:?} (was {:?})", dir_name, state, current));
+                    level.file_sync_states.insert(dir_name, state);
+                }
+            }
+        }
     }
 
     fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
@@ -1631,13 +1805,12 @@ impl App {
 
         for item in items {
             if let Some(SyncState::Ignored) = file_sync_states.get(&item.name) {
-                let relative_path = if let Some(prefix_val) = prefix {
-                    format!("{}/{}", prefix_val, item.name)
-                } else {
-                    item.name.clone()
-                };
-                let host_path = format!("{}/{}", translated_base_path.trim_end_matches('/'), relative_path);
+                // When prefix is Some, translated_base_path already includes the full path to this directory
+                // so we only need to append the item name
+                let host_path = format!("{}/{}", translated_base_path.trim_end_matches('/'), item.name);
                 let exists = std::path::Path::new(&host_path).exists();
+                log_debug(&format!("DEBUG [check_ignored_existence]: item={} prefix={:?} translated_base_path={} host_path={} exists={}",
+                    item.name, prefix, translated_base_path, host_path, exists));
                 ignored_exists.insert(item.name.clone(), exists);
             }
         }
@@ -1655,13 +1828,11 @@ impl App {
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
             if new_state == SyncState::Ignored {
                 // File is now ignored - check if it exists
-                let relative_path = if let Some(ref prefix) = level.prefix {
-                    format!("{}/{}", prefix, file_name)
-                } else {
-                    file_name.to_string()
-                };
-                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                // translated_base_path already includes the full path to this directory level
+                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), file_name);
                 let exists = std::path::Path::new(&host_path).exists();
+                log_debug(&format!("DEBUG [update_ignored_exists_for_file]: file_name={} prefix={:?} translated_base_path={} host_path={} exists={}",
+                    file_name, level.prefix, level.translated_base_path, host_path, exists));
                 level.ignored_exists.insert(file_name.to_string(), exists);
             } else {
                 // File is no longer ignored - remove from ignored_exists
@@ -1872,6 +2043,141 @@ impl App {
                     let file_path = format!("{}{}", new_prefix, local_item_name);
                     let _ = self.cache.save_sync_state(&folder_id, &file_path, SyncState::LocalOnly, 0);
                 }
+
+                // Check if we're inside an ignored directory (check all ancestors) - if so, mark all children as ignored
+                // This handles the case where you ignore a directory and immediately drill into it
+                let current_path = new_prefix.trim_end_matches('/');
+                let mut is_in_ignored_parent = false;
+                let mut was_recently_unignored = false;
+
+                log_debug(&format!("DEBUG [enter_directory]: Checking if {} is inside ignored directory", current_path));
+
+                // First check if current directory or any ancestor was recently unignored
+                // If so, don't inherit ignored state even if cache still shows ignored
+                let check_key = format!("{}:{}", folder_id, current_path);
+                log_debug(&format!("DEBUG [enter_directory]: Checking manually_set_states for key: {}", check_key));
+                log_debug(&format!("DEBUG [enter_directory]: manually_set_states has {} entries", self.manually_set_states.len()));
+
+                if let Some(manual_change) = self.manually_set_states.get(&check_key) {
+                    log_debug(&format!("DEBUG [enter_directory]: Found manual change for current dir: {:?}", manual_change.action));
+                    if matches!(manual_change.action, ManualAction::SetUnignored) {
+                        was_recently_unignored = true;
+                        log_debug(&format!("DEBUG [enter_directory]: Current dir {} was recently UNIGNORED, skipping ignored inheritance", current_path));
+                    }
+                } else {
+                    log_debug(&format!("DEBUG [enter_directory]: No manual change found for current dir {}", current_path));
+                }
+
+                if !was_recently_unignored {
+                    let path_parts: Vec<&str> = current_path.split('/').collect();
+                    log_debug(&format!("DEBUG [enter_directory]: Checking {} ancestors for unignore", path_parts.len() - 1));
+                    for i in 1..path_parts.len() {
+                        let ancestor_path = path_parts[..i].join("/");
+                        let ancestor_key = format!("{}:{}", folder_id, ancestor_path);
+                        log_debug(&format!("DEBUG [enter_directory]: Checking ancestor key: {}", ancestor_key));
+                        if let Some(manual_change) = self.manually_set_states.get(&ancestor_key) {
+                            log_debug(&format!("DEBUG [enter_directory]: Found manual change for ancestor {}: {:?}", ancestor_path, manual_change.action));
+                            if matches!(manual_change.action, ManualAction::SetUnignored) {
+                                was_recently_unignored = true;
+                                log_debug(&format!("DEBUG [enter_directory]: Ancestor {} was recently UNIGNORED, skipping ignored inheritance", ancestor_path));
+                                break;
+                            }
+                        } else {
+                            log_debug(&format!("DEBUG [enter_directory]: No manual change found for ancestor {}", ancestor_path));
+                        }
+                    }
+                }
+
+                if was_recently_unignored {
+                    log_debug(&format!("DEBUG [enter_directory]: Skipping ignored inheritance due to recent unignore"));
+                    // Also remove any cached Ignored states for items in this directory
+                    // This handles subdirectories that were cached as ignored before parent was unignored
+                    let mut cleared_count = 0;
+                    for item in &items {
+                        if let Some(state) = file_sync_states.get(&item.name) {
+                            if *state == SyncState::Ignored {
+                                file_sync_states.remove(&item.name);
+                                cleared_count += 1;
+                                log_debug(&format!("DEBUG [enter_directory]: Cleared stale Ignored state for {}", item.name));
+                            }
+                        }
+                    }
+                    if cleared_count > 0 {
+                        log_debug(&format!("DEBUG [enter_directory]: Cleared {} stale Ignored states in current level", cleared_count));
+                    }
+
+                    // CRITICAL: Also clear the current directory's Ignored state in the PARENT level
+                    // This prevents browse results from preserving the stale Ignored state
+                    if level_idx > 0 {
+                        if let Some(parent_level) = self.breadcrumb_trail.get_mut(level_idx - 1) {
+                            // Extract just the directory name (last component of path)
+                            let dir_name = current_path.split('/').last().unwrap_or("");
+                            if let Some(state) = parent_level.file_sync_states.get(dir_name) {
+                                if *state == SyncState::Ignored {
+                                    parent_level.file_sync_states.remove(dir_name);
+                                    log_debug(&format!("DEBUG [enter_directory]: Cleared stale Ignored state for {} in PARENT level", dir_name));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Check the current directory itself first
+                    match self.cache.get_sync_state_unvalidated(&folder_id, current_path) {
+                        Ok(Some(current_state)) => {
+                            log_debug(&format!("DEBUG [enter_directory]: Current dir {} state = {:?}", current_path, current_state));
+                            if current_state == SyncState::Ignored {
+                                is_in_ignored_parent = true;
+                                log_debug(&format!("DEBUG [enter_directory]: Current dir {} is ignored", current_path));
+                            }
+                        }
+                        Ok(None) => {
+                            log_debug(&format!("DEBUG [enter_directory]: Current dir {} NOT FOUND in cache", current_path));
+                        }
+                        Err(e) => {
+                            log_debug(&format!("DEBUG [enter_directory]: Error checking current dir {}: {}", current_path, e));
+                        }
+                    }
+
+                    // Check all ancestor directories (e.g., for "XDA/4_punya/subfolder", check "XDA/4_punya" and "XDA")
+                    if !is_in_ignored_parent {
+                        let path_parts: Vec<&str> = current_path.split('/').collect();
+                        log_debug(&format!("DEBUG [enter_directory]: Path parts: {:?}, checking {} ancestors", path_parts, path_parts.len() - 1));
+                        for i in 1..path_parts.len() {
+                            let ancestor_path = path_parts[..i].join("/");
+                            log_debug(&format!("DEBUG [enter_directory]: Checking ancestor {} (index {})", ancestor_path, i));
+                            match self.cache.get_sync_state_unvalidated(&folder_id, &ancestor_path) {
+                                Ok(Some(ancestor_state)) => {
+                                    log_debug(&format!("DEBUG [enter_directory]: Ancestor {} state = {:?}", ancestor_path, ancestor_state));
+                                    if ancestor_state == SyncState::Ignored {
+                                        is_in_ignored_parent = true;
+                                        log_debug(&format!("DEBUG [enter_directory]: Found ignored ancestor: {}", ancestor_path));
+                                        break;
+                                    }
+                                }
+                                Ok(None) => {
+                                    log_debug(&format!("DEBUG [enter_directory]: Ancestor {} NOT FOUND in cache", ancestor_path));
+                                }
+                                Err(e) => {
+                                    log_debug(&format!("DEBUG [enter_directory]: Error checking ancestor {}: {}", ancestor_path, e));
+                                }
+                            }
+                        }
+                    }
+
+                    if is_in_ignored_parent {
+                        log_debug(&format!("DEBUG [enter_directory]: Inside ignored parent, marking all {} children as ignored", items.len()));
+                        // Mark all items as ignored since we're inside an ignored directory
+                        for item in &items {
+                            log_debug(&format!("DEBUG [enter_directory]: Marking {} as Ignored", item.name));
+                            file_sync_states.insert(item.name.clone(), SyncState::Ignored);
+                        }
+                    } else {
+                        log_debug(&format!("DEBUG [enter_directory]: NOT inside ignored parent"));
+                    }
+                }
+
+                log_debug(&format!("DEBUG [enter_directory]: FINISHED ancestor checking, was_recently_unignored={} is_in_ignored_parent={}",
+                    was_recently_unignored, is_in_ignored_parent));
 
                 // Check which ignored files exist on disk (one-time check, not per-frame)
                 let ignored_exists = self.check_ignored_existence(&items, &file_sync_states, &translated_base_path, Some(&new_prefix));
@@ -2289,7 +2595,7 @@ impl App {
 
         // Build the full host path
         let relative_path = if let Some(ref prefix) = level.prefix {
-            format!("{}/{}", prefix, item.name)
+            format!("{}{}", prefix, item.name)
         } else {
             item.name.clone()
         };
@@ -2908,7 +3214,7 @@ impl App {
 
         // Build the relative path from folder root
         let relative_path = if let Some(ref prefix) = prefix {
-            format!("{}/{}", prefix, item.name)
+            format!("{}{}", prefix, item.name)
         } else {
             item.name.clone()
         };
@@ -3013,7 +3319,8 @@ impl App {
                 level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
 
                 // Update ignored_exists (file is now ignored) - do it inline to avoid borrow issues
-                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), relative_path);
+                // translated_base_path already includes the full path to this directory level
+                let host_path = format!("{}/{}", level.translated_base_path.trim_end_matches('/'), item_name);
                 let exists = std::path::Path::new(&host_path).exists();
                 level.ignored_exists.insert(item_name.clone(), exists);
 
@@ -3082,7 +3389,7 @@ impl App {
 
         // Build paths
         let relative_path = if let Some(ref prefix) = level.prefix {
-            format!("{}/{}", prefix, item.name)
+            format!("{}{}", prefix, item.name)
         } else {
             item.name.clone()
         };
@@ -3880,6 +4187,11 @@ async fn run_app<B: ratatui::backend::Backend>(
 
             // LOWEST PRIORITY: Batch fetch file sync states for visible files
             app.batch_fetch_visible_sync_states(5);
+
+            // Update directory states based on their children (uses cache only, non-blocking)
+            if app.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
+                app.update_directory_states(app.focus_level - 1);
+            }
         }
 
         // Increased poll timeout from 100ms to 250ms to reduce CPU usage when idle
