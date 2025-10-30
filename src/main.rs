@@ -1075,12 +1075,8 @@ impl App {
                 {
                     for (_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
                         if level.folder_id == folder_id {
-                            // Clear in-memory sync state for this file
-                            level.file_sync_states.remove(&file_path);
-                            log_debug(&format!(
-                                "DEBUG [Event]: Cleared state for {}",
-                                file_path
-                            ));
+                            // Don't clear state immediately - causes flicker to Unknown
+                            // The Browse response will naturally update the state with fresh data
 
                             // Check if this level is showing the parent directory
                             let level_prefix = level.prefix.as_deref();
@@ -1216,28 +1212,8 @@ impl App {
                     folder_id, file_path
                 ));
 
-                // Clear Syncing state in UI
-                if !self.breadcrumb_trail.is_empty()
-                    && self.breadcrumb_trail[0].folder_id == folder_id
-                {
-                    for level in self.breadcrumb_trail.iter_mut() {
-                        if level.folder_id == folder_id {
-                            let level_prefix = level.prefix.as_deref().unwrap_or("");
-                            if file_path.starts_with(level_prefix) {
-                                let relative_path = &file_path[level_prefix.len()..];
-                                // Remove Syncing state (will be refreshed by Browse or LocalIndexUpdated)
-                                level.file_sync_states.remove(relative_path);
-                                log_debug(&format!(
-                                    "DEBUG [Event]: Cleared Syncing state for {} in level with prefix {:?}",
-                                    relative_path, level_prefix
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                // Don't fetch FileInfo immediately - rely on LocalIndexUpdated event or Browse refresh
-                // This prevents API flood during bulk syncs (hundreds of files)
+                // Don't clear state or fetch FileInfo - causes flicker and API flood
+                // LocalIndexUpdated event will trigger Browse refresh with fresh data
             }
         }
     }
@@ -1663,17 +1639,21 @@ impl App {
             return;
         }
 
-        // Try to get from cache first
-        let items = if let Ok(Some(cached_items)) =
-            self.cache
-                .get_browse_items(folder_id, Some(dir_path), folder_sequence)
+        // Try to get from cache first (accept any cached value, even if sequence is old)
+        // For prefetch, we prioritize speed over perfect accuracy
+        // Use sequence=0 to accept any cached value regardless of sequence number
+        let items = if let Ok(Some(cached_items)) = self
+            .cache
+            .get_browse_items(folder_id, Some(dir_path), 0)
         {
             cached_items
         } else {
-            // Not cached - request it non-blocking and skip for now
-            // It will be available on the next iteration
+            // Not cached - request it non-blocking and mark as discovered to prevent re-requesting
             if !self.loading_browse.contains(&browse_key) {
                 self.loading_browse.insert(browse_key.clone());
+
+                // Mark as discovered immediately to prevent repeated requests
+                self.discovered_dirs.insert(browse_key.clone());
 
                 // Send non-blocking browse request
                 let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
