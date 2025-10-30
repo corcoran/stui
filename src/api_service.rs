@@ -338,7 +338,10 @@ pub fn spawn_api_service(
                 // Handle completion notifications
                 Some(InternalMessage::Completed(key)) = completion_rx.recv() => {
                     service.in_flight.remove(&key);
-                    log_debug(&format!("DEBUG [API Service]: Removed from in_flight, now {} in flight", service.in_flight.len()));
+                    // Only log when there are still requests in flight (to reduce log spam)
+                    if !service.in_flight.is_empty() {
+                        log_debug(&format!("DEBUG [API Service]: Removed from in_flight, now {} in flight", service.in_flight.len()));
+                    }
                 }
 
                 // Process queue at regular intervals

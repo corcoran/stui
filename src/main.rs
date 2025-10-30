@@ -591,6 +591,24 @@ impl App {
                     return; // Silently ignore errors
                 };
 
+                // Check if this response is still relevant to current navigation
+                // We allow caching for subdirectories of the current folder (prefetch),
+                // but skip if we've navigated completely away from this folder
+                let is_relevant = if self.focus_level == 0 {
+                    false // At folder list, no browse results are relevant
+                } else if self.breadcrumb_trail.is_empty() {
+                    false // No breadcrumb trail, nothing is relevant
+                } else {
+                    // Check if this folder_id matches any level in our current breadcrumb trail
+                    // This allows prefetching subdirectories that aren't yet open
+                    self.breadcrumb_trail.iter().any(|level| level.folder_id == folder_id)
+                };
+
+                if !is_relevant {
+                    log_debug(&format!("DEBUG [BrowseResult]: Skipping irrelevant response for folder={} prefix={:?} (navigated away)", folder_id, prefix));
+                    return; // Skip saving and UI updates for responses from folders we've left
+                }
+
                 // Get folder sequence for cache
                 let folder_sequence = self.folder_statuses
                     .get(&folder_id)
@@ -636,8 +654,13 @@ impl App {
                     }
                 }
 
+                log_debug(&format!("DEBUG [BrowseResult]: folder={} prefix={:?} focus_level={} breadcrumb_count={}",
+                                   folder_id, prefix, self.focus_level, self.breadcrumb_trail.len()));
+
                 // Save merged items to cache
-                let _ = self.cache.save_browse_items(&folder_id, prefix.as_deref(), &items, folder_sequence);
+                if let Err(e) = self.cache.save_browse_items(&folder_id, prefix.as_deref(), &items, folder_sequence) {
+                    log_debug(&format!("ERROR [BrowseResult]: Failed to save browse items to cache: {}", e));
+                }
 
                 // Update UI if this browse result matches current navigation
                 if prefix.is_none() && self.focus_level == 1 && !self.breadcrumb_trail.is_empty() {
@@ -693,17 +716,25 @@ impl App {
                         self.sort_level_with_selection(0, selected_name);
                     }
                 } else if let Some(ref target_prefix) = prefix {
-                    // Load sync states first (before mutable borrow)
-                    let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
+                    // Check if this matches a breadcrumb level FIRST before loading sync states
+                    // This prevents unnecessary cache lookups and "NOT FOUND" log spam for prefetched directories
+                    let matching_level_idx = self.breadcrumb_trail.iter().position(|level| {
+                        level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix)
+                    });
 
-                    // Mark local-only items with LocalOnly sync state
-                    for local_item_name in &local_item_names {
-                        sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
-                    }
+                    log_debug(&format!("DEBUG [BrowseResult non-root]: folder={} prefix={:?} matching_level={:?} breadcrumb_count={}",
+                                       folder_id, target_prefix, matching_level_idx, self.breadcrumb_trail.len()));
 
-                    // Check if this matches a breadcrumb level
-                    for (idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
-                        if level.folder_id == folder_id && level.prefix.as_ref() == Some(target_prefix) {
+                    if let Some(idx) = matching_level_idx {
+                        // Only load sync states if this directory is actually open in the UI
+                        let mut sync_states = self.load_sync_states_from_cache(&folder_id, &items, Some(target_prefix));
+
+                        // Mark local-only items with LocalOnly sync state
+                        for local_item_name in &local_item_names {
+                            sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                        }
+
+                        if let Some(level) = self.breadcrumb_trail.get_mut(idx) {
                             // Save currently selected item name BEFORE replacing items
                             let selected_name = level.state.selected()
                                 .and_then(|sel_idx| level.items.get(sel_idx))
@@ -733,9 +764,11 @@ impl App {
 
                             // Sort and restore selection using the saved name
                             self.sort_level_with_selection(idx, selected_name);
-                            break;
                         }
                     }
+                    // Note: If no matching breadcrumb level found, this is a prefetch response
+                    // for a directory that's not currently open. Browse items are already saved
+                    // to cache (line 656), but we skip loading sync states to avoid log spam.
                 }
             }
 
@@ -748,6 +781,21 @@ impl App {
                     log_debug(&format!("DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}", folder_id, file_path, details.err()));
                     return; // Silently ignore errors
                 };
+
+                // Check if this response is still relevant to current navigation
+                let is_relevant = if self.focus_level == 0 {
+                    false // At folder list, no file info is relevant
+                } else if self.breadcrumb_trail.is_empty() {
+                    false // No breadcrumb trail, nothing is relevant
+                } else {
+                    // Check if this folder_id matches any level in our current breadcrumb trail
+                    self.breadcrumb_trail.iter().any(|level| level.folder_id == folder_id)
+                };
+
+                if !is_relevant {
+                    log_debug(&format!("DEBUG [FileInfoResult]: Skipping irrelevant response for folder={} path={}", folder_id, file_path));
+                    return; // Skip saving and UI updates for irrelevant responses
+                }
 
                 let file_sequence = file_details.local.as_ref()
                     .or(file_details.global.as_ref())
@@ -1624,7 +1672,7 @@ impl App {
 
     async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
-            if let Some(folder) = self.folders.get(selected) {
+            if let Some(folder) = self.folders.get(selected).cloned() {
                 // Don't try to browse paused folders
                 if folder.paused {
                     // Stay on folder list, don't enter the folder
@@ -1683,7 +1731,7 @@ impl App {
                 let state = ListState::default();
 
                 // Compute translated base path once
-                let translated_base_path = self.translate_path(folder, "");
+                let translated_base_path = self.translate_path(&folder, "");
 
                 // Load cached sync states for items
                 let mut file_sync_states = self.load_sync_states_from_cache(&folder.id, &items, None);
