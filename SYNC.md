@@ -1,582 +1,970 @@
-# Sync State System Documentation
+# Sync State Refactoring Plan - REVISED
 
-## Overview
-
-The sync state system tracks the synchronization status of files and directories across Syncthing devices. It combines data from Syncthing's REST API, SQLite cache, event streams, and computed aggregate states to provide real-time visual feedback in the TUI.
-
----
-
-## Sync State Enum
-
-**Location:** `src/api.rs:40-48` *(verified)*
-
-```rust
-pub enum SyncState {
-    Synced,       // ✅ Local matches global
-    OutOfSync,    // ⚠️ Local differs from global
-    LocalOnly,    // 💻 Only on this device
-    RemoteOnly,   // ☁️ Only on remote devices
-    Ignored,      // 🚫 In .stignore
-    Syncing,      // 🔄 Currently syncing
-    Unknown,      // ❓ Not yet determined
-}
-```
-
-### State Meanings
-
-| State | Meaning | Source |
-|-------|---------|--------|
-| `Synced` | File exists locally and remotely with identical content | FileInfo comparison |
-| `OutOfSync` | File exists both places but content differs | FileInfo version/blocks_hash mismatch |
-| `LocalOnly` | File exists only on this device | FileInfo: local exists, no global |
-| `RemoteOnly` | File exists on remote devices but not locally | FileInfo: no local, global exists |
-| `Ignored` | File/directory is in `.stignore` | FileInfo: `ignored` flag |
-| `Syncing` | File is actively downloading/uploading | ItemStarted/ItemFinished events |
-| `Unknown` | State not yet determined | Initial state or cache miss |
+**Status**: Proposal (awaiting user approval)
+**Date**: 2025-10-30
+**Goal**: Simplify sync state management by trusting API responses and using optimistic updates with revert capability
 
 ---
 
-## Data Sources
+## Executive Summary
 
-### 1. Syncthing REST API
+### The Core Problem
 
-#### `/rest/db/file?folder=<id>&file=<path>` (FileInfo)
-**Purpose:** Get detailed sync state for a single file/directory
-**Returns:** `FileDetails` struct with `local`, `global`, and `availability` fields
-**Used by:**
-- `batch_fetch_visible_sync_states()` - src/main.rs:1417
-- `fetch_directory_states()` - src/main.rs:1545
-- `fetch_selected_item_sync_state()` - src/main.rs:1664
+**Current system has 650+ lines of defensive code that fights Syncthing's API instead of trusting it.**
 
-**State Determination:** `determine_sync_state()` - src/api.rs:533-566 *(verified)*
-- Compares `local` vs `global` FileInfo
-- Checks `deleted`, `ignored`, `version`, `blocks_hash` flags
-- Returns appropriate SyncState based on comparison
+The code rejects API responses based on assumptions about what the state "should be" (from user actions 10 seconds ago), leading to:
+- Subdirectories stuck showing Ignored after parent is unignored
+- Stale states persisting until user navigates away and back
+- Complex preservation logic with race conditions
+- Duplicate code (root vs non-root Browse handlers)
 
-#### `/rest/db/browse?folder=<id>&prefix=<path>` (Browse)
-**Purpose:** List directory contents
-**Returns:** Array of `BrowseItem` (name, type, size, mod_time)
-**Used by:** Browse result handler - src/main.rs:585-804
-**Note:** Does NOT return sync states, only file metadata
+### The Solution
 
-#### `/rest/events?since=<id>` (Event Stream)
-**Purpose:** Real-time notifications of sync activity
-**Handled by:** `event_listener.rs:65-260`
-**Key Events:**
-- `ItemStarted` - File begins syncing
-- `ItemFinished` - File finishes syncing
-- `LocalIndexUpdated` - Local changes detected (with `filenames` array)
-- `LocalChangeDetected` / `RemoteChangeDetected` - Individual file changes
+**Trust Syncthing's API responses, use optimistic UI updates that can be reverted when conflicts occur.**
 
-### 2. SQLite Cache
+**Two Sources of Truth**:
+1. **Syncthing API**: Authoritative for sync states (Synced, OutOfSync, LocalOnly, RemoteOnly, Ignored)
+2. **Local Filesystem**: Authoritative for ignored file existence (⚠️ exists vs 🚫 deleted) - **our unique feature**
 
-**Location:** `~/.cache/synctui/cache.db` (or `/tmp/synctui-cache`)
-**Schema:**
-```sql
-CREATE TABLE sync_states (
-    folder_id TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_sequence INTEGER NOT NULL,
-    sync_state INTEGER NOT NULL,
-    PRIMARY KEY (folder_id, file_path)
-);
-
-CREATE TABLE browse_cache (
-    folder_id TEXT NOT NULL,
-    prefix TEXT,
-    folder_sequence INTEGER NOT NULL,
-    items TEXT NOT NULL,
-    cached_at INTEGER NOT NULL,
-    PRIMARY KEY (folder_id, prefix)
-);
-```
-
-**Key Functions:**
-- `save_sync_state()` - src/cache.rs:304 - Save state with sequence number
-- `get_sync_state_unvalidated()` - src/cache.rs:285 - Load cached state without validation
-- `invalidate_file()` - src/cache.rs:318 - Remove stale file state
-- `invalidate_directory()` - src/cache.rs:328 - Remove stale directory + children states
-
-**Sequence Validation:**
-- Folder has a `sequence` number that increments on every change
-- Cached states are invalidated when folder sequence changes
-- Prevents displaying stale data after remote updates
+**Key Principle**: API response always wins. If external .stignore modification conflicts with user action, accept API result and notify user.
 
 ---
 
-## State Storage Locations
+## Critical Realities (Corrected Understanding)
 
-### In-Memory Storage
-**Location:** `BreadcrumbLevel.file_sync_states: HashMap<String, SyncState>`
-**Struct:** src/main.rs:190-200
+### Reality 1: .stignore Can Be Modified Externally
 
-Each breadcrumb level (directory view) maintains a HashMap mapping file/directory names to their sync states. This is the source of truth for UI rendering.
+**NOT SAFE TO ASSUME**: Our `PUT /rest/db/ignores` request is authoritative
 
-### Tracking Collections
+**REALITY**:
+- User can edit `.stignore` in text editor while app is running
+- Git can modify it during checkout/merge/pull
+- Other Syncthing tools can modify it
+- Syncthing itself may reorder/normalize patterns
 
-#### `syncing_files: HashSet<String>`
-**Location:** `App` struct - src/main.rs:244
-**Format:** `"folder_id:file_path"`
-**Purpose:** Track files actively syncing (between ItemStarted and ItemFinished)
-**Protection:** Files in this set are protected from state invalidation
+**IMPLICATION**: We must use optimistic updates that can be reverted when API reports different state
 
-#### `manually_set_states: HashMap<String, ManualStateChange>`
-**Location:** `App` struct - src/main.rs:242
-**Format:** `"folder_id:file_path" -> ManualStateChange`
-**Purpose:** Track user actions (ignore/unignore) to validate state transitions
-**Timeout:** 10 seconds (prevents permanent blocking)
+### Reality 2: Syncthing Doesn't Track Ignored File Existence
 
-```rust
-struct ManualStateChange {
-    action: ManualAction,  // SetIgnored or SetUnignored
-    timestamp: Instant,
-}
-```
+**NOT AVAILABLE FROM API**: Whether ignored file exists on disk or was deleted
+
+**REALITY**:
+- Syncthing API returns `Ignored` state for pattern-matched files
+- Syncthing does NOT distinguish between ignored+exists vs ignored+deleted
+- This distinction (⚠️ vs 🚫) is **our unique feature**
+- We must check filesystem directly via `fs::metadata()`
+
+**IMPLICATION**: The `ignored_exists` HashMap must stay, but can be optimized (don't check children of non-existent ignored directories)
+
+### Reality 3: No .stignore-Specific Events
+
+**NOT AVAILABLE**: `ConfigSaved`, `FolderIgnoresUpdated`, or similar events
+
+**REALITY** (confirmed via code research):
+- Syncthing does NOT emit events when .stignore is modified
+- When .stignore changes (via API or external edit), Syncthing rescans automatically
+- We detect changes via `LocalIndexUpdated` events for affected files
+- Current code manually triggers rescan after `PUT /rest/db/ignores`
+
+**IMPLICATION**: Keep manual rescan trigger, rely on events for detection (no polling needed)
 
 ---
 
-## State Update Mechanisms
+## Current Architecture Problems (Unchanged from Original Plan)
 
-### 1. File State Updates (Direct)
+### Problem 1: Rejecting API Responses (Lines 870-905)
 
-**Via FileInfo API Response**
-Handler: `handle_api_response()` -> `ApiResponse::FileInfoResult` - src/main.rs:807-923
-
-**Flow:**
-1. API response arrives with FileDetails
-2. `determine_sync_state()` computes state from local/global comparison
-3. State transition validation checks (see below)
-4. Update `file_sync_states` HashMap
-5. Save to cache with sequence number
-6. If file was syncing, remove from `syncing_files`
-
-**State Transition Validation** (src/main.rs:852-894):
 ```rust
-// Check manually set states
-if let Some(manual_change) = manually_set_states.get(&state_key) {
-    match manual_change.action {
-        SetIgnored => state must be Ignored,
-        SetUnignored => state must NOT be Ignored,
-    }
-}
-
-// Reject illegal transitions
-if state == Unknown {
-    match current_state {
-        Syncing | RemoteOnly | LocalOnly | OutOfSync | Synced => REJECT
-    }
-}
-
-// Remove from syncing_files when final state confirmed
-if was_syncing && state != Syncing {
-    syncing_files.remove(&key);
-}
-```
-
-### 2. Directory State Updates (Computed)
-
-**Via Children Aggregation**
-Function: `update_directory_states()` - src/main.rs:1350-1437 *(line numbers updated)*
-
-**Logic:**
-1. For each directory in current level:
-   - Check directory's own FileInfo state (for Ignored/RemoteOnly)
-   - Query cache for children's states
-   - Compute aggregate state based on priority:
-     - **Syncing** > RemoteOnly > OutOfSync > LocalOnly > Synced
-   - Apply computed state to directory
-
-**When Called:**
-- After browse result processing (src/main.rs:724, 795)
-- Periodically in idle loop (src/main.rs:4024-4027)
-
-**Throttling:**
-- Runs at most once every 2 seconds (src/main.rs:1362-1364)
-- Prevents continuous cache queries when hovering over directories
-- Uses `last_directory_update: Instant` timestamp to track last execution
-
-**Special Cases:**
-- If directory itself is `Ignored` or `RemoteOnly` (doesn't exist locally), use that directly
-- If no cached children, fall back to directory's direct state
-- Uses cache only (non-blocking)
-
-### 3. Browse Result Updates
-
-**Handler:** `handle_api_response()` -> `ApiResponse::BrowseResult` - src/main.rs:585-804
-
-**Challenge:** Browse results don't include sync states, only file metadata. Must merge with cached/in-memory states without losing data.
-
-**State Preservation Logic** (src/main.rs:679-721):
-```rust
-for (name, state) in existing_states {
-    let is_directory = check item type;
-    let cache_has_state = check cached_states;
-
-    // Decide whether to preserve
-    let should_preserve = if is_directory {
-        // Only preserve intrinsic states (Ignored)
-        matches!(state, SyncState::Ignored)
-    } else {
-        // Preserve all non-Unknown states
-        state != SyncState::Unknown
+// WRONG: Reject API response based on user action from up to 10 seconds ago
+if let Some(&manual_change) = self.manually_set_states.get(&state_key) {
+    let is_valid_transition = match manual_change.action {
+        ManualAction::SetIgnored => state == SyncState::Ignored,
+        ManualAction::SetUnignored => state != SyncState::Ignored,
     };
-
-    // Always preserve actively Syncing files/dirs
-    if state == Syncing && syncing_files.contains(&key) {
-        preserve = true;
+    if !is_valid_transition {
+        continue; // REJECT Syncthing's authoritative response!
     }
+}
+```
 
-    if !cache_has_state && should_preserve {
-        preserved_states.insert(name, state);
+**Why This Causes Bugs**:
+- User unignores parent directory
+- User immediately enters directory
+- Browse results arrive, preservation logic uses stale cached Ignored states for children
+- FileInfo responses arrive with correct Not Ignored states
+- **Validation rejects them** because parent was just unignored
+- Children stuck showing Ignored until user navigates away and back
+
+### Problem 2: State Preservation (Lines 1932-1945, 2124-2137)
+
+```rust
+// WRONG: Trust in-memory/cache states over fresh API data
+if self.syncing_files.contains(&sync_key) {
+    file_sync_states.insert(item.name.clone(), SyncState::Syncing);
+    continue; // Don't request fresh data
+}
+
+if let Some(_manual_change) = self.manually_set_states.get(&sync_key) {
+    // Preserve existing in-memory state
+    if let Some(&existing_state) = existing_level.file_sync_states.get(&item.name) {
+        file_sync_states.insert(item.name.clone(), existing_state);
+        continue; // Don't request fresh data
     }
 }
 
-// Merge: cached_states + local_only_items + preserved_states
+// Fall back to cached state (might be stale!)
+if let Some(&cached_state) = cached_states.get(&item.name) {
+    file_sync_states.insert(item.name.clone(), cached_state);
+}
 ```
 
-**Why Directories Only Preserve Ignored:**
-- Directory states like Syncing, RemoteOnly are **aggregate states** computed from children
-- Preserving these prevents `update_directory_states()` from updating them
-- `Ignored` is an **intrinsic state** about the directory itself, not its children
+**Why This Causes Bugs**:
+- Preservation logic runs when Browse results arrive
+- Trusts stale cache/memory over FileInfo responses that will arrive shortly
+- Creates race condition: if FileInfo arrives first, preservation overwrites it
 
-### 4. Event-Driven Updates
+### Problem 3: Ancestor Checking Band-Aids (Lines 2047-2122)
 
-**Handler:** `handle_cache_invalidation()` - src/main.rs:996-1255
+130+ lines of code trying to detect "was parent just unignored?" and clear stale states.
 
-#### ItemStarted Event
-**Source:** Event stream - src/event_listener.rs:165-177
-**Flow:**
-1. Event arrives: `{ folder: "...", item: "..." }`
-2. Add to `syncing_files` HashSet
-3. Set state to `Syncing` in UI
-4. Remove from `manually_set_states` (allow final state to come through)
+**Why This Doesn't Work**:
+- Runs before preservation logic
+- Preservation logic puts stale states back!
+- Two pieces of code fighting each other
 
-**Code:** src/main.rs:1157-1229
+### Problem 4: Code Duplication
 
-#### ItemFinished Event
-**Source:** Event stream - src/event_listener.rs:178-188
-**Flow:**
-1. Event arrives: `{ folder: "...", item: "..." }`
-2. **Keep** in `syncing_files` (changed from old behavior)
-3. Request high-priority FileInfo to get final state
-4. FileInfo handler will remove from `syncing_files` after confirming state
-
-**Code:** src/main.rs:1231-1251
-
-**Why This Change:**
-- Old behavior: Remove from `syncing_files` immediately
-- Problem: File invalidation event clears state (no longer protected)
-- Solution: Keep protected until FileInfo confirms final state
-
-#### File/Directory Invalidation
-**Source:** Event stream after ItemFinished, or from LocalIndexUpdated
-**Flow:**
-1. Event arrives with file/directory path
-2. Check if file in `syncing_files` or `manually_set_states`
-3. If protected, skip clearing
-4. If not protected, remove from in-memory state
-5. State will be re-fetched on next render
-
-**Code:** src/main.rs:1029-1124
+- Root Browse handler: 123 lines (1885-2008)
+- Non-root Browse handler: 166 lines (2009-2175)
+- Nearly identical except for ancestor checking in non-root
 
 ---
 
-## State Transition Rules
+## Proposed Architecture (Updated)
 
-### Valid Transitions
-
-```
-Unknown → Any state (initial determination)
-Any → Syncing (ItemStarted event)
-Syncing → Synced/OutOfSync/etc (ItemFinished + FileInfo)
-
-RemoteOnly → Syncing (download starts)
-LocalOnly → Syncing (upload starts)
-OutOfSync → Syncing (reconciliation starts)
-
-Synced/OutOfSync/etc → Ignored (user ignores)
-Ignored → Unknown (user unignores, then re-determines)
-```
-
-### Rejected Transitions
+### New Data Flow
 
 ```
-Known state → Unknown (REJECTED - prevents flickering)
-  - Known = Syncing, RemoteOnly, LocalOnly, OutOfSync, Synced
+USER IGNORES FILE
+├─> Update UI optimistically (show Ignored ⚠️/🚫 immediately)
+├─> Store optimistic action with 5-second TTL (for conflict detection)
+├─> PUT /rest/db/ignores (add pattern)
+├─> POST /rest/db/scan (trigger rescan)
+└─> Wait for events...
+     ├─> LocalIndexUpdated event fires (with affected filenames)
+     ├─> FileInfo requests sent for affected files
+     └─> FileInfo responses arrive
+          ├─> If matches optimistic state: done (remove from TTL tracker)
+          ├─> If differs: revert UI, show toast "External change detected"
+          └─> Update ignored_exists (check filesystem for ⚠️ vs 🚫)
 
-After SetIgnored:
-  - Any state except Ignored (REJECTED - enforces consistency)
+USER NAVIGATES INTO DIRECTORY
+├─> Check cache for Browse result
+├─> If cache valid (sequence matches):
+│    ├─> Display cached items + states immediately
+│    └─> Request fresh data in background (Medium priority)
+└─> If cache stale/missing:
+     ├─> Request Browse API (High priority)
+     └─> Wait for response...
+          ├─> Browse response: list of items (no states)
+          ├─> Load cached states (might be stale, just for instant display)
+          ├─> Request FileInfo for ALL items (Medium priority)
+          └─> FileInfo responses: update states as they arrive
 
-After SetUnignored:
-  - Ignored state (REJECTED - prevents stale Ignored state)
+SYNCTHING EVENTS (Background Monitoring)
+├─> ItemStarted: Set item to Syncing state
+├─> ItemFinished: Request fresh FileInfo
+└─> LocalIndexUpdated:
+     ├─> Update folder sequence (invalidates all cached Browse results)
+     ├─> Invalidate cached states for mentioned files
+     └─> Request fresh FileInfo for visible files
 ```
 
-**Implementation:** src/main.rs:852-894
+### What Gets Removed (~600-650 lines)
+
+1. **State Transition Validation** (lines 870-905):
+   - Delete entire validation block
+   - Accept all FileInfo responses without rejection
+
+2. **manually_set_states HashMap** (22 references):
+   - Delete HashMap and ManualStateChange struct
+   - Replace with simple 5-second optimistic tracker (for conflict detection only)
+
+3. **syncing_files HashSet** (17 references):
+   - Delete HashSet
+   - Use Syncing state from ItemStarted/ItemFinished events directly
+
+4. **Ancestor Checking** (lines 2047-2122):
+   - Delete all 130+ lines
+   - Not needed when we trust API
+
+5. **State Preservation Logic** (lines 1932-1945, 2124-2137):
+   - Delete preservation checks
+   - Just use cached states for instant display, replace with FileInfo responses
+
+6. **Duplicate Browse Handlers**:
+   - Consolidate root and non-root into single function
+   - Remove special-case logic
+
+### What Gets Kept (Corrected)
+
+1. **Cache System** (SQLite):
+   - Browse results cached with folder sequence validation
+   - File states cached with file sequence validation
+   - **Purpose**: Performance (instant display), not correctness
+
+2. **ignored_exists HashMap** (our unique feature):
+   - Stores whether ignored files exist on disk (⚠️) or were deleted (🚫)
+   - Checked via `fs::metadata()` when state is Ignored
+   - **Optimization**: If ignored directory doesn't exist, skip checking children
+
+3. **Event Monitoring** (`/rest/events` long-polling):
+   - ItemStarted, ItemFinished, LocalIndexUpdated events
+   - Triggers cache invalidation and fresh API requests
+   - **Detects all changes** including external .stignore edits
+
+4. **Manual Rescan Trigger**:
+   - After `PUT /rest/db/ignores`, call `POST /rest/db/scan`
+   - Ensures Syncthing detects changes immediately
+   - Generates LocalIndexUpdated events
+
+5. **Prefetch System** (idle detection):
+   - Request FileInfo for items above/below selection
+   - 300ms idle threshold
+   - **Simplified**: No checking manually_set_states, just request data
+
+### What Gets Added
+
+1. **Optimistic Update Tracker** (replaces manually_set_states):
+   ```rust
+   struct OptimisticUpdate {
+       expected_state: SyncState,
+       timestamp: Instant,
+   }
+
+   // TTL: 5 seconds (not 10)
+   // Purpose: Conflict detection, not state protection
+   optimistic_updates: HashMap<String, OptimisticUpdate>
+   ```
+
+2. **Conflict Detection** (in FileInfo handler):
+   ```rust
+   // Check if this differs from optimistic expectation
+   if let Some(optimistic) = self.optimistic_updates.get(&state_key) {
+       if optimistic.timestamp.elapsed() < Duration::from_secs(5) {
+           if state != optimistic.expected_state {
+               // Conflict detected! External change won.
+               self.toast_message = Some((
+                   format!("External change detected: {} state differs from action", item_name),
+                   Instant::now(),
+               ));
+           }
+       }
+       // Always remove (accept API result regardless)
+       self.optimistic_updates.remove(&state_key);
+   }
+
+   // Accept state from API (no rejection!)
+   level.file_sync_states.insert(item_name.clone(), state);
+   ```
+
+3. **Smart Existence Checking**:
+   ```rust
+   fn check_ignored_existence(
+       items: &[BrowseItem],
+       sync_states: &HashMap<String, SyncState>,
+       translated_base_path: &str,
+       parent_exists: Option<bool>, // NEW parameter
+   ) -> HashMap<String, bool> {
+       let mut result = HashMap::new();
+
+       for item in items {
+           if sync_states.get(&item.name) == Some(&SyncState::Ignored) {
+               // Optimization: If parent doesn't exist, children can't either
+               if parent_exists == Some(false) {
+                   result.insert(item.name.clone(), false);
+                   continue;
+               }
+
+               // Check filesystem directly
+               let path = format!("{}/{}", translated_base_path, item.name);
+               let exists = std::fs::metadata(&path).is_ok();
+               result.insert(item.name.clone(), exists);
+           }
+       }
+
+       result
+   }
+   ```
+
+4. **Simplified Browse Handler** (single version):
+   ```rust
+   fn handle_browse_result(&mut self, folder_id: String, prefix: Option<String>, items: Vec<BrowseItem>) {
+       // Sort items
+       let mut items = items;
+       self.sort_items(&mut items);
+
+       // Update cache
+       self.cache_manager.cache_browse_result(&folder_id, prefix.as_deref(), &items);
+
+       // Load cached states (for instant display, will be replaced)
+       let cached_states = self.cache_manager.load_cached_file_states(&folder_id, prefix.as_deref());
+
+       // Build initial state map from cache
+       let mut file_sync_states = HashMap::new();
+       for item in &items {
+           if let Some(&cached_state) = cached_states.get(&item.name) {
+               file_sync_states.insert(item.name.clone(), cached_state);
+           }
+       }
+
+       // Check filesystem existence for ignored items
+       let ignored_exists = self.check_ignored_existence(&items, &file_sync_states, prefix.as_deref(), None);
+
+       // Create/update breadcrumb level
+       let level = BreadcrumbLevel {
+           folder_id: folder_id.clone(),
+           folder_label: self.get_folder_label(&folder_id),
+           prefix: prefix.clone(),
+           items: items.clone(),
+           file_sync_states,
+           ignored_exists,
+           state: ListState::default().with_selected(Some(0)),
+           translated_base_path: self.translate_path(&folder_id, prefix.as_deref()),
+       };
+
+       // Update breadcrumb trail
+       self.update_breadcrumb_level(level);
+
+       // Request FileInfo for ALL items (no filtering, let API service deduplicate)
+       for item in &items {
+           let file_path = if let Some(ref pfx) = prefix {
+               format!("{}{}", pfx, item.name)
+           } else {
+               item.name.clone()
+           };
+
+           let _ = self.api_request_tx.send(ApiRequest::GetFileInfo {
+               folder_id: folder_id.clone(),
+               file_path,
+               priority: Priority::Medium,
+           });
+       }
+   }
+   ```
+
+5. **Simplified FileInfo Handler** (no validation):
+   ```rust
+   ApiResponse::FileInfoResult { folder_id, file_path, details } => {
+       let Ok(details) = details else {
+           log_debug(&format!("FileInfo error for {}:{}", folder_id, file_path));
+           return;
+       };
+
+       // Determine state from API (standard logic, unchanged)
+       let state = determine_sync_state(&details.global, &details.local);
+
+       // Check for conflict with optimistic update
+       let state_key = format!("{}:{}", folder_id, file_path);
+       if let Some(optimistic) = self.optimistic_updates.get(&state_key) {
+           if optimistic.timestamp.elapsed() < Duration::from_secs(5) {
+               if state != optimistic.expected_state {
+                   // External change detected
+                   let item_name = file_path.split('/').last().unwrap_or(&file_path);
+                   self.toast_message = Some((
+                       format!("External change: {} is {:?}", item_name, state),
+                       Instant::now(),
+                   ));
+               }
+           }
+           self.optimistic_updates.remove(&state_key);
+       }
+
+       // Update cache
+       self.cache_manager.cache_file_state(&folder_id, &file_path, state);
+
+       // Update ALL visible breadcrumb levels (unchanged)
+       for level in &mut self.breadcrumb_trail {
+           if level.folder_id != folder_id {
+               continue;
+           }
+
+           let item_name = Self::extract_item_name(&file_path, level.prefix.as_deref());
+
+           if level.file_sync_states.contains_key(&item_name) {
+               level.file_sync_states.insert(item_name.clone(), state);
+
+               // Update existence check if ignored
+               if state == SyncState::Ignored {
+                   let path = format!("{}/{}", level.translated_base_path, item_name);
+                   let exists = std::fs::metadata(&path).is_ok();
+                   level.ignored_exists.insert(item_name, exists);
+               } else {
+                   // Not ignored, remove from existence map
+                   level.ignored_exists.remove(&item_name);
+               }
+           }
+       }
+   }
+   ```
 
 ---
 
-## Critical Patterns
+## Migration Strategy (Updated)
 
-### 1. Syncing State Protection
+### Phase 1: Add Optimistic Update Tracker (1 hour)
 
-**Problem:** File is syncing, browse results come in without cached state, file shows as Unknown
+**Goal**: Replace manually_set_states with simpler conflict detection
 
-**Solution:**
-- Add file to `syncing_files` on ItemStarted
-- Keep in `syncing_files` until FileInfo confirms final state
-- Browse results preserve Syncing state if file in `syncing_files`
-- File invalidation skips clearing if file in `syncing_files`
+**Tasks**:
 
-**Code Locations:**
-- Add to syncing_files: src/main.rs:1195
-- Check in browse preservation: src/main.rs:706-711, 781-787
-- Check in invalidation: src/main.rs:1089
-- Remove from syncing_files: src/main.rs:885-892
+1. **Add new struct** (src/main.rs, near line 234):
+   ```rust
+   struct OptimisticUpdate {
+       expected_state: SyncState,
+       timestamp: std::time::Instant,
+   }
+   ```
 
-### 2. Manual State Change Validation
+2. **Replace manually_set_states declaration** (line 242):
+   ```rust
+   // OLD: manually_set_states: HashMap<String, ManualStateChange>,
+   // NEW:
+   optimistic_updates: HashMap<String, OptimisticUpdate>,
+   ```
 
-**Problem:** User ignores file, but stale FileInfo response says it's Synced
+3. **Update App initialization** (around line 3500):
+   ```rust
+   // OLD: manually_set_states: HashMap::new(),
+   // NEW:
+   optimistic_updates: HashMap::new(),
+   ```
 
-**Solution:**
-- Track user action in `manually_set_states` with timestamp
-- Validate API responses against expected state
-- Reject transitions that contradict user action
-- Timeout after 10 seconds to prevent permanent blocking
+4. **Test**: Verify app compiles (will have errors in code that references manually_set_states, that's expected)
 
-**Code:** src/main.rs:858-880
+**Commit**: `git commit -m "Add OptimisticUpdate tracker, prepare to remove manually_set_states"`
 
-### 3. Directory Aggregate States
+### Phase 2: Remove State Transition Validation (1 hour)
 
-**Problem:** Directory shows Synced while children are still RemoteOnly/Syncing
+**Goal**: Accept all FileInfo responses without rejection
 
-**Solution:**
-- Compute directory state from children's cached states
-- Priority: Syncing > RemoteOnly > OutOfSync > LocalOnly > Synced
-- Preserve only intrinsic states (Ignored), not aggregate states
-- Re-compute periodically and after browse results
+**Tasks**:
 
-**Code:** src/main.rs:1328-1421
+1. **Delete validation block** (lines 870-905):
+   ```rust
+   // DELETE ENTIRE BLOCK (35 lines)
+   ```
 
-### 4. Cache Invalidation Strategy
+2. **Add conflict detection** (insert where validation was):
+   ```rust
+   // Check for conflict with optimistic update
+   let state_key = format!("{}:{}", folder_id, file_path);
+   if let Some(optimistic) = self.optimistic_updates.get(&state_key) {
+       if optimistic.timestamp.elapsed() < Duration::from_secs(5) {
+           if state != optimistic.expected_state {
+               let item_name = file_path.split('/').last().unwrap_or(&file_path);
+               self.toast_message = Some((
+                   format!("External change: {} is {:?}", item_name, state),
+                   std::time::Instant::now(),
+               ));
+           }
+       }
+       self.optimistic_updates.remove(&state_key);
+   }
 
-**Granular Invalidation:**
-- **File-level:** Clear single file state
-- **Directory-level:** Clear directory + all children states
-- **Folder-level:** Clear all states for folder
+   // Continue with normal state update (no rejection!)
+   ```
 
-**Event-Driven:**
-- `LocalIndexUpdated` with `filenames` array → Invalidate specific files
-- `ItemFinished` → File invalidation (but protected if still in syncing_files)
-- Folder sequence change → Invalidate all cached browse results
+3. **Test**:
+   - Ignore file → immediately check state
+   - Unignore file → immediately check state
+   - States should update based on API responses
 
-**Code:**
-- File invalidation: src/main.rs:1029-1124
-- Directory invalidation: src/main.rs:1125-1148
-- Cache DB functions: src/cache.rs:318-349
+**Commit**: `git commit -m "Remove state transition validation, add conflict detection"`
+
+### Phase 3: Simplify Browse Handler (2-3 hours)
+
+**Goal**: Single handler, no preservation logic, no ancestor checking
+
+**Tasks**:
+
+1. **Create new function** `handle_browse_result()` (insert around line 1880):
+   - Copy simplified version from "What Gets Added" section above
+   - No preservation checks
+   - No ancestor checking
+   - Just: cache load → request FileInfo for all items
+
+2. **Update root Browse response handler** (replace lines 1885-2008):
+   ```rust
+   ApiResponse::BrowseResult { folder_id, prefix, items } if prefix.is_none() => {
+       match items {
+           Ok(items) => self.handle_browse_result(folder_id, prefix, items),
+           Err(e) => log_debug(&format!("Browse error: {}", e)),
+       }
+   }
+   ```
+
+3. **Update non-root Browse response handler** (replace lines 2009-2175):
+   ```rust
+   ApiResponse::BrowseResult { folder_id, prefix, items } => {
+       match items {
+           Ok(items) => self.handle_browse_result(folder_id, prefix, items),
+           Err(e) => log_debug(&format!("Browse error: {}", e)),
+       }
+   }
+   ```
+
+4. **Delete duplicate code** (lines 2009-2175 can be removed entirely)
+
+5. **Test**:
+   - Navigate through directories
+   - Check cached states appear instantly
+   - Check FileInfo updates replace cached states
+   - Verify no "preserving state" logs
+
+**Commit**: `git commit -m "Simplify Browse handler, remove preservation and ancestor checking"`
+
+### Phase 4: Remove syncing_files HashSet (1-2 hours)
+
+**Goal**: Use Syncing state from events directly, no tracking
+
+**Tasks**:
+
+1. **Remove declaration** (line 244):
+   ```rust
+   // DELETE: syncing_files: HashSet<String>,
+   ```
+
+2. **Remove from initialization** (around line 3500):
+   ```rust
+   // DELETE: syncing_files: HashSet::new(),
+   ```
+
+3. **Update ItemStarted event** (lines 584-601):
+   ```rust
+   // OLD: self.syncing_files.insert(sync_key.clone());
+   // NEW: Just set state to Syncing directly
+
+   for level in &mut self.breadcrumb_trail {
+       if level.folder_id == folder_id {
+           let item_name = Self::extract_item_name(&item_path, level.prefix.as_deref());
+           if level.file_sync_states.contains_key(&item_name) {
+               level.file_sync_states.insert(item_name, SyncState::Syncing);
+           }
+       }
+   }
+
+   // Invalidate cache (unchanged)
+   self.cache_manager.invalidate_file_state(&folder_id, &item_path);
+   ```
+
+4. **Update ItemFinished event** (lines 603-630):
+   ```rust
+   // OLD: self.syncing_files.remove(&sync_key);
+   // NEW: Just request fresh FileInfo (already does this)
+
+   // Delete the HashSet removal line, keep the rest
+   ```
+
+5. **Remove from render.rs** (lines 88-92):
+   ```rust
+   // DELETE: Override check for syncing_files
+   // FileInfo responses will naturally set Syncing state
+   ```
+
+6. **Test**:
+   - Trigger sync (unignore large directory)
+   - Verify Syncing icon appears during ItemStarted → ItemFinished
+   - Verify state updates to Synced/etc after ItemFinished
+
+**Commit**: `git commit -m "Remove syncing_files tracking, use event-driven Syncing state"`
+
+### Phase 5: Update User Action Handlers (1-2 hours)
+
+**Goal**: Use optimistic updates, accept API results
+
+**Tasks**:
+
+1. **Update toggle_ignore()** (lines 3089-3190):
+   ```rust
+   // After successful PUT /rest/db/ignores:
+
+   // Add optimistic update
+   let state_key = format!("{}:{}", folder_id, item_path);
+   self.optimistic_updates.insert(state_key, OptimisticUpdate {
+       expected_state: if was_ignored {
+           SyncState::Synced  // Expect un-ignored → synced
+       } else {
+           SyncState::Ignored  // Expect ignored
+       },
+       timestamp: std::time::Instant::now(),
+   });
+
+   // Update UI optimistically
+   if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+       let new_state = if was_ignored {
+           // Don't set state (will come from API)
+           level.file_sync_states.remove(&item_name);
+       } else {
+           // Set to Ignored immediately, check filesystem
+           let path = format!("{}/{}", level.translated_base_path, item_name);
+           let exists = std::fs::metadata(&path).is_ok();
+           level.ignored_exists.insert(item_name.clone(), exists);
+           level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+       };
+   }
+
+   // Trigger rescan (unchanged)
+   // Show toast (unchanged)
+   ```
+
+2. **Update ignore_and_delete()** (lines 3263-3345):
+   ```rust
+   // Similar optimistic update, but set exists=false
+   self.optimistic_updates.insert(state_key, OptimisticUpdate {
+       expected_state: SyncState::Ignored,
+       timestamp: std::time::Instant::now(),
+   });
+
+   // Update UI: Ignored with exists=false (🚫)
+   if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+       level.file_sync_states.insert(item_name.clone(), SyncState::Ignored);
+       level.ignored_exists.insert(item_name.clone(), false);
+   }
+
+   // Delete file (unchanged)
+   // Trigger rescan (unchanged)
+   ```
+
+3. **Update delete_file()** (lines 2470-2561):
+   ```rust
+   // No optimistic update needed (file will disappear from Browse API)
+   // Just trigger rescan (already does this)
+   ```
+
+4. **Test**:
+   - Ignore file → should show Ignored immediately (⚠️ or 🚫)
+   - Unignore file → should clear state, then update when FileInfo arrives
+   - Check no rejection logs
+   - Check states update within ~1 second
+
+**Commit**: `git commit -m "Update user actions to use optimistic updates"`
+
+### Phase 6: Smart Existence Checking (1-2 hours)
+
+**Goal**: Optimize filesystem checks (skip children of non-existent ignored directories)
+
+**Tasks**:
+
+1. **Update check_ignored_existence()** (around line 1814):
+   ```rust
+   fn check_ignored_existence(
+       &self,
+       items: &[BrowseItem],
+       sync_states: &HashMap<String, SyncState>,
+       prefix: Option<&str>,
+       parent_exists: Option<bool>,  // NEW parameter
+   ) -> HashMap<String, bool> {
+       let mut result = HashMap::new();
+
+       let base_path = self.translate_path(&folder_id, prefix);
+
+       for item in items {
+           if let Some(&SyncState::Ignored) = sync_states.get(&item.name) {
+               // Optimization: If parent doesn't exist, children can't either
+               if parent_exists == Some(false) {
+                   result.insert(item.name.clone(), false);
+                   continue;
+               }
+
+               // Check filesystem
+               let path = format!("{}/{}", base_path, item.name);
+               let exists = std::fs::metadata(&path).is_ok();
+               result.insert(item.name.clone(), exists);
+           }
+       }
+
+       result
+   }
+   ```
+
+2. **Update handle_browse_result()** to pass parent_exists:
+   ```rust
+   // Determine if parent exists (if we're in a subdirectory)
+   let parent_exists = if prefix.is_some() {
+       // Check if current directory exists
+       let dir_path = self.translate_path(&folder_id, prefix.as_deref());
+       Some(std::fs::metadata(&dir_path).is_ok())
+   } else {
+       None  // Root directory, no parent to check
+   };
+
+   let ignored_exists = self.check_ignored_existence(
+       &items,
+       &file_sync_states,
+       prefix.as_deref(),
+       parent_exists,
+   );
+   ```
+
+3. **Test**:
+   - Ignore directory that doesn't exist
+   - Enter that directory
+   - Verify children all show 🚫 (not individually checked)
+   - Check debug logs for reduced filesystem calls
+
+**Commit**: `git commit -m "Add smart existence checking (skip children of non-existent dirs)"`
+
+### Phase 7: Cleanup & Testing (2-3 hours)
+
+**Goal**: Remove dead code, comprehensive testing
+
+**Tasks**:
+
+1. **Remove unused code**:
+   - Search for remaining `manually_set_states` references (should be none)
+   - Search for remaining `syncing_files` references (should be none)
+   - Delete `ManualStateChange` struct and `ManualAction` enum
+   - Remove unused imports
+
+2. **Run formatter and linter**:
+   ```bash
+   cargo fmt
+   cargo clippy -- -D warnings
+   ```
+
+3. **Manual testing** (comprehensive checklist in original plan, key tests):
+   - Ignore file → verify shows Ignored immediately → verify persists after API
+   - Unignore file → verify clears → verify updates to Synced/RemoteOnly
+   - **Critical**: Unignore directory → immediately enter → verify children NOT stuck as Ignored
+   - External edit .stignore → verify detected via LocalIndexUpdated event
+   - Rapid navigation during sync → verify no crashes
+
+4. **Compare with before**:
+   - Check line count: `wc -l src/main.rs` (should be ~600 lines shorter)
+   - Check logs: simpler, no rejection messages
+   - Verify all original bugs fixed
+
+**Commit**: `git commit -m "Cleanup: remove dead code, final testing complete"`
+
+### Phase 8: Update Documentation (1 hour)
+
+**Goal**: Document new simplified architecture
+
+**Tasks**:
+
+1. **Update SYNC.md**:
+   - Remove references to manually_set_states, syncing_files
+   - Document optimistic updates with 5-second TTL
+   - Document conflict detection and toast notifications
+   - Document smart existence checking
+
+2. **Update CLAUDE.md**:
+   - Simplify architecture section
+   - Update "Known Limitations" (remove state flicker issues)
+   - Add note about optimistic UI updates
+
+3. **Create REFACTOR_NOTES.md**:
+   - Document what was removed and why
+   - Document new behaviors (optimistic updates, conflict detection)
+   - Note breaking changes (if any)
+
+**Commit**: `git commit -m "Update documentation for simplified architecture"`
 
 ---
 
-## Performance Optimizations
+## Testing Strategy (Updated)
 
-### 1. Cache-First Rendering
-- Load cached states immediately on directory open
-- Display cached data while background fetches run
-- Update UI incrementally as FileInfo responses arrive
+### Critical Test Cases
 
-### 2. Batch Fetching
-**Function:** `batch_fetch_visible_sync_states()` - src/main.rs:1417
-- Only fetch states for visible items on screen
-- Limit concurrent requests (default: 5)
-- Skip already cached/loading items
+**Test 1: Subdirectories Stuck as Ignored (Primary Bug)**
+```
+1. Navigate to directory with ignored subdirectory
+2. Unignore subdirectory
+3. Immediately press Enter to enter directory
+4. Expected: Subdirectories NOT shown as Ignored
+5. Current Bug: Subdirectories stuck as Ignored until back out and re-enter
+6. New Behavior: Subdirectories show cached Ignored briefly, then update to correct state within ~1s
+```
 
-### 3. Prefetching
-**Hovered Directory:** `prefetch_hovered_subdirectories()` - src/main.rs:1464
-- Recursively discover and prefetch subdirectory states
-- Non-blocking, uses cache only
-- Improves navigation responsiveness
+**Test 2: External .stignore Modification**
+```
+1. Open .stignore in text editor
+2. In app, ignore file "test.txt"
+3. In text editor, remove "test.txt" pattern and save
+4. Expected: LocalIndexUpdated event fires, FileInfo returns Not Ignored, conflict toast shown
+5. Verify: File shows correct state (Not Ignored) within ~1s
+```
 
-**Directory Metadata:** `fetch_directory_states()` - src/main.rs:1545
-- Fetch directory own sync states (not children)
-- Only for directories without cached states
-- Limit: 10 concurrent requests
+**Test 3: Optimistic Update Conflict**
+```
+1. Ignore file
+2. Simultaneously (within 5 seconds), external tool unignores it
+3. Expected: File shows Ignored immediately, then reverts to Not Ignored with toast
+4. Verify: Toast says "External change: [filename] is Synced" (or similar)
+```
 
-### 4. Idle Detection & Throttling
-**Main Loop:** src/main.rs:4007-4028
-- Only run prefetch when user idle for 300ms
-- Prevents blocking keyboard input
-- Reduces CPU usage from ~18% to <2%
+**Test 4: Smart Existence Checking**
+```
+1. Ignore directory that doesn't exist on disk
+2. Enter that directory
+3. Expected: All children show 🚫 (deleted), no filesystem checks per child
+4. Verify: Debug logs show single existence check (parent), not N checks (children)
+```
 
-**Directory State Update Throttling:**
-- `update_directory_states()` throttled to 2-second intervals
-- Prevents continuous cache queries for all visible directories
-- Reduces log spam and unnecessary computation
-- Timestamp: `App.last_directory_update: Instant`
+**Test 5: Rapid Navigation During Sync**
+```
+1. Unignore large directory (100+ files)
+2. Rapidly press Enter/Backspace through nested directories
+3. Expected: No crashes, states eventually settle correctly
+4. Verify: Syncing states appear briefly, then update to final states
+```
 
-### 5. Request Deduplication
-**API Service:** src/api_service.rs
-- Track in-flight requests by key: `"folder_id:file_path"`
-- Skip duplicate requests already pending
-- Priority queue: High > Medium > Low
+### Performance Benchmarks
+
+**Before Refactor**:
+- Lines in main.rs: ~4,200
+- Time to enter directory (cache hit): <10ms
+- Time for states to update: 500ms-2s (with rejections causing delays)
+- Bug: Subdirectories stuck until re-navigate
+
+**After Refactor** (targets):
+- Lines in main.rs: ~3,600 (600 fewer)
+- Time to enter directory (cache hit): <10ms (unchanged)
+- Time for states to update: 500ms-1s (no rejections)
+- Bug: Fixed (subdirectories update immediately)
 
 ---
 
-## Common Scenarios
+## Summary: Key Behavioral Changes
 
-### Scenario 1: Un-ignoring a Deleted File During Active Sync
+### Before Refactoring
 
-**Initial State:** File ignored and deleted locally, other folders syncing
+**User ignores file**:
+1. UI shows Ignored immediately
+2. Adds to manually_set_states (10s timeout)
+3. FileInfo responses **rejected if they differ** from expected state
+4. If external .stignore edit conflicts, **stays wrong for 10 seconds**
 
-**User Action:** Toggle ignore off
+**User enters directory**:
+1. Browse results arrive with item list
+2. **Preservation logic** checks syncing_files, manually_set_states, cache
+3. Uses stale states for items "protected" by tracking HashMaps
+4. FileInfo responses **rejected if conflicts** with preserved states
+5. Bug: Subdirectories stuck as Ignored after parent unignored
 
-**State Transitions:**
+### After Refactoring
+
+**User ignores file**:
+1. UI shows Ignored immediately (optimistic)
+2. Adds to optimistic_updates (5s timeout)
+3. FileInfo responses **always accepted**
+4. If external .stignore edit conflicts, **reverts within 1 second + shows toast**
+
+**User enters directory**:
+1. Browse results arrive with item list
+2. Loads cached states (no preservation, just for display)
+3. Requests FileInfo for ALL items
+4. FileInfo responses **always accepted**, update UI immediately
+5. Fix: Subdirectories update to correct state within ~1 second
+
+### Conflict Handling Example
+
+**Scenario**: User ignores "test.txt", simultaneously someone edits .stignore externally to remove pattern
+
+**Timeline**:
 ```
-1. Ignored → Unknown (immediate UI feedback)
-   - manually_set_states["folder:path"] = SetUnignored
-
-2. Unknown → RemoteOnly (FileInfo response)
-   - Browse results come in (other folders syncing)
-   - RemoteOnly state preserved (not in cache yet, is file, not Unknown)
-
-3. RemoteOnly → Syncing (ItemStarted event)
-   - syncing_files.add("folder:path")
-   - Browse results preserve Syncing state
-
-4. Syncing → Syncing (ItemFinished event)
-   - Stay in syncing_files (don't remove yet)
-   - File invalidation event ignored (still protected)
-   - High-priority FileInfo requested
-
-5. Syncing → Synced (FileInfo confirms)
-   - syncing_files.remove("folder:path")
-   - manually_set_states timeout expired
+T+0ms:    User presses 'i' on test.txt
+T+10ms:   UI shows Ignored ⚠️ (optimistic)
+T+20ms:   PUT /rest/db/ignores sent (adds pattern)
+T+50ms:   External edit removes pattern
+T+100ms:  POST /rest/db/scan sent
+T+500ms:  LocalIndexUpdated event arrives
+T+600ms:  FileInfo requested
+T+800ms:  FileInfo returns: NotIgnored (external edit won)
+T+810ms:  optimistic_updates checked: conflict detected!
+T+820ms:  UI reverts to NotIgnored, toast shown: "External change: test.txt is Synced"
+T+821ms:  User sees correct state + understands why action didn't stick
 ```
 
-**No flickering** - state preserved through all browse results
-
-### Scenario 2: Directory with Syncing Children
-
-**Initial State:** Directory exists, children syncing
-
-**State Computation:**
+**Old Behavior** (for comparison):
 ```
-1. Browse result arrives for parent directory
-2. Directory's FileInfo returns Synced (directory metadata only)
-3. update_directory_states() runs:
-   - Queries cache for children states
-   - Finds: 3 files Syncing, 5 files Synced
-   - Applies priority: Syncing > Synced
-   - Sets directory to Syncing
-4. User sees: 📁🔄 directory_name
-```
-
-**As children finish:**
-- Children transition Syncing → Synced
-- update_directory_states() re-computes
-- Eventually all children Synced → Directory shows Synced
-
-### Scenario 3: Ignoring a Directory
-
-**User Action:** Press `i` on directory
-
-**Flow:**
-```
-1. Add pattern to .stignore
-2. Set state to Ignored in memory
-3. manually_set_states["folder:path"] = SetIgnored
-4. Trigger rescan
-5. Browse results arrive (triggered by other activity)
-   - Directory is directory: check if should preserve
-   - State is Ignored: YES, preserve (intrinsic state)
-   - State preserved through browse result
-6. FileInfo confirms Ignored state
-7. Cache updated with Ignored state
-8. manually_set_states timeout expires
+T+800ms:  FileInfo returns: NotIgnored
+T+810ms:  Validation checks manually_set_states: SetIgnored action found
+T+820ms:  Response REJECTED because doesn't match SetIgnored
+T+821ms:  UI stays showing Ignored (WRONG!)
+...
+T+10000ms: Timeout expires, next FileInfo accepted
+T+10100ms: UI updates to NotIgnored (10 seconds late!)
 ```
 
 ---
 
-## Debugging Tips
+## Open Questions (For User Approval)
 
-### Enable Debug Logging
-```bash
-synctui --debug
-tail -f /tmp/synctui-debug.log
-```
+### 1. Optimistic Update TTL
 
-**Key Log Patterns:**
-- `DEBUG [FileInfo]: Updating <name> <old> -> <new>` - State changes
-- `DEBUG [Browse]: Preserving <state> state for <name>` - Preservation logic
-- `DEBUG [Event]: ItemStarted/ItemFinished` - Sync activity
-- `DEBUG [update_directory_states]: Setting <name> to <state>` - Directory aggregation
+**Question**: Should optimistic updates expire after 5 seconds or longer?
 
-### Common Issues
+**Consideration**:
+- 5 seconds: Faster conflict detection, less time showing wrong state
+- 10 seconds: More forgiving if network is slow
+- Current code uses 10 seconds for manually_set_states
 
-**States flickering Unknown:**
-- Check browse result preservation logic (lines 679-721, 746-788)
-- Verify cache has states: `sqlite3 ~/.cache/synctui/cache.db "SELECT * FROM sync_states WHERE folder_id='...';"`
-- Check if states being cleared by invalidation
+**Recommendation**: Start with 5 seconds, adjust if network issues occur
 
-**Directory stuck in wrong state:**
-- Check `update_directory_states()` logs
-- Verify children states in cache
-- Check if directory's direct state taking precedence
+### 2. Conflict Toast Duration
 
-**States not updating after sync:**
-- Check ItemFinished handling (src/main.rs:1231)
-- Verify file in syncing_files during transition
-- Check FileInfo response arriving
+**Question**: How long should conflict notification toast display?
 
----
+**Options**:
+- 3 seconds (current toast duration)
+- 5 seconds (longer for important notifications)
+- Until dismissed (requires new UI interaction)
 
-## Future Improvements
+**Recommendation**: 5 seconds (user needs time to read and understand)
 
-### Potential Optimizations
-1. **Batch Directory State Computation:** Instead of re-computing every directory on every idle loop, track which directories have changed children
-2. **Smart Cache Warming:** Pre-fetch states for likely navigation paths (e.g., subdirectories of hovered items)
-3. **State Transition History:** Log state changes for debugging and undo functionality
+### 3. Existence Check Caching
 
-### Refactoring Opportunities (from PLAN.md)
-1. **Extract State Manager:** `src/state/sync_manager.rs`
-   - Manage file_sync_states, manually_set_states, syncing_files
-   - Pure state transitions without UI coupling
+**Question**: Current plan says "always check filesystem" but should we cache for same render frame?
 
-2. **Extract State Logic:** `src/logic/sync_states.rs`
-   - State transition validation
-   - Directory aggregation logic
-   - Pure functions, fully testable
+**Scenario**: If rendering same breadcrumb level 60 times per second (scrolling), do we check filesystem 60 times?
 
-3. **Add Comprehensive Tests:**
-   - Unit tests for state transitions
-   - Property-based tests for state machines
-   - Integration tests with mocked API responses
+**Recommendation**: Cache within single render frame, invalidate on next event loop iteration
 
----
+### 4. Migration Timeline
 
-## Code Reference Summary
+**Question**: Prefer to do this all at once or phase by phase?
 
-### Key Files
-- `src/api.rs` - SyncState enum, FileDetails, determine_sync_state()
-- `src/cache.rs` - SQLite operations for sync states
-- `src/event_listener.rs` - Event stream handling
-- `src/main.rs` - Main state management logic
-- `src/api_service.rs` - Request queue and prioritization
+**Options**:
+- All at once: 1-2 days focused work, merge when complete
+- Phase by phase: 1 week, merge after each phase, test in production
+- Parallel implementation: Build new system alongside old, swap atomically
 
-### Key Functions
-- `determine_sync_state()` - src/api.rs:533 - Compute state from FileInfo
-- `handle_api_response()` - src/main.rs:581 - Process all API responses
-- `handle_cache_invalidation()` - src/main.rs:996 - Process events
-- `update_directory_states()` - src/main.rs:1328 - Compute directory aggregates
-- `batch_fetch_visible_sync_states()` - src/main.rs:1417 - Fetch file states
-- `load_sync_states_from_cache()` - src/main.rs:1285 - Load cached states
+**Recommendation**: Phase by phase (safer, easier to bisect if issues found)
 
-### Key Data Structures
-- `SyncState` enum - src/api.rs:40
-- `FileDetails` struct - src/api.rs:115
-- `BreadcrumbLevel` struct - src/main.rs:190
-- `ManualStateChange` struct - src/main.rs:49
-- `CacheInvalidation` enum - src/event_listener.rs:53
+### 5. Rollback Plan
+
+**Question**: If serious bugs discovered after merge, should we:
+
+**Options**:
+- Revert entire refactor (safest)
+- Fix forward (preferred if bugs are minor)
+- Feature flag (keep both code paths, toggle via config)
+
+**Recommendation**: Fix forward for minor issues, revert if major architectural problems
 
 ---
 
-*Last Updated: 2025-01-30*
-*Reflects fixes for state transition issues and directory aggregate states*
+## Conclusion
+
+This refactoring will:
+- **Remove ~600 lines** of defensive code
+- **Fix persistent bugs** (subdirectories stuck as Ignored)
+- **Improve maintainability** (single Browse handler, clear data flow)
+- **Add useful features** (conflict detection with user notifications)
+- **Preserve unique features** (⚠️ vs 🚫 ignored file existence)
+
+**Core principle**: Trust Syncthing's API, use optimistic updates that can be reverted when external changes conflict.
+
+**Ready for user approval and execution.**
