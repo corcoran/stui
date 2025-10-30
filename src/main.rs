@@ -1239,37 +1239,36 @@ impl App {
                     folder_id, file_path
                 ));
 
-                // Set Syncing state directly (no HashSet tracking)
+                // Only update UI if we're viewing this folder
                 if !self.breadcrumb_trail.is_empty()
                     && self.breadcrumb_trail[0].folder_id == folder_id
                 {
-                    for (_level_idx, level) in self.breadcrumb_trail.iter_mut().enumerate() {
+                    // Check each visible breadcrumb level
+                    for level in self.breadcrumb_trail.iter_mut() {
                         if level.folder_id == folder_id {
-                            // Check if this file belongs to this level
                             let level_prefix = level.prefix.as_deref().unwrap_or("");
 
-                            // File must start with this level's prefix
-                            if file_path.starts_with(level_prefix) {
-                                // Extract the item name relative to this level
-                                let relative_path = &file_path[level_prefix.len()..];
+                            // Skip if file doesn't belong to this level
+                            if !file_path.starts_with(level_prefix) {
+                                continue;
+                            }
 
-                                // The item name is the path without any further subdirectories
-                                // For root level showing "dir/file.txt", item_name is "dir/file.txt"
-                                // For level with prefix="dir/", item_name is "file.txt"
-                                let item_name = relative_path;
+                            let relative_path = &file_path[level_prefix.len()..];
 
-                                // Set state to Syncing unconditionally
-                                level
-                                    .file_sync_states
-                                    .insert(item_name.to_string(), SyncState::Syncing);
-
-                                // Update ignored_exists (syncing files are not ignored) - do it inline to avoid borrow issues
-                                level.ignored_exists.remove(item_name);
+                            // Only show Syncing state if this exact item is in the current level's list
+                            // This prevents showing Syncing for files in subdirectories
+                            if level.items.iter().any(|item| item.name == relative_path) {
+                                level.file_sync_states.insert(
+                                    relative_path.to_string(),
+                                    SyncState::Syncing,
+                                );
+                                level.ignored_exists.remove(relative_path);
 
                                 log_debug(&format!(
                                     "DEBUG [Event]: Set {} to Syncing in level with prefix {:?}",
-                                    item_name, level_prefix
+                                    relative_path, level_prefix
                                 ));
+                                break; // Found matching level, no need to check others
                             }
                         }
                     }
@@ -1284,13 +1283,28 @@ impl App {
                     folder_id, file_path
                 ));
 
-                // Request immediate FileInfo fetch to get final state (high priority)
-                // FileInfo response will naturally update state from Syncing to final state
-                let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
-                    folder_id: folder_id.clone(),
-                    file_path: file_path.clone(),
-                    priority: api_service::Priority::High,
-                });
+                // Clear Syncing state in UI
+                if !self.breadcrumb_trail.is_empty()
+                    && self.breadcrumb_trail[0].folder_id == folder_id
+                {
+                    for level in self.breadcrumb_trail.iter_mut() {
+                        if level.folder_id == folder_id {
+                            let level_prefix = level.prefix.as_deref().unwrap_or("");
+                            if file_path.starts_with(level_prefix) {
+                                let relative_path = &file_path[level_prefix.len()..];
+                                // Remove Syncing state (will be refreshed by Browse or LocalIndexUpdated)
+                                level.file_sync_states.remove(relative_path);
+                                log_debug(&format!(
+                                    "DEBUG [Event]: Cleared Syncing state for {} in level with prefix {:?}",
+                                    relative_path, level_prefix
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                // Don't fetch FileInfo immediately - rely on LocalIndexUpdated event or Browse refresh
+                // This prevents API flood during bulk syncs (hundreds of files)
             }
         }
     }
@@ -3373,15 +3387,9 @@ impl App {
                     .await?;
                 log_bug("toggle_ignore: updated .stignore");
 
-                // Add optimistic update expecting non-Ignored state
-                let state_key = format!("{}:{}", folder_id, relative_path);
-                self.optimistic_updates.insert(
-                    state_key.clone(),
-                    OptimisticUpdate {
-                        expected_state: SyncState::Synced, // Expect unignored file to become Synced or RemoteOnly
-                        timestamp: Instant::now(),
-                    },
-                );
+                // Don't add optimistic update for unignore - the final state is unpredictable
+                // (could be Synced, RemoteOnly, OutOfSync, LocalOnly, or Syncing)
+                // Let the FileInfo API response provide the correct state
 
                 if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                     // Clear Ignored state (will be updated by FileInfo)
@@ -3391,7 +3399,7 @@ impl App {
                     self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Unknown);
 
                     log_bug(&format!(
-                        "toggle_ignore: cleared {} state (un-ignoring), added optimistic update",
+                        "toggle_ignore: cleared {} state (un-ignoring), no optimistic update",
                         item_name
                     ));
                 }
@@ -3836,24 +3844,10 @@ impl App {
                                 // Update ignored_exists (file is no longer ignored) - do it inline to avoid borrow issues
                                 level.ignored_exists.remove(&item_name);
 
-                                // Remove from manually_set_states so updates can come through
-                                let relative_path = if let Some(ref prefix) = level.prefix {
-                                    format!("{}/{}", prefix, item_name)
-                                } else {
-                                    item_name.clone()
-                                };
-                                // Add optimistic update expecting non-Ignored state
-                                let state_key = format!("{}:{}", folder_id, relative_path);
-                                self.optimistic_updates.insert(
-                                    state_key.clone(),
-                                    OptimisticUpdate {
-                                        expected_state: SyncState::Synced,
-                                        timestamp: Instant::now(),
-                                    },
-                                );
+                                // Don't add optimistic update for unignore - final state is unpredictable
                                 log_bug(&format!(
-                                    "pattern_selection: added optimistic update for {}",
-                                    state_key
+                                    "pattern_selection: cleared {} state (un-ignoring), no optimistic update",
+                                    item_name
                                 ));
                             }
                         }
