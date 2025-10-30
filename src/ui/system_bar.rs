@@ -1,3 +1,4 @@
+use crate::api::SystemStatus;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -5,7 +6,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use crate::api::SystemStatus;
 
 /// Format uptime seconds into human-readable string (e.g., "3d 15h", "15h 44m", "44m 30s")
 fn format_uptime(seconds: u64) -> String {
@@ -105,7 +105,10 @@ pub fn render_system_bar(
         let size_str = format_human_size(total_bytes).trim().to_string();
         spans.push(Span::raw(" | "));
         spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
-        spans.push(Span::raw(format!(" {} files, {} dirs, {}", total_files, total_dirs, size_str)));
+        spans.push(Span::raw(format!(
+            " {} files, {} dirs, {}",
+            total_files, total_dirs, size_str
+        )));
 
         // Add rates if available (display pre-calculated rates)
         if let Some((in_rate, out_rate)) = last_transfer_rates {

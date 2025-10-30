@@ -2,20 +2,21 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
     Frame,
 };
 
-use crate::{FileInfoPopupState, ImagePreviewState, api::Device};
-use crate::utils;
 use super::icons::IconRenderer;
+use crate::utils;
+use crate::{api::Device, FileInfoPopupState, ImagePreviewState};
 
 /// Render the revert confirmation dialog (for restoring deleted files in receive-only folders)
-pub fn render_revert_confirmation(
-    f: &mut Frame,
-    changed_files: &[String],
-) {
-    let file_list = changed_files.iter()
+pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[String]) {
+    let file_list = changed_files
+        .iter()
         .take(5)
         .map(|file| format!("  - {}", file))
         .collect::<Vec<_>>()
@@ -50,10 +51,12 @@ pub fn render_revert_confirmation(
     };
 
     let prompt = Paragraph::new(prompt_text)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("Confirm Revert")
-            .border_style(Style::default().fg(Color::Yellow)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Confirm Revert")
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
         .style(Style::default().fg(Color::White).bg(Color::Black))
         .wrap(ratatui::widgets::Wrap { trim: false });
 
@@ -62,11 +65,7 @@ pub fn render_revert_confirmation(
 }
 
 /// Render the delete confirmation dialog
-pub fn render_delete_confirmation(
-    f: &mut Frame,
-    display_name: &str,
-    is_dir: bool,
-) {
+pub fn render_delete_confirmation(f: &mut Frame, display_name: &str, is_dir: bool) {
     let item_type = if is_dir { "directory" } else { "file" };
 
     let prompt_text = format!(
@@ -91,10 +90,12 @@ pub fn render_delete_confirmation(
     };
 
     let prompt = Paragraph::new(prompt_text)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("Confirm Delete")
-            .border_style(Style::default().fg(Color::Red)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Confirm Delete")
+                .border_style(Style::default().fg(Color::Red)),
+        )
         .style(Style::default().fg(Color::White).bg(Color::Black))
         .wrap(ratatui::widgets::Wrap { trim: false });
 
@@ -103,16 +104,11 @@ pub fn render_delete_confirmation(
 }
 
 /// Render the pattern selection menu (for removing ignore patterns)
-pub fn render_pattern_selection(
-    f: &mut Frame,
-    patterns: &[String],
-    state: &mut ListState,
-) {
+pub fn render_pattern_selection(f: &mut Frame, patterns: &[String], state: &mut ListState) {
     let menu_items: Vec<ListItem> = patterns
         .iter()
         .map(|pattern| {
-            ListItem::new(Span::raw(pattern.clone()))
-                .style(Style::default().fg(Color::White))
+            ListItem::new(Span::raw(pattern.clone())).style(Style::default().fg(Color::White))
         })
         .collect();
 
@@ -128,13 +124,17 @@ pub fn render_pattern_selection(
     };
 
     let menu = List::new(menu_items)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("Select Pattern to Remove (↑↓ to navigate, Enter to remove, Esc to cancel)")
-            .border_style(Style::default().fg(Color::Yellow)))
-        .highlight_style(Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Select Pattern to Remove (↑↓ to navigate, Enter to remove, Esc to cancel)")
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("► ");
 
     f.render_widget(ratatui::widgets::Clear, menu_area);
@@ -227,8 +227,8 @@ fn render_metadata_column(
     if state.is_image {
         if let Some(ref image_state) = state.image_state {
             match image_state {
-                crate::ImagePreviewState::Ready { metadata, .. } |
-                crate::ImagePreviewState::Failed { metadata } => {
+                crate::ImagePreviewState::Ready { metadata, .. }
+                | crate::ImagePreviewState::Failed { metadata } => {
                     if let Some((width, height)) = metadata.dimensions {
                         lines.push(Line::from(vec![
                             Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
@@ -266,10 +266,13 @@ fn render_metadata_column(
 
             if !local.modified_by.is_empty() {
                 // Try to find the device name
-                let device_name = devices.iter()
+                let device_name = devices
+                    .iter()
                     .find(|d| d.id == local.modified_by)
                     .map(|d| d.name.as_str())
-                    .unwrap_or_else(|| &local.modified_by[..std::cmp::min(12, local.modified_by.len())]);
+                    .unwrap_or_else(|| {
+                        &local.modified_by[..std::cmp::min(12, local.modified_by.len())]
+                    });
 
                 lines.push(Line::from(vec![
                     Span::styled("Modified By: ", Style::default().fg(Color::Yellow)),
@@ -294,9 +297,10 @@ fn render_metadata_column(
                 // Get icon span from icon_renderer (returns [file_icon, status_icon])
                 let icon_spans = icon_renderer.item_with_sync_state(false, sync_state);
 
-                let mut status_spans = vec![
-                    Span::styled("Sync Status: ", Style::default().fg(Color::Yellow)),
-                ];
+                let mut status_spans = vec![Span::styled(
+                    "Sync Status: ",
+                    Style::default().fg(Color::Yellow),
+                )];
                 // Add just the status icon (second element, skip the file icon)
                 if icon_spans.len() > 1 {
                     status_spans.push(icon_spans[1].clone());
@@ -310,35 +314,42 @@ fn render_metadata_column(
         lines.push(Line::from(""));
 
         // Device availability (only shows connected/online devices)
-        let other_devices: Vec<_> = details.availability.iter()
+        let other_devices: Vec<_> = details
+            .availability
+            .iter()
             .filter(|d| Some(d.id.as_str()) != my_device_id) // Filter out current device
             .collect();
 
         if !other_devices.is_empty() {
             lines.push(Line::from(Span::styled(
                 "Available on (connected):",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
 
             for device_avail in other_devices {
                 // Try to find the device name
-                let device_name = devices.iter()
+                let device_name = devices
+                    .iter()
                     .find(|d| d.id == device_avail.id)
                     .map(|d| d.name.as_str())
-                    .unwrap_or_else(|| &device_avail.id[..std::cmp::min(12, device_avail.id.len())]);
+                    .unwrap_or_else(|| {
+                        &device_avail.id[..std::cmp::min(12, device_avail.id.len())]
+                    });
 
                 lines.push(Line::from(format!("  • {}", device_name)));
             }
         } else {
             lines.push(Line::from(Span::styled(
                 "Available on: Only this device",
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::DarkGray),
             )));
         }
     } else {
         lines.push(Line::from(Span::styled(
             "API details not available",
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Gray),
         )));
     }
 
@@ -353,14 +364,14 @@ fn render_metadata_column(
                 Style::default().fg(Color::Green)
             } else {
                 Style::default().fg(Color::Red)
-            }
+            },
         ),
     ]));
 
     if state.is_binary {
         lines.push(Line::from(Span::styled(
             "⚠️  Binary file",
-            Style::default().fg(Color::Magenta)
+            Style::default().fg(Color::Magenta),
         )));
     }
 
@@ -369,7 +380,7 @@ fn render_metadata_column(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title("Metadata")
+                .title("Metadata"),
         )
         .style(Style::default().fg(Color::White))
         .wrap(Wrap { trim: false });
@@ -393,14 +404,18 @@ fn render_preview_column(
                         Block::default()
                             .borders(Borders::ALL)
                             .border_style(Style::default().fg(Color::Cyan))
-                            .title("Preview")
+                            .title("Preview"),
                     )
                     .style(Style::default().fg(Color::Yellow));
                 f.render_widget(paragraph, area);
             }
             ImagePreviewState::Ready { .. } => {
                 // Get mutable reference to protocol and metadata for rendering
-                if let Some(ImagePreviewState::Ready { ref mut protocol, ref metadata }) = state.image_state {
+                if let Some(ImagePreviewState::Ready {
+                    ref mut protocol,
+                    ref metadata,
+                }) = state.image_state
+                {
                     // Create bordered block with dimensions in title
                     let title = if let Some((w, h)) = metadata.dimensions {
                         format!("Preview (Image | {}x{})", w, h)
@@ -417,7 +432,10 @@ fn render_preview_column(
                     f.render_widget(block, area);
 
                     // Render image with proper centering using font_size
-                    let inner_area = area.inner(Margin { horizontal: 1, vertical: 1 });
+                    let inner_area = area.inner(Margin {
+                        horizontal: 1,
+                        vertical: 1,
+                    });
 
                     let render_rect = if let (Some((img_w, img_h)), Some((font_w, font_h))) =
                         (metadata.dimensions, image_font_size)
@@ -427,8 +445,8 @@ fn render_preview_column(
                         let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
 
                         // Fit desired size to available area (Resize::Fit logic)
-                        let (fit_width, fit_height) = if desired_width <= inner_area.width &&
-                            desired_height <= inner_area.height
+                        let (fit_width, fit_height) = if desired_width <= inner_area.width
+                            && desired_height <= inner_area.height
                         {
                             // Image fits - use desired size
                             (desired_width, desired_height)
@@ -506,7 +524,8 @@ fn render_preview_column(
         let text_width = area.width.saturating_sub(2) as usize; // -2 for borders
 
         // Count total lines considering wrapping
-        let total_lines = content.lines()
+        let total_lines = content
+            .lines()
             .map(|line| {
                 if line.is_empty() {
                     1
@@ -539,7 +558,7 @@ fn render_preview_column(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
-                    .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)")
+                    .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)"),
             )
             .style(Style::default().fg(Color::White))
             .wrap(Wrap { trim: false }) // Enable line wrapping!
@@ -549,8 +568,8 @@ fn render_preview_column(
 
         // Render scrollbar if content is longer than viewport
         if total_lines > viewport_height {
-            let mut scrollbar_state = ScrollbarState::new(max_scroll)
-                .position(clamped_scroll as usize);
+            let mut scrollbar_state =
+                ScrollbarState::new(max_scroll).position(clamped_scroll as usize);
 
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("↑"))
@@ -560,22 +579,23 @@ fn render_preview_column(
 
             f.render_stateful_widget(
                 scrollbar,
-                area.inner(Margin { horizontal: 0, vertical: 1 }), // Keep scrollbar inside borders
+                area.inner(Margin {
+                    horizontal: 0,
+                    vertical: 1,
+                }), // Keep scrollbar inside borders
                 &mut scrollbar_state,
             );
         }
     }
 }
 
-fn render_image_metadata(
-    f: &mut Frame,
-    area: Rect,
-    metadata: &crate::ImageMetadata,
-) {
+fn render_image_metadata(f: &mut Frame, area: Rect, metadata: &crate::ImageMetadata) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Image preview unavailable",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -609,7 +629,7 @@ fn render_image_metadata(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title("Preview (Metadata Only)")
+                .title("Preview (Metadata Only)"),
         )
         .style(Style::default().fg(Color::White));
 

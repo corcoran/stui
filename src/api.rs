@@ -38,13 +38,13 @@ pub struct BrowseItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncState {
-    Synced,       // ✅ Local matches global
-    OutOfSync,    // ⚠️ Local differs from global
-    LocalOnly,    // 💻 Only on this device
-    RemoteOnly,   // ☁️ Only on remote devices
-    Ignored,      // 🚫 In .stignore
-    Syncing,      // 🔄 Currently syncing
-    Unknown,      // ❓ Not yet determined
+    Synced,     // ✅ Local matches global
+    OutOfSync,  // ⚠️ Local differs from global
+    LocalOnly,  // 💻 Only on this device
+    RemoteOnly, // ☁️ Only on remote devices
+    Ignored,    // 🚫 In .stignore
+    Syncing,    // 🔄 Currently syncing
+    Unknown,    // ❓ Not yet determined
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -254,7 +254,8 @@ impl SyncthingClient {
         let config = self.get_system_config().await?;
 
         // Find the device that matches our local ID
-        config.devices
+        config
+            .devices
             .iter()
             .find(|device| device.id == my_id)
             .map(|device| device.name.clone())
@@ -283,7 +284,10 @@ impl SyncthingClient {
         // Check if response is an error (plain text)
         let status = response.status();
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(anyhow::anyhow!("API error: {}", error_text));
         }
 
@@ -294,8 +298,8 @@ impl SyncthingClient {
             return Ok(Vec::new());
         }
 
-        let items: Vec<BrowseItem> = serde_json::from_str(&text)
-            .context("Failed to parse browse response")?;
+        let items: Vec<BrowseItem> =
+            serde_json::from_str(&text).context("Failed to parse browse response")?;
 
         Ok(items)
     }
@@ -333,10 +337,7 @@ impl SyncthingClient {
             .await
             .context("Failed to fetch file info")?;
 
-        let details: FileDetails = response
-            .json()
-            .await
-            .context("Failed to parse file info")?;
+        let details: FileDetails = response.json().await.context("Failed to parse file info")?;
 
         Ok(details)
     }
@@ -366,7 +367,10 @@ impl SyncthingClient {
     }
 
     pub async fn get_local_changed_files(&self, folder_id: &str) -> Result<Vec<String>> {
-        let url = format!("{}/rest/db/localchanged?folder={}", self.base_url, folder_id);
+        let url = format!(
+            "{}/rest/db/localchanged?folder={}",
+            self.base_url, folder_id
+        );
         let response = self
             .client
             .get(&url)
@@ -389,8 +393,15 @@ impl SyncthingClient {
         Ok(data.files.iter().map(|f| f.name.clone()).collect())
     }
 
-    pub async fn get_local_changed_items(&self, folder_id: &str, prefix: Option<&str>) -> Result<Vec<BrowseItem>> {
-        let url = format!("{}/rest/db/localchanged?folder={}", self.base_url, folder_id);
+    pub async fn get_local_changed_items(
+        &self,
+        folder_id: &str,
+        prefix: Option<&str>,
+    ) -> Result<Vec<BrowseItem>> {
+        let url = format!(
+            "{}/rest/db/localchanged?folder={}",
+            self.base_url, folder_id
+        );
         let response = self
             .client
             .get(&url)
@@ -542,7 +553,8 @@ impl FileDetails {
                     SyncState::RemoteOnly // Local deleted but exists remotely
                 } else if !local.deleted && global.deleted {
                     SyncState::LocalOnly // Exists locally but deleted remotely
-                } else if local.version != global.version || local.blocks_hash != global.blocks_hash {
+                } else if local.version != global.version || local.blocks_hash != global.blocks_hash
+                {
                     SyncState::OutOfSync // Different versions or content
                 } else {
                     SyncState::Synced // Fully synced

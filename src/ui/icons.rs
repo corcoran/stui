@@ -29,8 +29,8 @@ pub enum FolderState {
 #[derive(Debug, Clone)]
 pub struct IconTheme {
     // File type colors
-    pub sync_folder_color: Color,  // Syncthing folders (left panel)
-    pub folder_color: Color,        // Subdirectories
+    pub sync_folder_color: Color, // Syncthing folders (left panel)
+    pub folder_color: Color,      // Subdirectories
     pub file_color: Color,
 
     // Status colors
@@ -50,21 +50,21 @@ impl Default for IconTheme {
     fn default() -> Self {
         Self {
             // File types - use terminal colors that respect user's theme
-            sync_folder_color: Color::Magenta,    // Syncthing folders
-            folder_color: Color::Blue,            // Subdirectories
-            file_color: Color::Cyan,              // Files
+            sync_folder_color: Color::Magenta, // Syncthing folders
+            folder_color: Color::Blue,         // Subdirectories
+            file_color: Color::Cyan,           // Files
 
             // Status colors - use terminal colors
-            synced_color: Color::Green,           // Successfully synced
-            out_of_sync_color: Color::Yellow,     // Needs syncing
-            local_only_color: Color::Gray,        // Only on this device
-            remote_only_color: Color::White,      // Only on remote
-            ignored_color: Color::Red,            // Ignored files
-            syncing_color: Color::Yellow,         // Currently syncing
-            scanning_color: Color::Magenta,       // Scanning for changes
-            unknown_color: Color::Red,            // Unknown state
-            error_color: Color::Red,              // Error state
-            paused_color: Color::Gray,            // Paused folder
+            synced_color: Color::Green,       // Successfully synced
+            out_of_sync_color: Color::Yellow, // Needs syncing
+            local_only_color: Color::Gray,    // Only on this device
+            remote_only_color: Color::White,  // Only on remote
+            ignored_color: Color::Red,        // Ignored files
+            syncing_color: Color::Yellow,     // Currently syncing
+            scanning_color: Color::Magenta,   // Scanning for changes
+            unknown_color: Color::Red,        // Unknown state
+            error_color: Color::Red,          // Error state
+            paused_color: Color::Gray,        // Paused folder
         }
     }
 }
@@ -158,15 +158,24 @@ impl IconRenderer {
         if exists {
             // Ignored + exists: show warning icon
             let warning_span = match self.mode {
-                IconMode::Emoji => Span::styled("⚠️ ", Style::default().fg(self.theme.out_of_sync_color)),
-                IconMode::NerdFont => Span::styled("\u{F071} ", Style::default().fg(self.theme.out_of_sync_color)),
+                IconMode::Emoji => {
+                    Span::styled("⚠️ ", Style::default().fg(self.theme.out_of_sync_color))
+                }
+                IconMode::NerdFont => Span::styled(
+                    "\u{F071} ",
+                    Style::default().fg(self.theme.out_of_sync_color),
+                ),
             };
             spans.push(warning_span);
         } else {
             // Ignored + deleted: show block icon
             let block_span = match self.mode {
-                IconMode::Emoji => Span::styled("🚫 ", Style::default().fg(self.theme.ignored_color)),
-                IconMode::NerdFont => Span::styled("\u{F05E} ", Style::default().fg(self.theme.ignored_color)),
+                IconMode::Emoji => {
+                    Span::styled("🚫 ", Style::default().fg(self.theme.ignored_color))
+                }
+                IconMode::NerdFont => {
+                    Span::styled("\u{F05E} ", Style::default().fg(self.theme.ignored_color))
+                }
             };
             spans.push(block_span);
         }
@@ -180,18 +189,17 @@ impl IconRenderer {
             IconMode::Emoji => {
                 Span::styled("📂", Style::default().fg(self.theme.sync_folder_color))
             }
-            IconMode::NerdFont => {
-                Span::styled("\u{F07C}", Style::default().fg(self.theme.sync_folder_color))
-            }
+            IconMode::NerdFont => Span::styled(
+                "\u{F07C}",
+                Style::default().fg(self.theme.sync_folder_color),
+            ),
         }
     }
 
     /// Get folder icon span (for subdirectories)
     fn folder_icon(&self) -> Span<'static> {
         match self.mode {
-            IconMode::Emoji => {
-                Span::styled("📁", Style::default().fg(self.theme.folder_color))
-            }
+            IconMode::Emoji => Span::styled("📁", Style::default().fg(self.theme.folder_color)),
             IconMode::NerdFont => {
                 Span::styled("\u{E5FF}", Style::default().fg(self.theme.folder_color))
             }
@@ -201,9 +209,7 @@ impl IconRenderer {
     /// Get file icon span
     fn file_icon(&self) -> Span<'static> {
         match self.mode {
-            IconMode::Emoji => {
-                Span::styled("📄", Style::default().fg(self.theme.file_color))
-            }
+            IconMode::Emoji => Span::styled("📄", Style::default().fg(self.theme.file_color)),
             IconMode::NerdFont => {
                 Span::styled("\u{F15B}", Style::default().fg(self.theme.file_color))
             }

@@ -1,5 +1,5 @@
-use ratatui::Frame;
 use crate::App;
+use ratatui::Frame;
 
 use super::{
     breadcrumb::{self, DisplayMode},
@@ -60,7 +60,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let title = if let Some(ref prefix) = level.prefix {
             // Show last part of path
             let parts: Vec<&str> = prefix.trim_end_matches('/').split('/').collect();
-            parts.last().map(|s| s.to_string()).unwrap_or_else(|| level.folder_label.clone())
+            parts
+                .last()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| level.folder_label.clone())
         } else {
             level.folder_label.clone()
         };
@@ -76,20 +79,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             crate::DisplayMode::TimestampAndSize => DisplayMode::TimestampAndSize,
         };
 
-        // Check if any items in this level are currently syncing and update their state
-        for item in &level.items {
-            let item_path = if let Some(ref prefix) = level.prefix {
-                format!("{}/{}", prefix.trim_end_matches('/'), item.name)
-            } else {
-                item.name.clone()
-            };
-            let sync_key = format!("{}:{}", level.folder_id, item_path);
-
-            if app.syncing_files.contains(&sync_key) {
-                // Override state to Syncing if this file is actively syncing
-                level.file_sync_states.insert(item.name.clone(), crate::api::SyncState::Syncing);
-            }
-        }
+        // Syncing states now come from ItemStarted events (no override needed)
 
         breadcrumb::render_breadcrumb_panel(
             f,
@@ -119,7 +109,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
             // Get the folder ID from the breadcrumb trail
             let folder_id = &app.breadcrumb_trail[0].folder_id;
             // Check if the folder has local changes to restore
-            app.folder_statuses.get(folder_id)
+            app.folder_statuses
+                .get(folder_id)
                 .map(|status| status.receive_only_total_items > 0)
                 .unwrap_or(false)
         } else {
@@ -137,30 +128,36 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Render status bar at the bottom
-    let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) = if app.focus_level > 0 {
-        let level_idx = app.focus_level - 1;
-        if let Some(level) = app.breadcrumb_trail.get(level_idx) {
-            let folder_label = Some(level.folder_label.as_str());
-            let item_count = Some(level.items.len());
-            let selected_item = level.state.selected().and_then(|sel| {
-                level.items.get(sel).map(|item| {
-                    let sync_state = level.file_sync_states.get(&item.name).copied();
-                    let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
-                    let exists = if is_ignored {
-                        level.ignored_exists.get(&item.name).copied()
-                    } else {
-                        None
-                    };
-                    (item.name.as_str(), item.item_type.as_str(), sync_state, exists)
-                })
-            });
-            (folder_label, item_count, selected_item)
+    let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) =
+        if app.focus_level > 0 {
+            let level_idx = app.focus_level - 1;
+            if let Some(level) = app.breadcrumb_trail.get(level_idx) {
+                let folder_label = Some(level.folder_label.as_str());
+                let item_count = Some(level.items.len());
+                let selected_item = level.state.selected().and_then(|sel| {
+                    level.items.get(sel).map(|item| {
+                        let sync_state = level.file_sync_states.get(&item.name).copied();
+                        let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
+                        let exists = if is_ignored {
+                            level.ignored_exists.get(&item.name).copied()
+                        } else {
+                            None
+                        };
+                        (
+                            item.name.as_str(),
+                            item.item_type.as_str(),
+                            sync_state,
+                            exists,
+                        )
+                    })
+                });
+                (folder_label, item_count, selected_item)
+            } else {
+                (None, None, None)
+            }
         } else {
             (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
+        };
 
     status_bar::render_status_bar(
         f,
@@ -194,7 +191,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Render file info popup if active
     if let Some(state) = &mut app.show_file_info {
         let my_device_id = app.system_status.as_ref().map(|s| s.my_id.as_str());
-        dialogs::render_file_info(f, state, &app.devices, my_device_id, &app.icon_renderer, app.image_font_size);
+        dialogs::render_file_info(
+            f,
+            state,
+            &app.devices,
+            my_device_id,
+            &app.icon_renderer,
+            app.image_font_size,
+        );
     }
 
     // Render toast notification if active

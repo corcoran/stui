@@ -28,10 +28,10 @@ pub fn calculate_layout(
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // System info bar (3 lines: top border, text, bottom border)
-            Constraint::Min(3),      // Content area (folders + breadcrumbs)
-            Constraint::Length(3),   // Legend area (3 lines: top border, text, bottom border)
-            Constraint::Length(3),   // Status bar (3 lines: top border, text, bottom border)
+            Constraint::Length(3), // System info bar (3 lines: top border, text, bottom border)
+            Constraint::Min(3),    // Content area (folders + breadcrumbs)
+            Constraint::Length(3), // Legend area (3 lines: top border, text, bottom border)
+            Constraint::Length(3), // Status bar (3 lines: top border, text, bottom border)
         ])
         .split(terminal_size);
 
@@ -81,7 +81,8 @@ pub fn calculate_layout(
         .split(content_area);
 
     // Determine which areas to use for folders and breadcrumbs
-    let (folders_area, breadcrumb_areas) = if has_breadcrumbs && folders_visible && chunks.len() > 1 {
+    let (folders_area, breadcrumb_areas) = if has_breadcrumbs && folders_visible && chunks.len() > 1
+    {
         // First chunk is folders, rest are breadcrumbs
         let bc: Vec<Rect> = chunks[1..].to_vec();
         (Some(chunks[0]), bc)

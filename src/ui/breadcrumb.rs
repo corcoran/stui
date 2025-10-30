@@ -1,3 +1,5 @@
+use super::icons::IconRenderer;
+use crate::api::{BrowseItem, SyncState};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -6,8 +8,6 @@ use ratatui::{
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
-use crate::api::{BrowseItem, SyncState};
-use super::icons::IconRenderer;
 
 /// Display mode for file info (timestamp and/or size)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ fn build_list_item<'a>(
 
     // Add spacing prefix if requested (for non-focused breadcrumbs)
     let spacing_prefix = if add_spacing {
-        vec![Span::raw("  ")]  // Two spaces to match "> " width
+        vec![Span::raw("  ")] // Two spaces to match "> " width
     } else {
         vec![]
     };
@@ -128,7 +128,7 @@ fn build_list_item<'a>(
                 let human_size = format_human_size(item.size);
                 format!("{} {}", human_size, full_timestamp)
             }
-        },
+        }
         DisplayMode::Off => String::new(),
     };
 
@@ -141,7 +141,10 @@ fn build_list_item<'a>(
         line_spans.extend(icon_spans);
         line_spans.push(Span::raw(&item.name));
         line_spans.push(Span::raw(" ".repeat(padding)));
-        line_spans.push(Span::styled(info_string, Style::default().fg(Color::Rgb(120, 120, 120))));
+        line_spans.push(Span::styled(
+            info_string,
+            Style::default().fg(Color::Rgb(120, 120, 120)),
+        ));
         return ListItem::new(Line::from(line_spans));
     }
 
@@ -184,7 +187,10 @@ fn build_list_item<'a>(
             line_spans.extend(icon_spans);
             line_spans.push(Span::raw(&item.name));
             line_spans.push(Span::raw(" ".repeat(padding)));
-            line_spans.push(Span::styled(truncated_info, Style::default().fg(Color::Rgb(120, 120, 120))));
+            line_spans.push(Span::styled(
+                truncated_info,
+                Style::default().fg(Color::Rgb(120, 120, 120)),
+            ));
             return ListItem::new(Line::from(line_spans));
         }
     }
@@ -218,7 +224,10 @@ pub fn render_breadcrumb_panel(
         .iter()
         .map(|item| {
             // Use cached state directly (directories show their own metadata state, not aggregate)
-            let sync_state = file_sync_states.get(&item.name).copied().unwrap_or(SyncState::Unknown);
+            let sync_state = file_sync_states
+                .get(&item.name)
+                .copied()
+                .unwrap_or(SyncState::Unknown);
 
             // Build icon as spans (for coloring)
             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
@@ -235,7 +244,7 @@ pub fn render_breadcrumb_panel(
                 icon_spans,
                 panel_width,
                 display_mode,
-                !is_focused && !is_parent_selected,  // Add spacing when neither focused nor parent selected
+                !is_focused && !is_parent_selected, // Add spacing when neither focused nor parent selected
             )
         })
         .collect();
@@ -244,18 +253,17 @@ pub fn render_breadcrumb_panel(
     let border_color = if is_focused {
         Color::Cyan
     } else if is_parent_selected {
-        Color::Blue  // Distinct color for parent selection
+        Color::Blue // Distinct color for parent selection
     } else {
         Color::Gray
     };
 
-    let mut list = List::new(list_items)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        );
+    let mut list = List::new(list_items).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color)),
+    );
 
     // Add highlight when focused (with arrow) or parent selected (without arrow)
     if is_focused {
@@ -263,7 +271,7 @@ pub fn render_breadcrumb_panel(
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("> ");
         f.render_stateful_widget(list, area, state);
@@ -272,9 +280,9 @@ pub fn render_breadcrumb_panel(
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");  // Two spaces to maintain alignment
+            .highlight_symbol("  "); // Two spaces to maintain alignment
         f.render_stateful_widget(list, area, state);
     } else {
         let mut empty_state = ratatui::widgets::ListState::default();

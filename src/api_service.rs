@@ -6,7 +6,9 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
-use crate::api::{BrowseItem, ConnectionStats, FileDetails, FolderStatus, SyncthingClient, SystemStatus};
+use crate::api::{
+    BrowseItem, ConnectionStats, FileDetails, FolderStatus, SyncthingClient, SystemStatus,
+};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -34,9 +36,17 @@ pub enum Priority {
 /// Unique identifier for deduplicating requests
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RequestKey {
-    Browse { folder_id: String, prefix: Option<String> },
-    FileInfo { folder_id: String, file_path: String },
-    FolderStatus { folder_id: String },
+    Browse {
+        folder_id: String,
+        prefix: Option<String>,
+    },
+    FileInfo {
+        folder_id: String,
+        file_path: String,
+    },
+    FolderStatus {
+        folder_id: String,
+    },
     SystemStatus,
     ConnectionStats,
 }
@@ -59,14 +69,10 @@ pub enum ApiRequest {
     },
 
     /// Get folder sync status
-    GetFolderStatus {
-        folder_id: String,
-    },
+    GetFolderStatus { folder_id: String },
 
     /// Trigger folder rescan (always high priority)
-    RescanFolder {
-        folder_id: String,
-    },
+    RescanFolder { folder_id: String },
 
     /// Get system status (device info, uptime)
     GetSystemStatus,
@@ -89,23 +95,23 @@ impl ApiRequest {
     /// Generate a unique key for deduplication
     fn key(&self) -> RequestKey {
         match self {
-            ApiRequest::BrowseFolder { folder_id, prefix, .. } => {
-                RequestKey::Browse {
-                    folder_id: folder_id.clone(),
-                    prefix: prefix.clone(),
-                }
-            }
-            ApiRequest::GetFileInfo { folder_id, file_path, .. } => {
-                RequestKey::FileInfo {
-                    folder_id: folder_id.clone(),
-                    file_path: file_path.clone(),
-                }
-            }
-            ApiRequest::GetFolderStatus { folder_id } => {
-                RequestKey::FolderStatus {
-                    folder_id: folder_id.clone(),
-                }
-            }
+            ApiRequest::BrowseFolder {
+                folder_id, prefix, ..
+            } => RequestKey::Browse {
+                folder_id: folder_id.clone(),
+                prefix: prefix.clone(),
+            },
+            ApiRequest::GetFileInfo {
+                folder_id,
+                file_path,
+                ..
+            } => RequestKey::FileInfo {
+                folder_id: folder_id.clone(),
+                file_path: file_path.clone(),
+            },
+            ApiRequest::GetFolderStatus { folder_id } => RequestKey::FolderStatus {
+                folder_id: folder_id.clone(),
+            },
             // Write operations don't deduplicate
             ApiRequest::RescanFolder { .. } => RequestKey::Browse {
                 folder_id: format!("write-{:?}", std::time::Instant::now()),
@@ -193,7 +199,8 @@ impl ApiService {
         let priority = request.priority();
 
         // Insert based on priority (high priority at front)
-        let insert_pos = self.request_queue
+        let insert_pos = self
+            .request_queue
             .iter()
             .position(|(_, p)| *p < priority)
             .unwrap_or(self.request_queue.len());
@@ -227,8 +234,15 @@ impl ApiService {
 
             // Log before sending response
             match &response {
-                ApiResponse::FileInfoResult { folder_id, file_path, .. } => {
-                    log_debug(&format!("DEBUG [API Service]: Sending FileInfoResult for folder={} path={}", folder_id, file_path));
+                ApiResponse::FileInfoResult {
+                    folder_id,
+                    file_path,
+                    ..
+                } => {
+                    log_debug(&format!(
+                        "DEBUG [API Service]: Sending FileInfoResult for folder={} path={}",
+                        folder_id, file_path
+                    ));
                 }
                 _ => {}
             }
@@ -243,8 +257,12 @@ impl ApiService {
     /// Execute an API request and return the response
     async fn execute_request(client: &SyncthingClient, request: ApiRequest) -> ApiResponse {
         match request {
-            ApiRequest::BrowseFolder { folder_id, prefix, .. } => {
-                let items = client.browse_folder(&folder_id, prefix.as_deref()).await
+            ApiRequest::BrowseFolder {
+                folder_id, prefix, ..
+            } => {
+                let items = client
+                    .browse_folder(&folder_id, prefix.as_deref())
+                    .await
                     .map_err(|e| e.to_string());
 
                 ApiResponse::BrowseResult {
@@ -254,15 +272,32 @@ impl ApiService {
                 }
             }
 
-            ApiRequest::GetFileInfo { folder_id, file_path, .. } => {
-                log_debug(&format!("DEBUG [API Service GetFileInfo]: START folder={} path={}", folder_id, file_path));
-                let details = client.get_file_info(&folder_id, &file_path).await
+            ApiRequest::GetFileInfo {
+                folder_id,
+                file_path,
+                ..
+            } => {
+                log_debug(&format!(
+                    "DEBUG [API Service GetFileInfo]: START folder={} path={}",
+                    folder_id, file_path
+                ));
+                let details = client
+                    .get_file_info(&folder_id, &file_path)
+                    .await
                     .map_err(|e| {
-                        log_debug(&format!("DEBUG [API Service GetFileInfo]: ERROR folder={} path={} error={}", folder_id, file_path, e));
+                        log_debug(&format!(
+                            "DEBUG [API Service GetFileInfo]: ERROR folder={} path={} error={}",
+                            folder_id, file_path, e
+                        ));
                         e.to_string()
                     });
 
-                log_debug(&format!("DEBUG [API Service GetFileInfo]: END folder={} path={} success={}", folder_id, file_path, details.is_ok()));
+                log_debug(&format!(
+                    "DEBUG [API Service GetFileInfo]: END folder={} path={} success={}",
+                    folder_id,
+                    file_path,
+                    details.is_ok()
+                ));
 
                 ApiResponse::FileInfoResult {
                     folder_id,
@@ -272,13 +307,12 @@ impl ApiService {
             }
 
             ApiRequest::GetFolderStatus { folder_id } => {
-                let status = client.get_folder_status(&folder_id).await
+                let status = client
+                    .get_folder_status(&folder_id)
+                    .await
                     .map_err(|e| e.to_string());
 
-                ApiResponse::FolderStatusResult {
-                    folder_id,
-                    status,
-                }
+                ApiResponse::FolderStatusResult { folder_id, status }
             }
 
             ApiRequest::RescanFolder { folder_id } => {
@@ -297,27 +331,30 @@ impl ApiService {
             }
 
             ApiRequest::GetSystemStatus => {
-                let status = client.get_system_status().await
-                    .map_err(|e| e.to_string());
+                let status = client.get_system_status().await.map_err(|e| e.to_string());
 
                 ApiResponse::SystemStatusResult { status }
             }
 
             ApiRequest::GetConnectionStats => {
-                let stats = client.get_connection_stats().await
+                let stats = client
+                    .get_connection_stats()
+                    .await
                     .map_err(|e| e.to_string());
 
                 ApiResponse::ConnectionStatsResult { stats }
             }
         }
     }
-
 }
 
 /// Spawn the API service worker
 pub fn spawn_api_service(
     client: SyncthingClient,
-) -> (mpsc::UnboundedSender<ApiRequest>, mpsc::UnboundedReceiver<ApiResponse>) {
+) -> (
+    mpsc::UnboundedSender<ApiRequest>,
+    mpsc::UnboundedReceiver<ApiResponse>,
+) {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<ApiRequest>();
     let (response_tx, response_rx) = mpsc::unbounded_channel::<ApiResponse>();
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<InternalMessage>();

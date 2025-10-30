@@ -52,13 +52,22 @@ pub struct SyncthingEvent {
 #[derive(Debug, Clone)]
 pub enum CacheInvalidation {
     /// Invalidate a single file
-    File { folder_id: String, file_path: String },
+    File {
+        folder_id: String,
+        file_path: String,
+    },
     /// Invalidate an entire directory
     Directory { folder_id: String, dir_path: String },
     /// Item started syncing
-    ItemStarted { folder_id: String, file_path: String },
+    ItemStarted {
+        folder_id: String,
+        file_path: String,
+    },
     /// Item finished syncing
-    ItemFinished { folder_id: String, file_path: String },
+    ItemFinished {
+        folder_id: String,
+        file_path: String,
+    },
 }
 
 /// Spawn the event listener task
@@ -94,32 +103,42 @@ async fn event_listener_loop(
     let client = Client::new();
 
     log_bug("EVENT LISTENER: Starting up");
-    log_debug(&format!("DEBUG [EVENT LISTENER]: Starting event listener, base_url={} last_event_id={}", base_url, last_event_id));
+    log_debug(&format!(
+        "DEBUG [EVENT LISTENER]: Starting event listener, base_url={} last_event_id={}",
+        base_url, last_event_id
+    ));
 
     // Track if we've tried resetting event ID (to avoid reset loop)
     let mut tried_reset = false;
 
     loop {
         // Make long-polling request
-        let url = format!("{}/rest/events?since={}&timeout=60", base_url, last_event_id);
-        log_bug(&format!("EVENT LISTENER: Polling Syncthing (last_event_id={})", last_event_id));
+        let url = format!(
+            "{}/rest/events?since={}&timeout=60",
+            base_url, last_event_id
+        );
+        log_bug(&format!(
+            "EVENT LISTENER: Polling Syncthing (last_event_id={})",
+            last_event_id
+        ));
         log_debug(&format!("DEBUG [EVENT LISTENER]: Polling {}", url));
 
-        match client
-            .get(&url)
-            .header("X-API-Key", &api_key)
-            .send()
-            .await
-        {
+        match client.get(&url).header("X-API-Key", &api_key).send().await {
             Ok(response) => {
                 let status = response.status();
-                log_debug(&format!("DEBUG [EVENT LISTENER]: Got response, status={}", status));
+                log_debug(&format!(
+                    "DEBUG [EVENT LISTENER]: Got response, status={}",
+                    status
+                ));
                 log_bug(&format!("EVENT LISTENER: Got response, status={}", status));
 
                 match response.json::<Vec<SyncthingEvent>>().await {
                     Ok(events) => {
                         log_bug(&format!("EVENT LISTENER: Received {} events", events.len()));
-                        log_debug(&format!("DEBUG [EVENT LISTENER]: Received {} events", events.len()));
+                        log_debug(&format!(
+                            "DEBUG [EVENT LISTENER]: Received {} events",
+                            events.len()
+                        ));
 
                         // If we've been getting 0 events and last_event_id is high,
                         // Syncthing might have restarted - try resetting to 0 once
@@ -134,7 +153,10 @@ async fn event_listener_loop(
 
                         for event in &events {
                             // Debug: Log all events
-                            log_debug(&format!("DEBUG [EVENT]: id={} type={} data={}", event.id, event.event_type, event.data));
+                            log_debug(&format!(
+                                "DEBUG [EVENT]: id={} type={} data={}",
+                                event.id, event.event_type, event.data
+                            ));
                             log_bug(&format!("EVENT: id={} type={}", event.id, event.event_type));
 
                             // Check for missed events (gap in IDs)
@@ -146,8 +168,12 @@ async fn event_listener_loop(
                             match event.event_type.as_str() {
                                 "LocalIndexUpdated" => {
                                     // LocalIndexUpdated has a "filenames" array instead of "item"
-                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                        if let Some(filenames) = event.data.get("filenames").and_then(|v| v.as_array()) {
+                                    if let Some(folder_id) =
+                                        event.data.get("folder").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(filenames) =
+                                            event.data.get("filenames").and_then(|v| v.as_array())
+                                        {
                                             for filename in filenames {
                                                 if let Some(file_path) = filename.as_str() {
                                                     let invalidation = CacheInvalidation::File {
@@ -155,7 +181,10 @@ async fn event_listener_loop(
                                                         file_path: file_path.to_string(),
                                                     };
 
-                                                    log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
+                                                    log_debug(&format!(
+                                                        "DEBUG [EVENT]: Sending invalidation: {:?}",
+                                                        invalidation
+                                                    ));
                                                     let _ = invalidation_tx.send(invalidation);
                                                 }
                                             }
@@ -163,33 +192,57 @@ async fn event_listener_loop(
                                     }
                                 }
                                 "ItemStarted" => {
-                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                    if let Some(folder_id) =
+                                        event.data.get("folder").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(item_path) =
+                                            event.data.get("item").and_then(|v| v.as_str())
+                                        {
                                             let invalidation = CacheInvalidation::ItemStarted {
                                                 folder_id: folder_id.to_string(),
                                                 file_path: item_path.to_string(),
                                             };
-                                            log_debug(&format!("DEBUG [EVENT]: ItemStarted: {:?}", invalidation));
-                                            log_bug(&format!("EVENT: ItemStarted folder={} item={}", folder_id, item_path));
+                                            log_debug(&format!(
+                                                "DEBUG [EVENT]: ItemStarted: {:?}",
+                                                invalidation
+                                            ));
+                                            log_bug(&format!(
+                                                "EVENT: ItemStarted folder={} item={}",
+                                                folder_id, item_path
+                                            ));
                                             let _ = invalidation_tx.send(invalidation);
                                         }
                                     }
                                 }
                                 "ItemFinished" => {
-                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                    if let Some(folder_id) =
+                                        event.data.get("folder").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(item_path) =
+                                            event.data.get("item").and_then(|v| v.as_str())
+                                        {
                                             // Send ItemFinished notification
-                                            let finished_invalidation = CacheInvalidation::ItemFinished {
-                                                folder_id: folder_id.to_string(),
-                                                file_path: item_path.to_string(),
-                                            };
-                                            log_debug(&format!("DEBUG [EVENT]: ItemFinished: {:?}", finished_invalidation));
-                                            log_bug(&format!("EVENT: ItemFinished folder={} item={}", folder_id, item_path));
+                                            let finished_invalidation =
+                                                CacheInvalidation::ItemFinished {
+                                                    folder_id: folder_id.to_string(),
+                                                    file_path: item_path.to_string(),
+                                                };
+                                            log_debug(&format!(
+                                                "DEBUG [EVENT]: ItemFinished: {:?}",
+                                                finished_invalidation
+                                            ));
+                                            log_bug(&format!(
+                                                "EVENT: ItemFinished folder={} item={}",
+                                                folder_id, item_path
+                                            ));
                                             let _ = invalidation_tx.send(finished_invalidation);
 
                                             // Also send cache invalidation
-                                            let item_type = event.data.get("type").and_then(|v| v.as_str());
-                                            let cache_invalidation = if item_type == Some("dir") || item_path.ends_with('/') {
+                                            let item_type =
+                                                event.data.get("type").and_then(|v| v.as_str());
+                                            let cache_invalidation = if item_type == Some("dir")
+                                                || item_path.ends_with('/')
+                                            {
                                                 CacheInvalidation::Directory {
                                                     folder_id: folder_id.to_string(),
                                                     dir_path: item_path.to_string(),
@@ -200,18 +253,28 @@ async fn event_listener_loop(
                                                     file_path: item_path.to_string(),
                                                 }
                                             };
-                                            log_debug(&format!("DEBUG [EVENT]: Sending cache invalidation: {:?}", cache_invalidation));
+                                            log_debug(&format!(
+                                                "DEBUG [EVENT]: Sending cache invalidation: {:?}",
+                                                cache_invalidation
+                                            ));
                                             let _ = invalidation_tx.send(cache_invalidation);
                                         }
                                     }
                                 }
                                 "LocalChangeDetected" | "RemoteChangeDetected" => {
-                                    if let Some(folder_id) = event.data.get("folder").and_then(|v| v.as_str()) {
-                                        if let Some(item_path) = event.data.get("item").and_then(|v| v.as_str()) {
+                                    if let Some(folder_id) =
+                                        event.data.get("folder").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(item_path) =
+                                            event.data.get("item").and_then(|v| v.as_str())
+                                        {
                                             // Check if it's a directory
-                                            let item_type = event.data.get("type").and_then(|v| v.as_str());
+                                            let item_type =
+                                                event.data.get("type").and_then(|v| v.as_str());
 
-                                            let invalidation = if item_type == Some("dir") || item_path.ends_with('/') {
+                                            let invalidation = if item_type == Some("dir")
+                                                || item_path.ends_with('/')
+                                            {
                                                 // Directory change - invalidate entire directory
                                                 CacheInvalidation::Directory {
                                                     folder_id: folder_id.to_string(),
@@ -225,14 +288,20 @@ async fn event_listener_loop(
                                                 }
                                             };
 
-                                            log_debug(&format!("DEBUG [EVENT]: Sending invalidation: {:?}", invalidation));
+                                            log_debug(&format!(
+                                                "DEBUG [EVENT]: Sending invalidation: {:?}",
+                                                invalidation
+                                            ));
                                             let _ = invalidation_tx.send(invalidation);
                                         }
                                     }
                                 }
                                 _ => {
                                     // Ignore other event types (but log them for debugging)
-                                    log_debug(&format!("DEBUG [EVENT]: Ignoring event type: {}", event.event_type));
+                                    log_debug(&format!(
+                                        "DEBUG [EVENT]: Ignoring event type: {}",
+                                        event.event_type
+                                    ));
                                 }
                             }
 
@@ -241,7 +310,10 @@ async fn event_listener_loop(
 
                         // Persist event ID every batch (not every single event for performance)
                         if !events.is_empty() {
-                            log_debug(&format!("DEBUG [EVENT LISTENER]: Persisting last_event_id={}", last_event_id));
+                            log_debug(&format!(
+                                "DEBUG [EVENT LISTENER]: Persisting last_event_id={}",
+                                last_event_id
+                            ));
                             let _ = event_id_tx.send(last_event_id);
                         }
                     }

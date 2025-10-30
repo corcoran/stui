@@ -12,15 +12,15 @@
 // - dialogs: Renders confirmation dialogs (revert, delete, pattern selection)
 // - toast: Renders toast notifications (brief pop-up messages)
 
-pub mod icons;
-pub mod dialogs;
-pub mod legend;
-pub mod system_bar;
-pub mod status_bar;
-pub mod folder_list;
 pub mod breadcrumb;
+pub mod dialogs;
+pub mod folder_list;
+pub mod icons;
 pub mod layout;
+pub mod legend;
 pub mod render;
+pub mod status_bar;
+pub mod system_bar;
 pub mod toast;
 
 // Re-export main render function for convenience

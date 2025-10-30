@@ -1,3 +1,5 @@
+use super::icons::{FolderState, IconRenderer};
+use crate::api::{Folder, FolderStatus};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -6,8 +8,6 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashMap;
-use crate::api::{Folder, FolderStatus};
-use super::icons::{FolderState, IconRenderer};
 
 /// Render the folder list panel
 pub fn render_folder_list(
@@ -21,7 +21,6 @@ pub fn render_folder_list(
     icon_renderer: &IconRenderer,
     last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
 ) {
-
     // Render Folders List
     let folders_items: Vec<ListItem> = folders
         .iter()
@@ -61,7 +60,9 @@ pub fn render_folder_list(
             // Add last update info if available
             if let Some((timestamp, last_file)) = last_folder_updates.get(&folder.id) {
                 // Calculate time since last update
-                let elapsed = timestamp.elapsed().unwrap_or(std::time::Duration::from_secs(0));
+                let elapsed = timestamp
+                    .elapsed()
+                    .unwrap_or(std::time::Duration::from_secs(0));
                 let time_str = if elapsed.as_secs() < 60 {
                     format!("{}s ago", elapsed.as_secs())
                 } else if elapsed.as_secs() < 3600 {
@@ -85,8 +86,8 @@ pub fn render_folder_list(
                     folder_line,
                     Line::from(Span::styled(
                         format!("  ↳ {} - {}", time_str, file_display),
-                        Style::default().fg(Color::Rgb(150, 150, 150)) // Medium gray visible on both dark gray and black backgrounds
-                    ))
+                        Style::default().fg(Color::Rgb(150, 150, 150)), // Medium gray visible on both dark gray and black backgrounds
+                    )),
                 ])
             } else {
                 // Single-line item without update info

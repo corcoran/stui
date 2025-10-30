@@ -36,13 +36,18 @@ pub fn render_toast(f: &mut Frame, area: Rect, message: &str) {
 
     // Create styled toast with icon
     let toast_line = Line::from(vec![
-        Span::styled(icon, Style::default().fg(icon_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            icon,
+            Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(message, Style::default()),
     ]);
 
-    let toast_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD));
+    let toast_block = Block::default().borders(Borders::ALL).border_style(
+        Style::default()
+            .fg(border_color)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let toast_text = Paragraph::new(vec![toast_line])
         .block(toast_block)

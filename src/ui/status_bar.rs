@@ -1,3 +1,5 @@
+use crate::api::{Folder, FolderStatus, SyncState};
+use crate::utils;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -6,8 +8,6 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashMap;
-use crate::api::{Folder, FolderStatus, SyncState};
-use crate::utils;
 
 /// Render the bottom status bar
 /// - When focus_level == 0: Shows folder status (state, size, sync progress)
@@ -34,7 +34,8 @@ pub fn render_status_bar(
             if let Some(folder) = folders.get(selected) {
                 let folder_name = folder.label.as_ref().unwrap_or(&folder.id);
                 if folder.paused {
-                    format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                    format!(
+                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
                         "Paused",
                         "-",
@@ -42,8 +43,14 @@ pub fn render_status_bar(
                         "-"
                     )
                 } else if let Some(status) = folder_statuses.get(&folder.id) {
-                    let state_display = if status.state.is_empty() { "paused" } else { &status.state };
-                    let in_sync = status.global_total_items.saturating_sub(status.need_total_items);
+                    let state_display = if status.state.is_empty() {
+                        "paused"
+                    } else {
+                        &status.state
+                    };
+                    let in_sync = status
+                        .global_total_items
+                        .saturating_sub(status.need_total_items);
                     let items_display = format!("{}/{}", in_sync, status.global_total_items);
 
                     // Build status message considering both remote needs and local additions
@@ -51,26 +58,35 @@ pub fn render_status_bar(
                         // Has local additions
                         if status.need_total_items > 0 {
                             // Both local additions and remote needs
-                            format!("↓{} ↑{} ({})",
+                            format!(
+                                "↓{} ↑{} ({})",
                                 status.need_total_items,
                                 status.receive_only_total_items,
-                                utils::format_bytes(status.need_bytes + status.receive_only_changed_bytes)
+                                utils::format_bytes(
+                                    status.need_bytes + status.receive_only_changed_bytes
+                                )
                             )
                         } else {
                             // Only local additions
-                            format!("Local: {} items ({})",
+                            format!(
+                                "Local: {} items ({})",
                                 status.receive_only_total_items,
                                 utils::format_bytes(status.receive_only_changed_bytes)
                             )
                         }
                     } else if status.need_total_items > 0 {
                         // Only remote needs
-                        format!("{} items ({}) ", status.need_total_items, utils::format_bytes(status.need_bytes))
+                        format!(
+                            "{} items ({}) ",
+                            status.need_total_items,
+                            utils::format_bytes(status.need_bytes)
+                        )
                     } else {
                         "Up to date ".to_string()
                     };
 
-                    format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                    format!(
+                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
                         state_display,
                         utils::format_bytes(status.global_bytes),
@@ -78,7 +94,8 @@ pub fn render_status_bar(
                         need_display
                     )
                 } else {
-                    format!("{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                    format!(
+                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
                         "Loading...",
                         "-",
@@ -105,7 +122,8 @@ pub fn render_status_bar(
         }
 
         // Show sort mode
-        let sort_display = format!("Sort: {}{}",
+        let sort_display = format!(
+            "Sort: {}{}",
             sort_mode,
             if sort_reverse { "↓" } else { "↑" }
         );
