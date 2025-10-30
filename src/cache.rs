@@ -34,6 +34,10 @@ impl CacheDb {
         let db_path = cache_dir.join("cache.db");
         let conn = Connection::open(db_path)?;
 
+        // Enable Write-Ahead Logging for better concurrency
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+
         let mut cache = CacheDb { conn };
         cache.init_schema()?;
 
@@ -362,6 +366,50 @@ impl CacheDb {
                 Self::serialize_sync_state(state)
             ],
         )?;
+
+        Ok(())
+    }
+
+    /// Save multiple sync states in a single transaction for better performance
+    pub fn save_sync_states_batch(
+        &self,
+        states: &[(String, String, SyncState, u64)], // (folder_id, file_path, state, sequence)
+    ) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        log_debug(&format!(
+            "DEBUG [save_sync_states_batch]: Saving {} states in batch",
+            states.len()
+        ));
+
+        let start = std::time::Instant::now();
+        let tx = self.conn.unchecked_transaction()?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO sync_states (folder_id, file_path, file_sequence, sync_state)
+                 VALUES (?1, ?2, ?3, ?4)"
+            )?;
+
+            for (folder_id, file_path, state, seq) in states {
+                stmt.execute(params![
+                    folder_id,
+                    file_path,
+                    *seq as i64,
+                    Self::serialize_sync_state(*state)
+                ])?;
+            }
+        } // stmt is dropped here
+
+        tx.commit()?;
+        let elapsed = start.elapsed();
+        log_debug(&format!(
+            "DEBUG [save_sync_states_batch]: Flushed {} sync states in {:?}",
+            states.len(),
+            elapsed
+        ));
 
         Ok(())
     }

@@ -258,6 +258,11 @@ pub struct App {
     image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>, // Receive image updates
     // Sixel cleanup counter - render white screen for N frames after closing image preview
     pub sixel_cleanup_frames: u8, // If > 0, render white rectangle and decrement
+    // Performance optimizations: Batched database writes
+    pending_sync_state_writes: Vec<(String, String, SyncState, u64)>, // (folder_id, file_path, state, sequence)
+    last_db_flush: Instant, // Track when we last flushed pending writes
+    // Performance optimizations: Dirty flag for UI rendering
+    ui_dirty: bool, // Flag indicating UI needs redrawing
 }
 
 impl App {
@@ -290,6 +295,51 @@ impl App {
         }
 
         (total_files, total_dirs, total_bytes)
+    }
+
+    /// Flush pending database writes in a single transaction
+    fn flush_pending_db_writes(&mut self) {
+        if self.pending_sync_state_writes.is_empty() {
+            return;
+        }
+
+        const ABSOLUTE_MAX_BATCH: usize = 100;
+
+        if self.pending_sync_state_writes.len() > ABSOLUTE_MAX_BATCH {
+            log_debug(&format!(
+                "Warning: Large batch size {}, flushing in chunks",
+                self.pending_sync_state_writes.len()
+            ));
+
+            // Flush in chunks if extremely large
+            for chunk in self.pending_sync_state_writes.chunks(ABSOLUTE_MAX_BATCH) {
+                if let Err(e) = self.cache.save_sync_states_batch(chunk) {
+                    log_debug(&format!("Failed to flush sync state chunk: {}", e));
+                }
+            }
+            self.pending_sync_state_writes.clear();
+        } else {
+            // Normal flush path
+            if let Err(e) = self.cache.save_sync_states_batch(&self.pending_sync_state_writes) {
+                log_debug(&format!("Failed to flush sync state batch: {}", e));
+            }
+            self.pending_sync_state_writes.clear();
+        }
+
+        self.last_db_flush = Instant::now();
+    }
+
+    /// Check if we should flush pending writes based on batch size or time
+    fn should_flush_db(&self) -> bool {
+        const MAX_BATCH_SIZE: usize = 50;
+        const MAX_BATCH_AGE_MS: u64 = 100;
+
+        if self.pending_sync_state_writes.is_empty() {
+            return false;
+        }
+
+        self.pending_sync_state_writes.len() >= MAX_BATCH_SIZE
+            || self.last_db_flush.elapsed() > Duration::from_millis(MAX_BATCH_AGE_MS)
     }
 
     fn pattern_matches(&self, pattern: &str, file_path: &str) -> bool {
@@ -486,6 +536,10 @@ impl App {
             image_update_tx,
             image_update_rx,
             sixel_cleanup_frames: 0,
+            // Performance optimizations
+            pending_sync_state_writes: Vec::new(),
+            last_db_flush: Instant::now(),
+            ui_dirty: true, // Start dirty to draw initial frame
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -807,9 +861,14 @@ impl App {
                     "DEBUG [FileInfoResult]: folder={} path={} state={:?} seq={}",
                     folder_id, file_path, state, file_sequence
                 ));
-                let _ = self
-                    .cache
-                    .save_sync_state(&folder_id, &file_path, state, file_sequence);
+
+                // Queue for batched write instead of immediate write
+                self.pending_sync_state_writes.push((
+                    folder_id.clone(),
+                    file_path.clone(),
+                    state,
+                    file_sequence,
+                ));
 
                 // Update UI if this file is visible in current level
                 let mut updated = false;
@@ -3913,6 +3972,8 @@ impl App {
                 self.page_up(40).await;
             }
             KeyCode::Char('d') => {
+                // Flush pending writes before destructive operation
+                self.flush_pending_db_writes();
                 // Delete file from disk (with confirmation)
                 let _ = self.delete_file().await;
             }
@@ -3921,6 +3982,8 @@ impl App {
                 let _ = self.toggle_ignore().await;
             }
             KeyCode::Char('I') => {
+                // Flush pending writes before destructive operation
+                self.flush_pending_db_writes();
                 // Ignore file AND delete from disk
                 let _ = self.ignore_and_delete().await;
             }
@@ -4040,12 +4103,16 @@ impl App {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
+                // Flush before navigation to save state
+                self.flush_pending_db_writes();
                 self.go_back();
             }
             KeyCode::Right | KeyCode::Enter => {
                 if self.vim_mode {
                     self.last_key_was_g = false;
                 }
+                // Flush before navigation to save state
+                self.flush_pending_db_writes();
                 if self.focus_level == 0 {
                     self.load_root_level(false).await?; // Not preview - actually enter folder
                 } else {
@@ -4185,6 +4252,8 @@ async fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> Result<()> {
+    let mut last_stats_update = Instant::now();
+
     loop {
         // Clear terminal to remove sixel graphics if needed (brief flash but necessary)
         if app.sixel_cleanup_frames > 0 {
@@ -4192,24 +4261,37 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.sixel_cleanup_frames = 0;
         }
 
-        terminal.draw(|f| {
-            ui::render(f, app);
-        })?;
+        // Conditional rendering based on dirty flag
+        if app.ui_dirty {
+            terminal.draw(|f| {
+                ui::render(f, app);
+            })?;
+            app.ui_dirty = false;
+        }
 
         // Auto-dismiss toast after 1.5 seconds
         if let Some((_, timestamp)) = app.toast_message {
             if timestamp.elapsed().as_millis() >= 1500 {
                 app.toast_message = None;
+                app.ui_dirty = true; // Toast changed, need redraw
             }
         }
 
         if app.should_quit {
+            // Flush any pending writes before quitting
+            app.flush_pending_db_writes();
             break;
         }
 
         // Process API responses (non-blocking)
         while let Ok(response) = app.api_rx.try_recv() {
             app.handle_api_response(response);
+            app.ui_dirty = true; // API response may have updated state
+        }
+
+        // Flush if batch is ready
+        if app.should_flush_db() {
+            app.flush_pending_db_writes();
         }
 
         // Process cache invalidation messages from event listener (non-blocking)
@@ -4219,6 +4301,7 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         while let Ok(invalidation) = app.invalidation_rx.try_recv() {
             app.handle_cache_invalidation(invalidation);
+            app.ui_dirty = true; // Cache invalidation may affect displayed data
             events_processed += 1;
 
             if events_processed >= MAX_EVENTS_PER_FRAME {
@@ -4274,10 +4357,19 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.last_connection_stats_fetch = Instant::now();
         }
 
+        // Update UI periodically for live stats (uptime, transfer rates)
+        if last_stats_update.elapsed() >= std::time::Duration::from_secs(1) {
+            app.ui_dirty = true;
+            last_stats_update = Instant::now();
+        }
+
         // Only run prefetch operations when user has been idle for 300ms
         // This prevents blocking keyboard input and reduces CPU usage
         let idle_time = app.last_user_action.elapsed();
         if idle_time >= std::time::Duration::from_millis(300) {
+            // Flush pending writes before idle operations
+            app.flush_pending_db_writes();
+
             // HIGHEST PRIORITY: If hovering over a directory, recursively discover all subdirectories
             // and fetch their states (non-blocking, uses cache only)
             app.prefetch_hovered_subdirectories(10, 15);
@@ -4300,7 +4392,10 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Increased poll timeout from 100ms to 250ms to reduce CPU usage when idle
         if event::poll(std::time::Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
+                // Flush before processing user input to ensure consistency
+                app.flush_pending_db_writes();
                 app.handle_key(key).await?;
+                app.ui_dirty = true; // User input likely changed state
             }
         }
     }
