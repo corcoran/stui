@@ -3554,10 +3554,12 @@ impl App {
             item.name.clone()
         };
 
+        // Note: translated_base_path already includes full directory path (with prefix),
+        // so we only append the item name (not relative_path which duplicates the prefix)
         let host_path = format!(
             "{}/{}",
             level.translated_base_path.trim_end_matches('/'),
-            relative_path
+            item.name
         );
 
         // Check if file exists on disk
