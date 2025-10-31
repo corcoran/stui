@@ -3,14 +3,35 @@
 This document outlines the step-by-step plan for building a **Rust Ratatui CLI tool** that interfaces with **Syncthing's REST API** to manage folders, view sync states, and control ignored/deleted files. The steps are structured to allow **progressive, testable milestones**, ideal for both human and LLM collaboration.
 
 ---
+## 📊 Current State Summary (2025-10-31)
+
+**What's Working:**
+- ✅ All planned features are implemented and functional
+- ✅ UI is well-organized into 11 focused modules
+- ✅ Services (API, cache, events) are properly separated
+- ✅ Advanced features: image preview, real-time sync monitoring, vim keybindings
+- ✅ Performance optimized (idle CPU <1-2%, responsive keyboard input)
+
+**What Needs Work:**
+- ⚠️ **Main blocker:** `main.rs` is 4,570 lines (monolithic business logic)
+- ⚠️ **No tests:** Zero unit or integration tests
+- ⚠️ **Refactoring not started:** Phase 1 and Phase 2 remain unimplemented
+- 📋 **Priority:** Begin Phase 1 refactoring (extract handlers and business logic)
+
+**Bottom Line:** The app is feature-complete and works well, but the codebase architecture needs refactoring for long-term maintainability and testability.
+
+---
 ## Next Steps
- -  **Refactor code to be more modular and readable** _(See detailed plan in 'Refactoring Plan' section below)_
+ -  **PRIORITY: Begin Phase 1 Refactoring** _(main.rs has grown to 4,570 lines and needs breaking up)_
+    - Write characterization tests before any refactoring (Phase 1.0)
+    - Extract message types and handlers (Phase 1.1-1.3)
+    - Extract business logic into logic/ modules (Phase 1.4)
  -  Pause / Resume folder toggle hotkey + status (with confirmation)
  -  Change Folder Type toggle hotkey + status (with confirmation)
  -  Remote Devices (Name, Download / Upload rate, Folders)
  -  Add event history viewer with persistent logging
  -  Add filtering functionality (show only ignored files, by type, etc.)
- -  Build comprehensive test suite
+ -  Build comprehensive test suite (alongside refactoring)
  -  Improve error handling, display, and timeouts
  -  Performance testing with large-scale datasets (validate idle CPU usage and responsiveness)
 
@@ -19,7 +40,9 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 ## Refactoring Plan: Elm Architecture Migration
 
 ### Overview
-Transform the codebase from a monolithic 3000-line `main.rs` into a testable, maintainable architecture using the Elm/Redux pattern. This will be done in two phases: **Moderate** (foundational restructuring) followed by **Comprehensive** (full architectural overhaul).
+Transform the codebase from a monolithic 4,570-line `main.rs` into a testable, maintainable architecture using the Elm/Redux pattern. This will be done in two phases: **Moderate** (foundational restructuring) followed by **Comprehensive** (full architectural overhaul).
+
+**⚠️ REFACTORING STATUS: NOT STARTED** — Phase 1 and Phase 2 have not been initiated yet. Recent development has focused on feature completeness (image preview, file info popup, optimization) rather than architectural refactoring. The monolithic `main.rs` has actually grown from 3,016 lines to 4,570 lines (+51%) since this plan was written.
 
 ---
 
@@ -27,18 +50,29 @@ Transform the codebase from a monolithic 3000-line `main.rs` into a testable, ma
 
 Understanding what exists helps plan the refactoring. Here's a snapshot of the current architecture:
 
-#### File Sizes
+#### File Sizes (Updated 2025-10-31)
 ```
-src/main.rs                 3016 lines  (NEEDS BREAKING UP)
-src/api.rs                   558 lines  (Syncthing API client)
-src/cache.rs                 431 lines  (SQLite cache operations)
-src/api_service.rs           359 lines  (API request queue service)
-src/ui/breadcrumb.rs         288 lines  (Breadcrumb panel rendering)
-src/event_listener.rs        265 lines  (Event stream listener)
-src/ui/icons.rs              235 lines  (Icon rendering)
-src/ui/status_bar.rs         210 lines  (Status bar rendering)
-src/ui/render.rs             191 lines  (Main render orchestration)
+src/main.rs                 4570 lines  (CRITICAL - NEEDS BREAKING UP!)
+src/ui/dialogs.rs            637 lines  (Confirmation dialogs + file info popup)
+src/api.rs                   579 lines  (Syncthing API client)
+src/cache.rs                 554 lines  (SQLite cache operations)
+src/api_service.rs           399 lines  (API request queue service)
+src/event_listener.rs        337 lines  (Event stream listener)
+src/ui/breadcrumb.rs         291 lines  (Breadcrumb panel rendering)
+src/ui/icons.rs              241 lines  (Icon rendering)
+src/ui/render.rs             216 lines  (Main render orchestration)
+src/ui/status_bar.rs         215 lines  (Bottom status bar rendering)
+src/ui/system_bar.rs         133 lines  (Top system info bar)
+src/ui/folder_list.rs        118 lines  (Folder list panel)
+src/ui/legend.rs             109 lines  (Hotkey legend rendering)
+src/ui/layout.rs             109 lines  (Screen layout calculations)
+src/ui/toast.rs               58 lines  (Toast notifications)
+src/config.rs                 34 lines  (Configuration parsing)
+src/utils.rs                  21 lines  (Utility functions)
 ```
+
+**Total:** 8,648 lines across 18 files
+**Status:** UI module is well-organized (11 files, good separation). Core blocker is monolithic `main.rs` which has grown 51% since plan was written.
 
 #### Key Structs in `main.rs`
 ```rust
@@ -339,7 +373,20 @@ src/
 
 ---
 
-## 📍 Current Status (Updated 2025-10-28)
+## 📍 Current Status (Updated 2025-10-31)
+
+**Architecture Status:**
+- ⚠️ **Refactoring not yet started** — Phase 1 and Phase 2 from the Refactoring Plan above remain unimplemented
+- ✅ **UI module well-organized** — 11 focused files with clear separation of concerns
+- ⚠️ **main.rs is monolithic** — 4,570 lines containing all business logic, state, and event handling
+- ✅ **Services properly separated** — API client, cache, event listener, and API queue are isolated
+- ⚠️ **No tests** — Zero unit or integration tests exist to validate business logic
+- 📊 **Feature completeness** — Application is functionally complete with advanced features
+
+**Recent Accomplishments (Session 2025-10-31):**
+- ✅ Optimizations and performance improvements
+- ✅ Block against pending operations (unignore while delete is in progress)
+- ✅ Sync state management refinements
 
 **Recent Accomplishments (Session 2025-10-28):**
 
@@ -466,12 +513,14 @@ src/
 - ✅ Updated legend with all keys: `s`, `S`, `t`, vim keys (when enabled)
 - ✅ Cache clearing fix for schema migrations
 
-**Performance Optimizations:**
+**Performance Optimizations (Completed 2025-10-31):**
 - ✅ Idle detection (300ms threshold) prevents background operations from blocking keyboard input
 - ✅ Non-blocking prefetch operations converted from async to sync (cache-only, no `.await`)
 - ✅ Event poll timeout increased from 100ms to 250ms (60% reduction in wakeups)
-- ✅ CPU usage reduced from ~18% idle to <1-2% expected
+- ✅ CPU usage reduced from ~18% idle to <1-2% measured
 - ✅ Instant keyboard responsiveness even during background caching
+- ✅ Request deduplication prevents redundant API calls
+- ✅ Smart caching with sequence-based validation ensures data freshness without excessive polling
 
 
 ## Polishing and Extensions
