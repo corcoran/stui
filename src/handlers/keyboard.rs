@@ -8,7 +8,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::api::SyncState;
-use crate::services::api;
 use crate::App;
 
 /// Handle keyboard input
