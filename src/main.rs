@@ -288,21 +288,6 @@ pub struct App {
 }
 
 impl App {
-    fn translate_path(&self, folder: &Folder, relative_path: &str) -> String {
-        // Get the full container path
-        let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
-
-        // Try to map container path to host path using path_map
-        for (container_prefix, host_prefix) in &self.path_map {
-            if container_path.starts_with(container_prefix) {
-                let remainder = container_path.strip_prefix(container_prefix).unwrap_or("");
-                return format!("{}{}", host_prefix.trim_end_matches('/'), remainder);
-            }
-        }
-
-        // If no mapping found, return container path
-        container_path
-    }
 
     /// Check if a path or any of its parent directories are pending deletion
     /// Returns Some(pending_path) if blocked, None if allowed
@@ -1437,7 +1422,7 @@ impl App {
                 let state = ListState::default();
 
                 // Compute translated base path once
-                let translated_base_path = self.translate_path(&folder, "");
+                let translated_base_path = logic::path::translate_path(&folder.path, "", &self.path_map);
 
                 // Load cached sync states for items
                 let mut file_sync_states =
