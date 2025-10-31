@@ -10,7 +10,9 @@
 
 pub mod api;
 pub mod events;
+pub mod keyboard;
 
 // Re-export for convenience
 pub use api::handle_api_response;
 pub use events::handle_cache_invalidation;
+pub use keyboard::handle_key;
