@@ -82,33 +82,141 @@ Forcing further extraction would scatter this orchestration logic and make the c
 
 ## 📋 Phase 2: Elm Architecture Rewrite
 
-### Core Elm Pattern
+### Why Model is the Foundation
 
+In Elm Architecture, **everything flows from the Model**:
+
+1. **Model defines what data exists** - Forces you to think about state first
+2. **Msg defines what can change** - Based on what the Model needs
+3. **Update defines how it changes** - Pure transformations of Model
+4. **View renders Model** - Pure function of current state
+5. **Cmd executes side effects** - But Model never sees them
+
+**The key insight:** If you can't clone/serialize your state, you can't:
+- Test it easily (need real services)
+- Debug it (can't snapshot)
+- Reason about it (hidden in services)
+
+**Current App is backwards:** Services mixed with state, making it impossible to separate concerns.
+
+**Elm Architecture fixes this:** Model is pure data, everything else serves the Model.
+
+### The Three Pillars
+
+Elm Architecture has three core concepts:
+
+**1. Model** - Pure application state (the foundation)
 ```rust
-// Pure update function
-fn update(state: AppState, msg: AppMessage) -> (AppState, Command) {
+#[derive(Clone, Debug)]
+struct Model {
+    folders: Vec<Folder>,
+    breadcrumb_trail: Vec<BreadcrumbLevel>,
+    sort_mode: SortMode,
+    // ... all data, NO services, NO channels
+}
+```
+
+**2. Msg** - All events that can happen
+```rust
+enum Msg {
+    KeyPress(KeyEvent),
+    FoldersLoaded(Result<Vec<Folder>>),
+    BrowseResult { folder_id: String, items: Vec<BrowseItem> },
+    // ... everything that can change state
+}
+```
+
+**3. Update** - Pure state transitions
+```rust
+fn update(model: Model, msg: Msg) -> (Model, Cmd) {
+    // Returns NEW model + side effects to execute
+    // No &mut, no .await, completely pure
+}
+```
+
+### The Critical Separation: Model vs Runtime
+
+**Current Problem:**
+```rust
+// ❌ CURRENT: App mixes state with services
+struct App {
+    // STATE (belongs in Model):
+    folders: Vec<Folder>,           // ✅
+    breadcrumb_trail: Vec<...>,     // ✅
+
+    // SERVICES (belongs in Runtime):
+    client: SyncthingClient,        // ❌
+    cache: CacheDb,                 // ❌
+    api_tx: channels,               // ❌
+}
+```
+
+**After Elm Pattern:**
+```rust
+// ✅ MODEL: Pure state (cloneable, serializable)
+#[derive(Clone, Debug)]
+struct Model {
+    folders: Vec<Folder>,
+    breadcrumb_trail: Vec<BreadcrumbLevel>,
+    // ... all data, NO services
+}
+
+// ✅ RUNTIME: Services that do I/O
+struct Runtime {
+    client: SyncthingClient,
+    cache: CacheDb,
+    msg_tx: Sender<Msg>,
+    // ... all I/O
+}
+
+// ✅ Pure update function
+fn update(model: Model, msg: Msg) -> (Model, Cmd) {
     match msg {
-        AppMessage::KeyPress(key) => {
-            // Pure state transition
-            let new_state = ...;
-            let command = Command::FetchFileInfo { ... };
-            (new_state, command)
+        Msg::KeyPress(key) => {
+            let mut model = model;
+            model.last_user_action = Instant::now();
+
+            let cmd = match key.code {
+                KeyCode::Char('q') => {
+                    model.should_quit = true;
+                    Cmd::None
+                }
+                KeyCode::Char('i') => {
+                    Cmd::ToggleIgnore {
+                        folder_id: model.current_folder_id(),
+                        item: model.selected_item(),
+                    }
+                }
+                _ => Cmd::None,
+            };
+
+            (model, cmd)
         }
-        ...
+        Msg::BrowseResult { folder_id, items } => {
+            let mut model = model;
+            // Update breadcrumb with new items
+            model.add_breadcrumb_level(folder_id, items);
+            (model, Cmd::None)
+        }
+        // ...
     }
 }
 
-// Side effect execution (outside update loop)
-async fn execute_command(cmd: Command, runtime: &Runtime) {
-    match cmd {
-        Command::FetchFileInfo { folder_id, path } => {
-            let result = runtime.api.get_file_info(...).await;
-            runtime.send_message(AppMessage::FileInfoReceived(result));
+// ✅ Runtime executes commands
+impl Runtime {
+    async fn execute(&self, cmd: Cmd) {
+        match cmd {
+            Cmd::ToggleIgnore { folder_id, item } => {
+                let result = self.client.set_ignore(...).await;
+                self.msg_tx.send(Msg::IgnoreToggled { result });
+            }
+            // ...
         }
-        ...
     }
 }
 ```
+
+**📖 See MODEL_DESIGN.md for complete concrete examples.**
 
 ### Required Changes
 
@@ -232,35 +340,66 @@ impl Runtime {
 
 ## 🚀 Migration Strategy
 
-### Step 1: Create Command Enum
-- Define all side effects as commands
-- Start simple (no execution yet)
+**Model-First Approach:** Start with the foundation and build up.
 
-### Step 2: Extract One Handler
-- Pick simplest handler (maybe `handle_cache_invalidation`)
-- Convert to pure `update()` function
-- Return `(AppState, Command)` instead of mutating
-- Keep old handler for comparison
+### Step 1: Extract Model Struct ⭐ CRITICAL
+- Identify all data fields in `App`
+- Create `struct Model` with ONLY data (no services)
+- Model must be `Clone + Debug`
+- Move fields one-by-one:
+  - ✅ `folders`, `devices`, `breadcrumb_trail`
+  - ✅ `sort_mode`, `display_mode`, `focus_level`
+  - ✅ Dialog states, toast messages
+  - ❌ `client`, `cache`, channels (stay in App/Runtime)
+- Add helper methods to Model (pure functions)
 
-### Step 3: Add Command Executor
-- Create `Runtime` struct
-- Implement `execute_command()`
-- Wire up to message loop
+**📖 See MODEL_DESIGN.md for complete Model structure**
 
-### Step 4: Migrate Handlers One-by-One
-- `handle_cache_invalidation` (simplest)
-- `handle_api_response` (medium complexity)
-- `handle_key` (most complex)
+### Step 2: Rename App → Runtime
+- `App` becomes `Runtime` (it's really a service container)
+- Runtime holds Model + services:
+  ```rust
+  struct Runtime {
+      model: Model,  // The state
+      client: SyncthingClient,
+      cache: CacheDb,
+      // ... services
+  }
+  ```
 
-### Step 5: Extract Domain Models
-- Move business rules to `domain/`
-- Pure state machine logic
-- Testable without I/O
+### Step 3: Define Cmd Enum
+- Enumerate all side effects:
+  - API calls (FetchFileInfo, BrowseFolder, etc.)
+  - Filesystem ops (DeleteFile, CheckExists)
+  - Cache ops (SaveToCache)
+- Start with 5-10 most common commands
 
-### Step 6: Pure App State
-- Remove all `&mut self` from App
-- All state changes through `update()`
-- Side effects through commands
+### Step 4: Create Pure Update Function
+- Start with ONE message type (pick simplest)
+- Write `update(model: Model, msg: Msg) -> (Model, Cmd)`
+- Example: `Msg::KeyPress('q')` → quit
+- Run alongside existing handlers (don't break anything)
+
+### Step 5: Wire Up Main Loop
+- Separate model from runtime in main loop
+- Call `update()` for new message types
+- Execute returned commands via Runtime
+- Keep old handlers for unmigrated messages
+
+### Step 6: Migrate Message-by-Message
+- Convert one Msg type at a time to pure update
+- Order: simplest → most complex
+  1. `Msg::Tick` (just updates timestamps)
+  2. `Msg::CacheInvalidation` (updates breadcrumb)
+  3. `Msg::BrowseResult` (navigation state)
+  4. `Msg::KeyPress` (most complex, do last)
+
+### Step 7: Remove Old Handlers
+- Once all messages migrated, delete old handler code
+- Runtime now ONLY executes commands
+- App becomes pure Model + Update + Runtime
+
+**⚠️ Critical:** Each step should compile and work. Never break the app.
 
 ---
 
@@ -275,12 +414,14 @@ impl Runtime {
 - `services/` - I/O execution (integration tested)
 
 **Benefits:**
-- ✅ 80%+ test coverage on business logic
-- ✅ Complete testability (mock-free unit tests)
-- ✅ Predictable state changes
-- ✅ Easy debugging (all changes through update)
-- ✅ Time-travel debugging possible
-- ✅ Replay bugs from logs
+- ✅ **Model is cloneable** → snapshot state for undo/redo
+- ✅ **Model is serializable** → save/restore app state
+- ✅ **Pure update function** → 80%+ test coverage (no mocking)
+- ✅ **Predictable state changes** → all through `update()`
+- ✅ **Time-travel debugging** → replay any sequence of Msg
+- ✅ **Reproduce bugs** → serialize Msg history, replay exactly
+- ✅ **Easy debugging** → inspect Model at any point
+- ✅ **No side effects in tests** → test update() is pure function calls
 
 ---
 
@@ -345,6 +486,7 @@ impl Runtime {
 
 ### Checklist Before Starting
 
+**Completed:**
 - [x] Phase 1 complete (27.7% reduction)
 - [x] All tests passing (27 tests)
 - [x] Clear module boundaries
@@ -352,10 +494,21 @@ impl Runtime {
 - [x] Handlers extracted
 - [x] Pure logic extracted
 - [x] Services organized
+- [x] Model design documented (MODEL_DESIGN.md)
+
+**Understanding Required:**
+- [ ] **Read:** MODEL_DESIGN.md (understand Model vs Runtime)
+- [ ] **Understand:** Model = pure data (cloneable, serializable)
+- [ ] **Understand:** Update = pure function (no &mut, no .await)
+- [ ] **Understand:** Runtime executes Cmd, sends Msg back
+- [ ] **Read:** [Elm Architecture Guide](https://guide.elm-lang.org/architecture/)
+- [ ] **Review:** iced or relm examples (optional)
+
+**Commitment:**
 - [ ] **Decision:** Commit to 2-3 session effort
-- [ ] **Decision:** Acceptable migration risk
-- [ ] **Preparation:** Read Elm Architecture guide
-- [ ] **Preparation:** Review iced/relm examples
+- [ ] **Decision:** Acceptable migration risk (will break things temporarily)
+- [ ] **Strategy:** Model extraction FIRST (foundation)
+- [ ] **Strategy:** Incremental migration (one Msg at a time)
 
 ---
 
