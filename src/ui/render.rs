@@ -159,6 +159,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             (None, None, None)
         };
 
+    // Calculate pending operations count (total paths across all folders)
+    let pending_operations_count: usize = app
+        .pending_ignore_deletes
+        .values()
+        .map(|info| info.paths.len())
+        .sum();
+
     status_bar::render_status_bar(
         f,
         layout_info.status_area,
@@ -173,6 +180,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.sort_reverse,
         app.last_load_time_ms,
         app.cache_hit,
+        pending_operations_count,
     );
 
     // Render confirmation dialogs if active

@@ -9,6 +9,7 @@ use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
+    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -191,6 +192,14 @@ pub struct BreadcrumbLevel {
     pub ignored_exists: HashMap<String, bool>, // Track if ignored files exist on disk (checked once on load)
 }
 
+/// Information about a pending ignore+delete operation
+#[derive(Debug, Clone)]
+pub struct PendingDeleteInfo {
+    pub paths: HashSet<PathBuf>,  // Paths being deleted
+    pub initiated_at: Instant,    // When operation started (for timeout fallback)
+    pub rescan_triggered: bool,   // Whether rescan has been triggered
+}
+
 pub struct App {
     client: SyncthingClient,
     cache: CacheDb,
@@ -230,6 +239,8 @@ pub struct App {
     pub show_file_info: Option<FileInfoPopupState>, // If Some, shows file information popup
     // Toast notification
     pub toast_message: Option<(String, Instant)>, // If Some, shows toast notification (message, timestamp)
+    // Pending ignore+delete operations (safety mechanism to prevent un-ignore during deletion)
+    pub pending_ignore_deletes: HashMap<String, PendingDeleteInfo>, // folder_id -> pending delete info
     // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
@@ -280,6 +291,107 @@ impl App {
 
         // If no mapping found, return container path
         container_path
+    }
+
+    /// Check if a path or any of its parent directories are pending deletion
+    /// Returns Some(pending_path) if blocked, None if allowed
+    fn is_path_or_parent_pending(&self, folder_id: &str, path: &PathBuf) -> Option<PathBuf> {
+        if let Some(pending_info) = self.pending_ignore_deletes.get(folder_id) {
+            // First check for exact match
+            if pending_info.paths.contains(path) {
+                return Some(path.clone());
+            }
+
+            // Check if any parent directory is pending
+            // For example, if "/foo/bar" is pending, block "/foo/bar/baz"
+            for pending_path in &pending_info.paths {
+                if path.starts_with(pending_path) {
+                    return Some(pending_path.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Add a path to pending deletions for a folder
+    fn add_pending_delete(&mut self, folder_id: String, path: PathBuf) {
+        let pending_info = self.pending_ignore_deletes
+            .entry(folder_id)
+            .or_insert_with(|| PendingDeleteInfo {
+                paths: HashSet::new(),
+                initiated_at: Instant::now(),
+                rescan_triggered: false,
+            });
+
+        pending_info.paths.insert(path);
+        log_debug(&format!("Added pending delete: {:?}", pending_info.paths));
+    }
+
+    /// Remove a path from pending deletions after verification
+    fn remove_pending_delete(&mut self, folder_id: &str, path: &PathBuf) {
+        if let Some(pending_info) = self.pending_ignore_deletes.get_mut(folder_id) {
+            pending_info.paths.remove(path);
+            log_debug(&format!("Removed pending delete: {:?}, remaining: {:?}", path, pending_info.paths));
+
+            // Clean up empty folder entry
+            if pending_info.paths.is_empty() {
+                self.pending_ignore_deletes.remove(folder_id);
+                log_debug(&format!("Cleared pending deletes for folder: {}", folder_id));
+            }
+        }
+    }
+
+    /// Clean up stale pending deletes (older than 60 seconds)
+    fn cleanup_stale_pending_deletes(&mut self) {
+        let stale_timeout = Duration::from_secs(60);
+        let now = Instant::now();
+
+        self.pending_ignore_deletes.retain(|folder_id, info| {
+            if now.duration_since(info.initiated_at) > stale_timeout {
+                log_debug(&format!("Cleaning up stale pending deletes for folder: {}", folder_id));
+                false // Remove this entry
+            } else {
+                true // Keep this entry
+            }
+        });
+    }
+
+    /// Verify and cleanup completed pending deletes
+    /// Removes paths that:
+    /// 1. Have rescan_triggered = true
+    /// 2. Are older than 5 seconds (buffer for Syncthing to process)
+    /// 3. Files are verified gone from disk
+    fn verify_and_cleanup_pending_deletes(&mut self) {
+        let buffer_time = Duration::from_secs(5);
+        let now = Instant::now();
+
+        for (_folder_id, info) in self.pending_ignore_deletes.iter_mut() {
+            // Only check if rescan has been triggered and buffer time has passed
+            if !info.rescan_triggered || now.duration_since(info.initiated_at) < buffer_time {
+                continue;
+            }
+
+            // Check each path and remove if verified gone
+            info.paths.retain(|path| {
+                if path.exists() {
+                    log_debug(&format!("Pending delete still exists: {:?}", path));
+                    true // Keep in pending set
+                } else {
+                    log_debug(&format!("Pending delete verified gone: {:?}", path));
+                    false // Remove from pending set
+                }
+            });
+        }
+
+        // Clean up folders with no pending paths
+        self.pending_ignore_deletes.retain(|folder_id, info| {
+            if info.paths.is_empty() {
+                log_debug(&format!("All pending deletes completed for folder: {}", folder_id));
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub fn get_local_state_summary(&self) -> (u64, u64, u64) {
@@ -516,6 +628,7 @@ impl App {
             pattern_selection: None,
             show_file_info: None,
             toast_message: None,
+            pending_ignore_deletes: HashMap::new(),
             api_tx,
             api_rx,
             invalidation_rx,
@@ -3335,6 +3448,27 @@ impl App {
         let patterns = self.client.get_ignore_patterns(&folder_id).await?;
 
         if sync_state == SyncState::Ignored {
+            // File is ignored - check if un-ignore is allowed (not pending deletion)
+            // Build host path to check against pending deletes
+            let level = &self.breadcrumb_trail[level_idx];
+            let host_path = format!(
+                "{}/{}",
+                level.translated_base_path.trim_end_matches('/'),
+                item.name
+            );
+            let path_buf = PathBuf::from(&host_path);
+
+            // Check if this path or any parent is pending deletion
+            if let Some(pending_path) = self.is_path_or_parent_pending(&folder_id, &path_buf) {
+                let message = format!(
+                    "Cannot un-ignore: deletion in progress for {}",
+                    pending_path.display()
+                );
+                self.toast_message = Some((message, Instant::now()));
+                log_debug(&format!("Blocked un-ignore: path {:?} is pending deletion", pending_path));
+                return Ok(());
+            }
+
             // File is ignored - find matching patterns and remove them
             let file_path = format!("/{}", relative_path);
             let matching_patterns = self.find_matching_patterns(&patterns, &file_path);
@@ -3531,7 +3665,7 @@ impl App {
 
         // Check if file exists on disk
         if !std::path::Path::new(&host_path).exists() {
-            // File doesn't exist, just add to ignore
+            // File doesn't exist, just add to ignore (no need to track pending)
             let patterns = self.client.get_ignore_patterns(&folder_id).await?;
             let new_pattern = format!("/{}", relative_path);
 
@@ -3574,6 +3708,11 @@ impl App {
                 .await?;
         }
 
+        // Register this path as pending deletion BEFORE we delete
+        // This prevents un-ignore until Syncthing processes the change
+        let path_buf = PathBuf::from(&host_path);
+        self.add_pending_delete(folder_id.clone(), path_buf.clone());
+
         // Now delete the file
         let is_dir = std::path::Path::new(&host_path).is_dir();
         let delete_result = if is_dir {
@@ -3582,21 +3721,42 @@ impl App {
             std::fs::remove_file(&host_path)
         };
 
-        if delete_result.is_ok() {
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-                level
-                    .file_sync_states
-                    .insert(item_name.clone(), SyncState::Ignored);
+        match delete_result {
+            Ok(()) => {
+                // Verify file is actually gone
+                if std::path::Path::new(&host_path).exists() {
+                    log_debug(&format!("Warning: File still exists after deletion: {}", host_path));
+                    // Keep in pending set for safety
+                } else {
+                    log_debug(&format!("Successfully deleted file: {}", host_path));
+                }
 
-                // Update ignored_exists (file is now ignored and deleted)
-                self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
+                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                    level
+                        .file_sync_states
+                        .insert(item_name.clone(), SyncState::Ignored);
+
+                    // Update ignored_exists (file is now ignored and deleted)
+                    self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
+                }
+
+                // Mark that rescan has been triggered for this folder
+                if let Some(pending_info) = self.pending_ignore_deletes.get_mut(&folder_id) {
+                    pending_info.rescan_triggered = true;
+                }
+
+                // Trigger rescan in background
+                let client = self.client.clone();
+                tokio::spawn(async move {
+                    let _ = client.rescan_folder(&folder_id).await;
+                });
             }
-
-            // Trigger rescan in background
-            let client = self.client.clone();
-            tokio::spawn(async move {
-                let _ = client.rescan_folder(&folder_id).await;
-            });
+            Err(e) => {
+                // Deletion failed - remove from pending immediately
+                log_debug(&format!("Failed to delete file: {} - {}", host_path, e));
+                self.remove_pending_delete(&folder_id, &path_buf);
+                return Err(e.into());
+            }
         }
 
         Ok(())
@@ -4367,6 +4527,12 @@ async fn run_app<B: ratatui::backend::Backend>(
         // This prevents blocking keyboard input and reduces CPU usage
         let idle_time = app.last_user_action.elapsed();
         if idle_time >= std::time::Duration::from_millis(300) {
+            // Cleanup stale pending deletes (60s timeout fallback)
+            app.cleanup_stale_pending_deletes();
+
+            // Check and remove completed pending deletes
+            app.verify_and_cleanup_pending_deletes();
+
             // Flush pending writes before idle operations
             app.flush_pending_db_writes();
 

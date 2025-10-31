@@ -27,6 +27,7 @@ pub fn render_status_bar(
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
+    pending_operations_count: usize,
 ) {
     let status_line = if focus_level == 0 {
         // Show selected folder status
@@ -128,6 +129,11 @@ pub fn render_status_bar(
             if sort_reverse { "↓" } else { "↑" }
         );
         metrics.push(sort_display);
+
+        // Show pending operations count if any
+        if pending_operations_count > 0 {
+            metrics.push(format!("⏳ {} deletions processing", pending_operations_count));
+        }
 
         if let Some(load_time) = last_load_time_ms {
             metrics.push(format!("Load: {}ms", load_time));
