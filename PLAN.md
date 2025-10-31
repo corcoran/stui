@@ -23,9 +23,13 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 ---
 ## Next Steps
  -  **PRIORITY: Begin Phase 1 Refactoring** _(main.rs has grown to 4,570 lines and needs breaking up)_
-    - Write characterization tests before any refactoring (Phase 1.0)
-    - Extract message types and handlers (Phase 1.1-1.3)
+    - ~~Write characterization tests before any refactoring (Phase 1.0)~~ **SKIPPED** - using pragmatic extract-then-test approach instead
+    - Extract message types (Phase 1.1)
+    - Extract state management (Phase 1.2)
+    - Extract handlers (Phase 1.3)
     - Extract business logic into logic/ modules (Phase 1.4)
+    - Write unit tests immediately for each extracted module
+    - Manual test after each extraction
  -  Pause / Resume folder toggle hotkey + status (with confirmation)
  -  Change Folder Type toggle hotkey + status (with confirmation)
  -  Remote Devices (Name, Download / Upload rate, Folders)
@@ -43,6 +47,8 @@ This document outlines the step-by-step plan for building a **Rust Ratatui CLI t
 Transform the codebase from a monolithic 4,570-line `main.rs` into a testable, maintainable architecture using the Elm/Redux pattern. This will be done in two phases: **Moderate** (foundational restructuring) followed by **Comprehensive** (full architectural overhaul).
 
 **⚠️ REFACTORING STATUS: NOT STARTED** — Phase 1 and Phase 2 have not been initiated yet. Recent development has focused on feature completeness (image preview, file info popup, optimization) rather than architectural refactoring. The monolithic `main.rs` has actually grown from 3,016 lines to 4,570 lines (+51%) since this plan was written.
+
+**📋 UPDATED APPROACH (2025-10-31):** We're using a **pragmatic extract-then-test strategy** instead of the original "characterization tests first" plan. See "Refactoring Approach: Pragmatic Strategy" section below for full details on why we deviated, limitations, and risk mitigations.
 
 ---
 
@@ -174,42 +180,51 @@ struct ManualStateChange {
 
 #### Critical Patterns to Preserve During Refactoring
 
-1. **State Transition Validation** (lines 663-701):
-   - Manual action tracking (SetIgnored/SetUnignored)
-   - Illegal transition blocking (Syncing → Unknown)
-   - Must be preserved in any new architecture
+**⚠️ UPDATED 2025-10-31:** Some patterns have evolved since original plan was written.
 
-2. **Syncing State Preservation** (lines 549-582, 604-624):
-   - Browse results must preserve actively syncing files
-   - Check `syncing_files` HashSet before overwriting
-   - Two code paths: root level + non-root levels
+1. **~~State Transition Validation~~** (REMOVED in optimization):
+   - ~~Manual action tracking (SetIgnored/SetUnignored)~~ → No longer exists
+   - ~~Illegal transition blocking (Syncing → Unknown)~~ → Simplified
+   - **Current approach**: Optimistic UI updates + rescan-triggered state refresh
 
-3. **Ignored File Existence Tracking**:
+2. **~~Syncing State Preservation~~** (CHANGED in optimization):
+   - ~~Browse results must preserve actively syncing files~~ → No longer tracked
+   - ~~Check `syncing_files` HashSet before overwriting~~ → Removed
+   - **Current approach**: `ItemStarted`/`ItemFinished` events skipped for performance
+   - **Reason**: Prevents O(n×m) overhead during bulk syncs
+
+3. **Ignored File Existence Tracking** (STILL CRITICAL):
    - `ignored_exists` HashMap updated on every state change
    - Inline filesystem checks to avoid borrow checker issues
-   - Critical for status bar display
+   - Critical for status bar display (shows 🚫 vs ⚠️ icons)
+   - **Location**: Updated in `toggle_ignore()`, `ignore_and_delete()`, `check_ignored_existence()`
 
-4. **Event-Driven Cache Invalidation**:
+4. **Event-Driven Cache Invalidation** (STILL CRITICAL):
    - Granular invalidation (file/directory/folder level)
    - Persistent event ID across restarts
    - Auto-recovery from stale event IDs
+   - **Location**: `handle_cache_invalidation()` method (~180 lines)
+
+5. **Pending Delete Tracking** (NEW - added for safety):
+   - Blocks un-ignore operations while deletion is in progress
+   - Prevents race conditions between ignore/unignore/delete
+   - **Location**: `pending_ignore_deletes` HashMap, `is_path_or_parent_pending()` method
 
 ---
 
 ### Testing Strategy
 
+**⚠️ UPDATED 2025-10-31:** Original plan called for characterization tests FIRST. Due to tight coupling and codebase evolution, we're using a pragmatic **extract-then-test** approach instead. See "Refactoring Approach: Pragmatic Strategy" section below for full rationale.
+
 Tests will be added **throughout the refactoring process**, not just at the end:
 
-#### Before Phase 1: Characterization Tests
-- **Goal:** Lock down existing behavior before refactoring
-- Write integration tests for critical user flows:
-  - Navigate folders → enter directory → toggle ignore → verify state
-  - Un-ignore file → verify ItemStarted → verify Syncing → verify Synced
-  - Browse results don't overwrite Syncing states
-- These tests document current behavior and catch regressions during refactoring
-- **Tool:** Run actual app against mocked Syncthing API responses
+#### ~~Before Phase 1: Characterization Tests~~ (SKIPPED)
+- ~~**Goal:** Lock down existing behavior before refactoring~~
+- ~~Write integration tests for critical user flows~~
+- **Decision:** Skipped due to tight coupling (requires extensive mocking infrastructure)
+- **Mitigation:** Manual testing after each extraction + unit tests for extracted pure logic
 
-#### During Phase 1: Unit Tests for Extracted Logic
+#### During Phase 1: Unit Tests for Extracted Logic (PRIMARY FOCUS)
 - As we extract pure functions to `src/logic/`, add unit tests immediately:
   - `sync_states.rs` → Test state transition validation rules
   - `navigation.rs` → Test sorting, selection preservation
@@ -229,14 +244,87 @@ Tests will be added **throughout the refactoring process**, not just at the end:
 
 ---
 
-### Phase 1: Moderate Refactoring
-**Goal:** Break apart the 3000-line `main.rs` into manageable pieces while establishing Elm Architecture foundations.
+---
 
-#### 1.0: Write Characterization Tests (FIRST!)
-- Add `tests/` directory with integration tests
-- Mock Syncthing API responses for critical flows
-- Document current behavior before making changes
-- Run tests after each refactoring step to verify no regressions
+### 🔀 Refactoring Approach: Pragmatic Strategy
+
+**Original Plan (Phase 1.0):** Write characterization tests FIRST, then refactor.
+
+**Deviation Decision (2025-10-31):** We will use a **pragmatic refactoring approach** instead.
+
+#### Why We're Deviating
+
+1. **Codebase Evolution**: The code has evolved significantly since the plan was written:
+   - `ManualStateChange` / `SetIgnored`/`SetUnignored` system no longer exists (optimized away)
+   - `ItemStarted`/`ItemFinished` handling changed (now skips UI updates for performance)
+   - `main.rs` grew from 3,016 → 4,570 lines (+51%)
+   - New features added: image preview, file info popup, optimizations
+
+2. **Testing Complexity**: Characterization tests would require:
+   - Mocking entire Syncthing REST API (~10 endpoints)
+   - Mocking SQLite database operations
+   - Mocking filesystem operations
+   - Setting up async channels, terminal events, and background tasks
+   - **Estimated effort:** 1-2 full sessions just for test infrastructure
+
+3. **Tight Coupling**: The `App` struct is deeply integrated with I/O:
+   - Direct HTTP client calls throughout
+   - Inline filesystem checks
+   - Direct database writes in business logic
+   - Mixed UI state and business logic
+
+#### Pragmatic Approach: Extract-Then-Test
+
+Instead, we will:
+1. **Extract pure business logic** into focused modules (Phase 1.1-1.4)
+2. **Write unit tests immediately** for each extracted module
+3. **Benefit**: Pure functions are 10x easier to test (no mocking needed)
+4. **Verify manually** after each extraction that app still compiles and runs
+
+**Example workflow:**
+```
+1. Extract ignore pattern matching logic → src/logic/ignore.rs
+2. Write unit tests for pattern matching (pure functions, no I/O)
+3. Compile + run app to verify
+4. Commit
+5. Next extraction...
+```
+
+#### Limitations & Risks
+
+**Limitations:**
+- ❌ No comprehensive integration tests protecting existing behavior
+- ❌ Must rely on manual testing to catch regressions
+- ❌ Cannot easily revert if refactoring introduces bugs
+- ❌ Higher risk of breaking subtle edge cases
+
+**Risks & Mitigations:**
+
+| Risk | Impact | Mitigation |
+|------|--------|-----------|
+| **Breaking existing behavior** | High | • Manual testing after each extraction<br>• Small, incremental changes<br>• Compile + run app frequently<br>• Commit after each working extraction |
+| **Losing critical logic during extraction** | Medium | • Carefully review extracted code<br>• Preserve comments and debug logs<br>• Document assumptions |
+| **Introducing performance regressions** | Low | • Keep hot paths unchanged initially<br>• Profile before/after if needed |
+| **Breaking async/concurrency patterns** | Medium | • Extract pure logic first (no async)<br>• Keep async/await in handlers layer<br>• Test with real Syncthing instance |
+
+**Testing Strategy:**
+- ✅ **Unit tests** for pure business logic (pattern matching, state transitions, sorting)
+- ✅ **Manual testing** for critical user flows after each extraction
+- ❌ **Integration tests** deferred to Phase 2 (after better architecture)
+- ❌ **Characterization tests** not feasible given current tight coupling
+
+**Acceptance Criteria:**
+- App compiles after each extraction
+- Manual smoke test passes: navigate folders, toggle ignore, view file info
+- No obvious performance degradation
+- Unit tests pass for all extracted modules
+
+---
+
+### Phase 1: Moderate Refactoring
+**Goal:** Break apart the 4,570-line `main.rs` into manageable pieces while establishing Elm Architecture foundations.
+
+**Strategy:** Extract-then-test (see "Refactoring Approach" above for rationale)
 
 #### 1.1: Extract Message Types
 - **New file:** `src/messages.rs`
@@ -277,7 +365,13 @@ Tests will be added **throughout the refactoring process**, not just at the end:
   - Move `event_listener.rs` → `services/events.rs`
   - Keep `cache.rs` and `api.rs` (client) as-is for now
 
-**Expected Outcome:** `main.rs` reduces from ~3000 to ~500 lines, core logic becomes testable
+**Expected Outcome (Updated):**
+- `main.rs` reduces from ~4,570 to ~800-1,200 lines (extracting ~3,000-3,500 lines)
+- Core business logic becomes testable in isolation
+- **Unit tests** written for all extracted modules
+- **Manual testing** verifies no regressions
+- **Limitation**: No comprehensive integration test suite (deferred to Phase 2)
+- **Acceptance**: App compiles, runs, and passes manual smoke tests after each step
 
 ---
 
@@ -370,6 +464,43 @@ src/
 ✅ **Gradual Migration:** Phase 1 can be done incrementally, Phase 2 builds on solid foundation
 ✅ **Elm Pattern:** Proven architecture for TUI apps, handles async gracefully via Commands
 ✅ **Debugging:** All state changes flow through single update function with full visibility
+
+---
+
+## 📋 Quick Reference: Pragmatic Refactoring Summary
+
+**What Changed From Original Plan:**
+- ❌ Skipped Phase 1.0 (characterization tests first)
+- ✅ Using extract-then-test approach instead
+- ⚠️ Codebase evolved: ManualStateChange system removed, ItemStarted/ItemFinished handling changed
+- 📈 `main.rs` grew 51% larger (3,016 → 4,570 lines) since plan was written
+
+**Key Limitations:**
+- No comprehensive integration tests before refactoring
+- Must rely on manual testing to catch regressions
+- Higher risk of breaking subtle edge cases
+- Cannot easily rollback if issues discovered later
+
+**Risk Mitigation Strategy:**
+- Small, incremental extractions (one module at a time)
+- Compile + manual test after each extraction
+- Write unit tests immediately for extracted code
+- Commit after each working step
+- Preserve critical patterns (see "Critical Patterns to Preserve" section)
+
+**Critical Patterns to NOT Break:**
+1. ✅ Ignored file existence tracking (`ignored_exists` HashMap)
+2. ✅ Event-driven cache invalidation (granular file/dir/folder)
+3. ✅ Pending delete tracking (blocks un-ignore during deletion)
+4. ⚠️ ~~State transition validation~~ (removed in optimization)
+5. ⚠️ ~~Syncing state preservation~~ (removed in optimization)
+
+**Success Criteria:**
+- [ ] `main.rs` reduces from 4,570 → ~800-1,200 lines
+- [ ] All extracted modules have unit tests
+- [ ] App compiles without warnings
+- [ ] Manual smoke test passes: navigate folders, toggle ignore, view file info, delete files
+- [ ] No obvious performance degradation
 
 ---
 

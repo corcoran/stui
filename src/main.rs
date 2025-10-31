@@ -45,6 +45,7 @@ mod api_service;
 mod cache;
 mod config;
 mod event_listener;
+mod messages;
 mod ui;
 mod utils;
 
@@ -148,7 +149,7 @@ impl SortMode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ImageMetadata {
     pub dimensions: Option<(u32, u32)>,
     pub format: Option<String>,
@@ -164,6 +165,25 @@ pub enum ImagePreviewState {
     Failed {
         metadata: ImageMetadata,
     },
+}
+
+impl std::fmt::Debug for ImagePreviewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImagePreviewState::Loading => write!(f, "ImagePreviewState::Loading"),
+            ImagePreviewState::Ready { metadata, .. } => {
+                f.debug_struct("ImagePreviewState::Ready")
+                    .field("metadata", metadata)
+                    .field("protocol", &"<StatefulProtocol>")
+                    .finish()
+            }
+            ImagePreviewState::Failed { metadata } => {
+                f.debug_struct("ImagePreviewState::Failed")
+                    .field("metadata", metadata)
+                    .finish()
+            }
+        }
+    }
 }
 
 pub struct FileInfoPopupState {
