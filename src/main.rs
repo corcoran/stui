@@ -46,6 +46,7 @@ mod cache;
 mod config;
 mod event_listener;
 mod messages;
+mod state;
 mod ui;
 mod utils;
 
@@ -186,6 +187,7 @@ impl std::fmt::Debug for ImagePreviewState {
     }
 }
 
+#[derive(Debug)]
 pub struct FileInfoPopupState {
     pub folder_id: String,
     pub file_path: String,
