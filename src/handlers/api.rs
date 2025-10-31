@@ -29,7 +29,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         } => {
             // Mark browse as no longer loading
             let browse_key = format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
-            app.loading_browse.remove(&browse_key);
+            app.model.loading_browse.remove(&browse_key);
 
             let Ok(mut items) = items else {
                 return; // Silently ignore errors
@@ -38,7 +38,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Check if this response is still relevant to current navigation
             // We allow caching for subdirectories of the current folder (prefetch),
             // but skip if we've navigated completely away from this folder
-            let is_relevant = if app.focus_level == 0 {
+            let is_relevant = if app.model.focus_level == 0 {
                 false // At folder list, no browse results are relevant
             } else if app.breadcrumb_trail.is_empty() {
                 false // No breadcrumb trail, nothing is relevant
@@ -57,14 +57,14 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // Get folder sequence for cache
             let folder_sequence = app
-                .folder_statuses
+                .model.folder_statuses
                 .get(&folder_id)
                 .map(|s| s.sequence)
                 .unwrap_or(0);
 
             // Check if this folder has local changes and merge them synchronously
             let has_local_changes = app
-                .folder_statuses
+                .model.folder_statuses
                 .get(&folder_id)
                 .map(|s| s.receive_only_total_items > 0)
                 .unwrap_or(false);
@@ -111,7 +111,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             crate::log_debug(&format!("DEBUG [BrowseResult]: folder={} prefix={:?} focus_level={} breadcrumb_count={}",
-                               folder_id, prefix, app.focus_level, app.breadcrumb_trail.len()));
+                               folder_id, prefix, app.model.focus_level, app.breadcrumb_trail.len()));
 
             // Save merged items to cache
             if let Err(e) = app.cache.save_browse_items(
@@ -185,8 +185,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         };
 
                         let sync_key = format!("{}:{}", folder_id, file_path);
-                        if !app.loading_sync_states.contains(&sync_key) {
-                            app.loading_sync_states.insert(sync_key);
+                        if !app.model.loading_sync_states.contains(&sync_key) {
+                            app.model.loading_sync_states.insert(sync_key);
                             let _ = app.api_tx.send(ApiRequest::GetFileInfo {
                                 folder_id: folder_id.clone(),
                                 file_path,
@@ -210,7 +210,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         } => {
             // Mark as no longer loading
             let sync_key = format!("{}:{}", folder_id, file_path);
-            app.loading_sync_states.remove(&sync_key);
+            app.model.loading_sync_states.remove(&sync_key);
 
             let Ok(file_details) = details else {
                 crate::log_debug(&format!(
@@ -221,7 +221,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             };
 
             // Check if this response is still relevant to current navigation
-            let is_relevant = if app.focus_level == 0 {
+            let is_relevant = if app.model.focus_level == 0 {
                 false // At folder list, no file info is relevant
             } else if app.breadcrumb_trail.is_empty() {
                 false // No breadcrumb trail, nothing is relevant
@@ -318,7 +318,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             let receive_only_count = status.receive_only_total_items;
 
             // Check if sequence changed
-            if let Some(&last_seq) = app.last_known_sequences.get(&folder_id) {
+            if let Some(&last_seq) = app.model.last_known_sequences.get(&folder_id) {
                 if last_seq != sequence {
                     // Log HashMap size BEFORE any operations
                     if !app.breadcrumb_trail.is_empty()
@@ -347,7 +347,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     }
 
                     // Clear discovered directories for this folder (so they get re-discovered with new sequence)
-                    app.discovered_dirs
+                    app.model.discovered_dirs
                         .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
 
                     // Log HashMap size after discovered_dirs.retain
@@ -363,7 +363,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             // Check if receive-only item count changed (indicates local-only files added/removed)
-            if let Some(&last_count) = app.last_known_receive_only_counts.get(&folder_id) {
+            if let Some(&last_count) = app.model.last_known_receive_only_counts.get(&folder_id) {
                 if last_count != receive_only_count {
                     crate::log_debug(&format!("DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}", last_count, receive_only_count, folder_id));
 
@@ -378,8 +378,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                                     folder_id,
                                     level.prefix.as_deref().unwrap_or("")
                                 );
-                                if !app.loading_browse.contains(&browse_key) {
-                                    app.loading_browse.insert(browse_key);
+                                if !app.model.loading_browse.contains(&browse_key) {
+                                    app.model.loading_browse.insert(browse_key);
 
                                     let _ = app.api_tx.send(ApiRequest::BrowseFolder {
                                         folder_id: folder_id.clone(),
@@ -396,14 +396,14 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             // Update last known values
-            app.last_known_sequences
+            app.model.last_known_sequences
                 .insert(folder_id.clone(), sequence);
-            app.last_known_receive_only_counts
+            app.model.last_known_receive_only_counts
                 .insert(folder_id.clone(), receive_only_count);
 
             // Save and use fresh status
             let _ = app.cache.save_folder_status(&folder_id, &status, sequence);
-            app.folder_statuses.insert(folder_id, status);
+            app.model.folder_statuses.insert(folder_id, status);
         }
 
         ApiResponse::RescanResult {
@@ -433,7 +433,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     "DEBUG [SystemStatusResult]: Received system status, uptime={}",
                     sys_status.uptime
                 ));
-                app.system_status = Some(sys_status);
+                app.model.system_status = Some(sys_status);
             }
             Err(e) => {
                 crate::log_debug(&format!("DEBUG [SystemStatusResult ERROR]: {}", e));
@@ -443,10 +443,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         ApiResponse::ConnectionStatsResult { stats } => match stats {
             Ok(conn_stats) => {
                 // Update current stats with new data
-                app.connection_stats = Some(conn_stats.clone());
+                app.model.connection_stats = Some(conn_stats.clone());
 
                 // Calculate transfer rates if we have previous stats
-                if let Some((prev_stats, prev_instant)) = &app.last_connection_stats {
+                if let Some((prev_stats, prev_instant)) = &app.model.last_connection_stats {
                     let elapsed = prev_instant.elapsed().as_secs_f64();
                     if elapsed > 0.0 {
                         let in_delta = (conn_stats.total.in_bytes_total as i64
@@ -459,18 +459,18 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         let out_rate = out_delta / elapsed;
 
                         // Store the calculated rates for UI display
-                        app.last_transfer_rates = Some((in_rate, out_rate));
+                        app.model.last_transfer_rates = Some((in_rate, out_rate));
                     }
 
                     // Update baseline every ~10 seconds to prevent drift
                     if elapsed > 10.0 {
-                        app.last_connection_stats = Some((conn_stats, Instant::now()));
+                        app.model.last_connection_stats = Some((conn_stats, Instant::now()));
                     }
                 } else {
                     // First fetch, store as baseline
-                    app.last_connection_stats = Some((conn_stats, Instant::now()));
+                    app.model.last_connection_stats = Some((conn_stats, Instant::now()));
                     // Initialize rates to zero on first fetch
-                    app.last_transfer_rates = Some((0.0, 0.0));
+                    app.model.last_transfer_rates = Some((0.0, 0.0));
                 }
             }
             Err(e) => {

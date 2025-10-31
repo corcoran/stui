@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::api::SyncState;
+use crate::model;
 use crate::App;
 
 /// Handle keyboard input
@@ -15,15 +16,15 @@ use crate::App;
 /// Processes all keyboard events and dispatches to appropriate actions.
 pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Update last user action timestamp for idle detection
-        app.last_user_action = Instant::now();
+        app.model.last_user_action = Instant::now();
 
         // Handle confirmation prompts first
-        if let Some((folder_id, _)) = &app.confirm_revert {
+        if let Some((folder_id, _)) = &app.model.confirm_revert {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     // User confirmed - revert the folder
                     let folder_id = folder_id.clone();
-                    app.confirm_revert = None;
+                    app.model.confirm_revert = None;
                     let _ = app.client.revert_folder(&folder_id).await;
 
                     // Refresh statuses in background (non-blocking)
@@ -33,7 +34,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     // User cancelled
-                    app.confirm_revert = None;
+                    app.model.confirm_revert = None;
                     return Ok(());
                 }
                 _ => {
@@ -44,13 +45,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
 
         // Handle delete confirmation prompt
-        if let Some((host_path, _name, is_dir)) = &app.confirm_delete {
+        if let Some((host_path, _name, is_dir)) = &app.model.confirm_delete {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     // User confirmed - delete the file/directory
                     let host_path = host_path.clone();
                     let is_dir = *is_dir;
-                    app.confirm_delete = None;
+                    app.model.confirm_delete = None;
 
                     // Perform deletion
                     let delete_result = if is_dir {
@@ -61,8 +62,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
                     if delete_result.is_ok() {
                         // Get current folder info for cache invalidation
-                        if app.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
-                            let level_idx = app.focus_level - 1;
+                        if app.model.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
+                            let level_idx = app.model.focus_level - 1;
 
                             // Extract all needed data first (immutable borrow)
                             let deletion_info =
@@ -122,7 +123,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 // Invalidate browse cache for this directory
                                 let browse_key =
                                     format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
-                                app.loading_browse.remove(&browse_key);
+                                app.model.loading_browse.remove(&browse_key);
                             }
                         }
 
@@ -135,7 +136,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     // User cancelled
-                    app.confirm_delete = None;
+                    app.model.confirm_delete = None;
                     return Ok(());
                 }
                 _ => {
@@ -184,8 +185,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         crate::log_bug("pattern_selection: updated .stignore");
 
                         // Immediately show as Unknown to give user feedback
-                        if app.focus_level > 0 && app.focus_level <= app.breadcrumb_trail.len() {
-                            let level_idx = app.focus_level - 1;
+                        if app.model.focus_level > 0 && app.model.focus_level <= app.breadcrumb_trail.len() {
+                            let level_idx = app.model.focus_level - 1;
                             if let Some(level) = app.breadcrumb_trail.get_mut(level_idx) {
                                 level
                                     .file_sync_states
@@ -219,10 +220,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         let api_tx = app.api_tx.clone();
                         let item_name_clone = item_name.clone();
 
-                        let file_path_for_api = if app.focus_level > 0
-                            && app.focus_level <= app.breadcrumb_trail.len()
+                        let file_path_for_api = if app.model.focus_level > 0
+                            && app.model.focus_level <= app.breadcrumb_trail.len()
                         {
-                            let level_idx = app.focus_level - 1;
+                            let level_idx = app.model.focus_level - 1;
                             if let Some(level) = app.breadcrumb_trail.get(level_idx) {
                                 if let Some(ref prefix) = level.prefix {
                                     format!("{}/{}", prefix.trim_matches('/'), &item_name_clone)
@@ -274,7 +275,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 KeyCode::Esc | KeyCode::Char('?') => {
                     // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
                     if popup_state.is_image {
-                        app.sixel_cleanup_frames = 1;
+                        app.model.sixel_cleanup_frames = 1;
                     }
                     app.show_file_info = None;
                     return Ok(());
@@ -322,25 +323,25 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 KeyCode::Char('g') => {
                     // First 'g' in 'gg' sequence - need to track this
-                    if app.last_key_was_g {
+                    if app.model.vim_command_state == model::VimCommandState::WaitingForSecondG {
                         // This is the second 'g' - go to top
                         popup_state.scroll_offset = 0;
-                        app.last_key_was_g = false;
+                        app.model.vim_command_state = model::VimCommandState::None;
                     } else {
                         // First 'g' - wait for second one
-                        app.last_key_was_g = true;
+                        app.model.vim_command_state = model::VimCommandState::WaitingForSecondG;
                     }
                     return Ok(());
                 }
                 KeyCode::Char('G') => {
                     // Go to bottom (set to a very large number, will be clamped by rendering)
                     popup_state.scroll_offset = u16::MAX;
-                    app.last_key_was_g = false;
+                    app.model.vim_command_state = model::VimCommandState::None;
                     return Ok(());
                 }
                 _ => {
                     // Reset 'gg' sequence on any other key
-                    app.last_key_was_g = false;
+                    app.model.vim_command_state = model::VimCommandState::None;
                     // Ignore other keys while popup is showing
                     return Ok(());
                 }
@@ -348,7 +349,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
 
         match key.code {
-            KeyCode::Char('q') => app.should_quit = true,
+            KeyCode::Char('q') => app.model.should_quit = true,
             KeyCode::Char('r') => {
                 // Rescan the selected/current folder
                 let _ = app.rescan_selected_folder();
@@ -359,27 +360,27 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             // Vim keybindings with Ctrl modifiers (check before 'd' and other letters)
             KeyCode::Char('d')
-                if app.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if app.model.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                app.last_key_was_g = false;
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.half_page_down(20).await; // Use reasonable default, will be more precise with frame height
             }
             KeyCode::Char('u')
-                if app.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if app.model.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                app.last_key_was_g = false;
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.half_page_up(20).await;
             }
             KeyCode::Char('f')
-                if app.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if app.model.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                app.last_key_was_g = false;
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.page_down(40).await;
             }
             KeyCode::Char('b')
-                if app.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if app.model.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                app.last_key_was_g = false;
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.page_up(40).await;
             }
             KeyCode::Char('d') => {
@@ -416,19 +417,19 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('t') => {
                 // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
-                app.display_mode = app.display_mode.next();
+                app.model.display_mode = app.model.display_mode.next();
             }
-            KeyCode::Char('?') if app.focus_level > 0 => {
+            KeyCode::Char('?') if app.model.focus_level > 0 => {
                 // Toggle file information popup
                 if let Some(popup_state) = &app.show_file_info {
                     // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
                     if popup_state.is_image {
-                        app.sixel_cleanup_frames = 1;
+                        app.model.sixel_cleanup_frames = 1;
                     }
                     app.show_file_info = None;
                 } else {
                     // Open popup for selected item
-                    if let Some(level) = app.breadcrumb_trail.get(app.focus_level - 1) {
+                    if let Some(level) = app.breadcrumb_trail.get(app.model.focus_level - 1) {
                         if let Some(selected_idx) = level.state.selected() {
                             if let Some(item) = level.items.get(selected_idx) {
                                 // Construct full path
@@ -451,101 +452,101 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
             }
             // Vim keybindings
-            KeyCode::Char('h') if app.vim_mode => {
-                app.last_key_was_g = false;
+            KeyCode::Char('h') if app.model.vim_mode => {
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.go_back();
             }
-            KeyCode::Char('j') if app.vim_mode => {
-                app.last_key_was_g = false;
+            KeyCode::Char('j') if app.model.vim_mode => {
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.next_item().await;
             }
-            KeyCode::Char('k') if app.vim_mode => {
-                app.last_key_was_g = false;
+            KeyCode::Char('k') if app.model.vim_mode => {
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.previous_item().await;
             }
-            KeyCode::Char('l') if app.vim_mode => {
-                app.last_key_was_g = false;
-                if app.focus_level == 0 {
+            KeyCode::Char('l') if app.model.vim_mode => {
+                app.model.vim_command_state = model::VimCommandState::None;
+                if app.model.focus_level == 0 {
                     app.load_root_level(false).await?; // Not preview - actually enter folder
                 } else {
                     app.enter_directory().await?;
                 }
             }
-            KeyCode::Char('g') if app.vim_mode => {
-                if app.last_key_was_g {
+            KeyCode::Char('g') if app.model.vim_mode => {
+                if app.model.vim_command_state == model::VimCommandState::WaitingForSecondG {
                     // gg - jump to first
                     app.jump_to_first().await;
-                    app.last_key_was_g = false;
+                    app.model.vim_command_state = model::VimCommandState::None;
                 } else {
                     // First 'g' press
-                    app.last_key_was_g = true;
+                    app.model.vim_command_state = model::VimCommandState::WaitingForSecondG;
                 }
             }
-            KeyCode::Char('G') if app.vim_mode => {
-                app.last_key_was_g = false;
+            KeyCode::Char('G') if app.model.vim_mode => {
+                app.model.vim_command_state = model::VimCommandState::None;
                 app.jump_to_last().await;
             }
             // Standard navigation keys (not advertised)
             KeyCode::PageDown => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.page_down(40).await;
             }
             KeyCode::PageUp => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.page_up(40).await;
             }
             KeyCode::Home => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.jump_to_first().await;
             }
             KeyCode::End => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.jump_to_last().await;
             }
             KeyCode::Left | KeyCode::Backspace => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 // Flush before navigation to save state
                 app.flush_pending_db_writes();
                 app.go_back();
             }
             KeyCode::Right | KeyCode::Enter => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 // Flush before navigation to save state
                 app.flush_pending_db_writes();
-                if app.focus_level == 0 {
+                if app.model.focus_level == 0 {
                     app.load_root_level(false).await?; // Not preview - actually enter folder
                 } else {
                     app.enter_directory().await?;
                 }
             }
             KeyCode::Up => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.previous_item().await;
             }
             KeyCode::Down => {
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
                 app.next_item().await;
             }
             _ => {
                 // Reset last_key_was_g on any other key
-                if app.vim_mode {
-                    app.last_key_was_g = false;
+                if app.model.vim_mode {
+                    app.model.vim_command_state = model::VimCommandState::None;
                 }
             }
         }

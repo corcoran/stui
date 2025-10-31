@@ -20,10 +20,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
     system_bar::render_system_bar(
         f,
         layout_info.system_area,
-        app.system_status.as_ref(),
-        app.device_name.as_deref(),
+        app.model.system_status.as_ref(),
+        app.model.device_name.as_deref(),
         (total_files, total_dirs, total_bytes),
-        app.last_transfer_rates,
+        app.model.last_transfer_rates,
     );
 
     // Render folders pane if visible
@@ -32,13 +32,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             folder_list::render_folder_list(
                 f,
                 folders_area,
-                &app.folders,
-                &app.folder_statuses,
-                app.statuses_loaded,
+                &app.model.folders,
+                &app.model.folder_statuses,
+                app.model.statuses_loaded,
                 &mut app.folders_state,
-                app.focus_level == 0,
+                app.model.focus_level == 0,
                 &app.icon_renderer,
-                &app.last_folder_updates,
+                &app.model.last_folder_updates,
             );
         }
     }
@@ -68,12 +68,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
             level.folder_label.clone()
         };
 
-        let is_focused = app.focus_level == idx + 1;
+        let is_focused = app.model.focus_level == idx + 1;
         // All ancestor breadcrumbs should remain highlighted when drilling deeper
-        let is_parent_selected = app.focus_level > idx + 1;
+        let is_parent_selected = app.model.focus_level > idx + 1;
 
         // Convert DisplayMode from main.rs to ui::breadcrumb::DisplayMode
-        let display_mode = match app.display_mode {
+        let display_mode = match app.model.display_mode {
             crate::DisplayMode::Off => DisplayMode::Off,
             crate::DisplayMode::TimestampOnly => DisplayMode::TimestampOnly,
             crate::DisplayMode::TimestampAndSize => DisplayMode::TimestampAndSize,
@@ -105,11 +105,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let has_breadcrumbs = !app.breadcrumb_trail.is_empty();
 
         // Check if restore is available (only in breadcrumbs with local changes)
-        let can_restore = if app.focus_level > 0 && has_breadcrumbs {
+        let can_restore = if app.model.focus_level > 0 && has_breadcrumbs {
             // Get the folder ID from the breadcrumb trail
             let folder_id = &app.breadcrumb_trail[0].folder_id;
             // Check if the folder has local changes to restore
-            app.folder_statuses
+            app.model.folder_statuses
                 .get(folder_id)
                 .map(|status| status.receive_only_total_items > 0)
                 .unwrap_or(false)
@@ -120,8 +120,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
         legend::render_legend(
             f,
             legend_area,
-            app.vim_mode,
-            app.focus_level,
+            app.model.vim_mode,
+            app.model.focus_level,
             can_restore,
             app.open_command.is_some(),
         );
@@ -129,8 +129,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render status bar at the bottom
     let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) =
-        if app.focus_level > 0 {
-            let level_idx = app.focus_level - 1;
+        if app.model.focus_level > 0 {
+            let level_idx = app.model.focus_level - 1;
             if let Some(level) = app.breadcrumb_trail.get(level_idx) {
                 let folder_label = Some(level.folder_label.as_str());
                 let item_count = Some(level.items.len());
@@ -161,7 +161,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Calculate pending operations count (total paths across all folders)
     let pending_operations_count: usize = app
-        .pending_ignore_deletes
+        .model.pending_ignore_deletes
         .values()
         .map(|info| info.paths.len())
         .sum();
@@ -169,26 +169,26 @@ pub fn render(f: &mut Frame, app: &mut App) {
     status_bar::render_status_bar(
         f,
         layout_info.status_area,
-        app.focus_level,
-        &app.folders,
-        &app.folder_statuses,
+        app.model.focus_level,
+        &app.model.folders,
+        &app.model.folder_statuses,
         app.folders_state.selected(),
         breadcrumb_folder_label,
         breadcrumb_item_count,
         breadcrumb_selected_item,
-        app.sort_mode.as_str(),
-        app.sort_reverse,
-        app.last_load_time_ms,
-        app.cache_hit,
+        app.model.sort_mode.as_str(),
+        app.model.sort_reverse,
+        app.model.last_load_time_ms,
+        app.model.cache_hit,
         pending_operations_count,
     );
 
     // Render confirmation dialogs if active
-    if let Some((_folder_id, changed_files)) = &app.confirm_revert {
+    if let Some((_folder_id, changed_files)) = &app.model.confirm_revert {
         dialogs::render_revert_confirmation(f, changed_files);
     }
 
-    if let Some((_host_path, display_name, is_dir)) = &app.confirm_delete {
+    if let Some((_host_path, display_name, is_dir)) = &app.model.confirm_delete {
         dialogs::render_delete_confirmation(f, display_name, *is_dir);
     }
 
@@ -198,19 +198,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render file info popup if active
     if let Some(state) = &mut app.show_file_info {
-        let my_device_id = app.system_status.as_ref().map(|s| s.my_id.as_str());
+        let my_device_id = app.model.system_status.as_ref().map(|s| s.my_id.as_str());
         dialogs::render_file_info(
             f,
             state,
-            &app.devices,
+            &app.model.devices,
             my_device_id,
             &app.icon_renderer,
-            app.image_font_size,
+            app.model.image_font_size,
         );
     }
 
     // Render toast notification if active
-    if let Some((message, _timestamp)) = &app.toast_message {
+    if let Some((message, _timestamp)) = &app.model.toast_message {
         toast::render_toast(f, size, message);
     }
 }

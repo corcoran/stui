@@ -46,14 +46,15 @@ mod config;
 mod handlers;
 mod logic;
 mod messages;
+mod model;
 mod services;
 mod state;
 mod ui;
 mod utils;
 
 use api::{
-    BrowseItem, ConnectionStats, Device, FileDetails, Folder, FolderStatus, SyncState,
-    SyncthingClient, SystemStatus,
+    BrowseItem, FileDetails, Folder, SyncState,
+    SyncthingClient,
 };
 use cache::CacheDb;
 use config::Config;
@@ -203,88 +204,49 @@ pub struct BreadcrumbLevel {
     pub ignored_exists: HashMap<String, bool>, // Track if ignored files exist on disk (checked once on load)
 }
 
-/// Information about a pending ignore+delete operation
-#[derive(Debug, Clone)]
-pub struct PendingDeleteInfo {
-    pub paths: HashSet<PathBuf>,  // Paths being deleted
-    pub initiated_at: Instant,    // When operation started (for timeout fallback)
-    pub rescan_triggered: bool,   // Whether rescan has been triggered
-}
+// model::PendingDeleteInfo moved to model module
 
 pub struct App {
+    // ✅ Pure application state (Elm Architecture Model)
+    pub model: model::Model,
+
+    // 🔧 Services (Runtime) - NOT part of Model
     client: SyncthingClient,
     cache: CacheDb,
-    pub folders: Vec<Folder>,
-    pub devices: Vec<Device>,
-    pub folders_state: ListState,
-    pub folder_statuses: HashMap<String, FolderStatus>,
-    pub statuses_loaded: bool,
-    last_status_update: Instant,
-    path_map: HashMap<String, String>,
-    pub breadcrumb_trail: Vec<BreadcrumbLevel>,
-    pub focus_level: usize, // 0 = folders, 1+ = breadcrumb levels
-    pub should_quit: bool,
-    pub display_mode: DisplayMode, // Toggle for displaying timestamps and/or size
-    pub vim_mode: bool,            // Enable vim keybindings
-    open_command: Option<String>,  // Optional command to open files/directories
-    clipboard_command: Option<String>, // Optional command to copy to clipboard (receives text via stdin)
-    last_key_was_g: bool,              // Track 'g' key for 'gg' command
-    last_user_action: Instant,         // Track last user interaction for idle detection
-    pub sort_mode: SortMode,           // Current sort mode (session-wide)
-    pub sort_reverse: bool,            // Whether to reverse sort order (session-wide)
-    // Track in-flight operations to prevent duplicate fetches
-    loading_browse: std::collections::HashSet<String>, // Set of "folder_id:prefix" currently being loaded
-    loading_sync_states: std::collections::HashSet<String>, // Set of "folder_id:path" currently being loaded
-    discovered_dirs: std::collections::HashSet<String>, // Set of "folder_id:prefix" already discovered (to prevent re-querying cache)
-    prefetch_enabled: bool, // Flag to enable/disable prefetching when system is busy
-    last_known_sequences: HashMap<String, u64>, // Track last known sequence per folder to detect changes
-    last_known_receive_only_counts: HashMap<String, u64>, // Track receiveOnlyTotalItems to detect local-only file changes
-    // Track last update info per folder (for display)
-    pub last_folder_updates: HashMap<String, (std::time::SystemTime, String)>, // folder_id -> (timestamp, last_changed_file)
-    // Confirmation prompt state
-    pub confirm_revert: Option<(String, Vec<String>)>, // If Some, shows confirmation prompt for reverting (folder_id, changed_files)
-    pub confirm_delete: Option<(String, String, bool)>, // If Some, shows confirmation prompt for deleting (host_path, display_name, is_dir)
-    // Pattern selection menu for removing ignores
-    pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // If Some, shows pattern selection menu (folder_id, item_name, patterns, selection_state)
-    // File information popup
-    pub show_file_info: Option<FileInfoPopupState>, // If Some, shows file information popup
-    // Toast notification
-    pub toast_message: Option<(String, Instant)>, // If Some, shows toast notification (message, timestamp)
-    // Pending ignore+delete operations (safety mechanism to prevent un-ignore during deletion)
-    pub pending_ignore_deletes: HashMap<String, PendingDeleteInfo>, // folder_id -> pending delete info
-    // API service channels
     api_tx: tokio::sync::mpsc::UnboundedSender<services::api::ApiRequest>,
     api_rx: tokio::sync::mpsc::UnboundedReceiver<services::api::ApiResponse>,
-    // Event listener channels
     invalidation_rx: tokio::sync::mpsc::UnboundedReceiver<services::events::CacheInvalidation>,
     event_id_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
-    // Performance metrics
-    pub last_load_time_ms: Option<u64>, // Time to load current directory (milliseconds)
-    pub cache_hit: Option<bool>,        // Whether last load was a cache hit
-    // Device/System status
-    pub system_status: Option<SystemStatus>, // Device name, uptime, etc.
-    connection_stats: Option<ConnectionStats>, // Global transfer stats
-    last_connection_stats: Option<(ConnectionStats, Instant)>, // Previous stats + timestamp for rate calc
-    pub device_name: Option<String>,                           // Cached device name
-    last_system_status_update: Instant, // Track when we last fetched system status
-    last_connection_stats_fetch: Instant, // Track when we last fetched connection stats
-    pub last_transfer_rates: Option<(f64, f64)>, // Cached transfer rates (download, upload) in bytes/sec
-    last_directory_update: Instant, // Track when we last ran update_directory_states() for throttling
-    // Icon rendering
-    pub icon_renderer: IconRenderer, // Centralized icon renderer
-    // Image preview protocol
-    pub image_picker: Option<ratatui_image::picker::Picker>, // Protocol picker for image rendering
-    pub image_font_size: Option<(u16, u16)>, // Font size (width, height) for image cell calculations
-    // Image update channel for non-blocking image loading
-    image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>, // Send (file_path, state) when image loads
-    image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>, // Receive image updates
-    // Sixel cleanup counter - render white screen for N frames after closing image preview
-    pub sixel_cleanup_frames: u8, // If > 0, render white rectangle and decrement
-    // Performance optimizations: Batched database writes
-    pending_sync_state_writes: Vec<(String, String, SyncState, u64)>, // (folder_id, file_path, state, sequence)
-    last_db_flush: Instant, // Track when we last flushed pending writes
-    // Performance optimizations: Dirty flag for UI rendering
-    ui_dirty: bool, // Flag indicating UI needs redrawing
+    icon_renderer: IconRenderer,
+    image_picker: Option<ratatui_image::picker::Picker>,
+    image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,
+    image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>,
+
+    // ⚙️ Config (Runtime)
+    path_map: HashMap<String, String>,
+    open_command: Option<String>,
+    clipboard_command: Option<String>,
+
+    // ⏱️ Timing (Runtime)
+    last_status_update: Instant,
+    last_system_status_update: Instant,
+    last_connection_stats_fetch: Instant,
+    last_directory_update: Instant,
+    last_db_flush: Instant,
+
+    // 📊 Performance Optimizations (Runtime)
+    pending_sync_state_writes: Vec<(String, String, SyncState, u64)>,
+
+    // 🖼️ Image State (Runtime - not cloneable)
+    /// Image state for file info popup (separate from model because ImagePreviewState is not Clone)
+    #[allow(dead_code)] // Will be used when we integrate file info popup with model
+    show_file_info_image_state: Option<ImagePreviewState>,
+
+    // 🔄 Complex State (temporarily using ratatui ListState - to be migrated)
+    pub folders_state: ListState,
+    pub breadcrumb_trail: Vec<BreadcrumbLevel>, // TEMPORARY: uses old BreadcrumbLevel with ListState
+    pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // TEMPORARY: pattern menu with ListState
+    pub show_file_info: Option<FileInfoPopupState>, // TEMPORARY: file info popup with image_state
 }
 
 impl App {
@@ -292,7 +254,7 @@ impl App {
     /// Check if a path or any of its parent directories are pending deletion
     /// Returns Some(pending_path) if blocked, None if allowed
     fn is_path_or_parent_pending(&self, folder_id: &str, path: &PathBuf) -> Option<PathBuf> {
-        if let Some(pending_info) = self.pending_ignore_deletes.get(folder_id) {
+        if let Some(pending_info) = self.model.pending_ignore_deletes.get(folder_id) {
             // First check for exact match
             if pending_info.paths.contains(path) {
                 return Some(path.clone());
@@ -311,9 +273,9 @@ impl App {
 
     /// Add a path to pending deletions for a folder
     fn add_pending_delete(&mut self, folder_id: String, path: PathBuf) {
-        let pending_info = self.pending_ignore_deletes
+        let pending_info = self.model.pending_ignore_deletes
             .entry(folder_id)
-            .or_insert_with(|| PendingDeleteInfo {
+            .or_insert_with(|| model::PendingDeleteInfo {
                 paths: HashSet::new(),
                 initiated_at: Instant::now(),
                 rescan_triggered: false,
@@ -325,13 +287,13 @@ impl App {
 
     /// Remove a path from pending deletions after verification
     fn remove_pending_delete(&mut self, folder_id: &str, path: &PathBuf) {
-        if let Some(pending_info) = self.pending_ignore_deletes.get_mut(folder_id) {
+        if let Some(pending_info) = self.model.pending_ignore_deletes.get_mut(folder_id) {
             pending_info.paths.remove(path);
             log_debug(&format!("Removed pending delete: {:?}, remaining: {:?}", path, pending_info.paths));
 
             // Clean up empty folder entry
             if pending_info.paths.is_empty() {
-                self.pending_ignore_deletes.remove(folder_id);
+                self.model.pending_ignore_deletes.remove(folder_id);
                 log_debug(&format!("Cleared pending deletes for folder: {}", folder_id));
             }
         }
@@ -342,7 +304,7 @@ impl App {
         let stale_timeout = Duration::from_secs(60);
         let now = Instant::now();
 
-        self.pending_ignore_deletes.retain(|folder_id, info| {
+        self.model.pending_ignore_deletes.retain(|folder_id, info| {
             if now.duration_since(info.initiated_at) > stale_timeout {
                 log_debug(&format!("Cleaning up stale pending deletes for folder: {}", folder_id));
                 false // Remove this entry
@@ -361,7 +323,7 @@ impl App {
         let buffer_time = Duration::from_secs(5);
         let now = Instant::now();
 
-        for (_folder_id, info) in self.pending_ignore_deletes.iter_mut() {
+        for (_folder_id, info) in self.model.pending_ignore_deletes.iter_mut() {
             // Only check if rescan has been triggered and buffer time has passed
             if !info.rescan_triggered || now.duration_since(info.initiated_at) < buffer_time {
                 continue;
@@ -380,7 +342,7 @@ impl App {
         }
 
         // Clean up folders with no pending paths
-        self.pending_ignore_deletes.retain(|folder_id, info| {
+        self.model.pending_ignore_deletes.retain(|folder_id, info| {
             if info.paths.is_empty() {
                 log_debug(&format!("All pending deletes completed for folder: {}", folder_id));
                 false
@@ -396,7 +358,7 @@ impl App {
         let mut total_dirs = 0u64;
         let mut total_bytes = 0u64;
 
-        for status in self.folder_statuses.values() {
+        for status in self.model.folder_statuses.values() {
             total_files += status.local_files;
             total_dirs += status.local_directories;
             total_bytes += status.local_bytes;
@@ -539,64 +501,40 @@ impl App {
             (None, None)
         };
 
+        // Initialize pure Model with appropriate defaults
+        let mut model = model::Model::new(config.vim_mode);
+        model.display_mode = DisplayMode::TimestampAndSize; // Start with most info
+        model.sort_mode = SortMode::Alphabetical;
+        model.folders = folders;
+        model.devices = devices;
+        model.image_font_size = image_font_size;
+
         let mut app = App {
+            model,
             client,
             cache,
-            folders,
-            devices,
-            folders_state: ListState::default(),
-            folder_statuses: HashMap::new(),
-            statuses_loaded: false,
-            last_status_update: Instant::now(),
-            path_map: config.path_map,
-            breadcrumb_trail: Vec::new(),
-            focus_level: 0,
-            should_quit: false,
-            display_mode: DisplayMode::TimestampAndSize, // Start with most info
-            vim_mode: config.vim_mode,
-            open_command: config.open_command,
-            clipboard_command: config.clipboard_command,
-            last_key_was_g: false,
-            last_user_action: Instant::now(),
-            sort_mode: SortMode::Alphabetical,
-            sort_reverse: false,
-            loading_browse: HashSet::new(),
-            loading_sync_states: HashSet::new(),
-            discovered_dirs: HashSet::new(),
-            prefetch_enabled: true,
-            last_known_sequences: HashMap::new(),
-            last_known_receive_only_counts: HashMap::new(),
-            last_folder_updates: HashMap::new(),
-            confirm_revert: None,
-            confirm_delete: None,
-            pattern_selection: None,
-            show_file_info: None,
-            toast_message: None,
-            pending_ignore_deletes: HashMap::new(),
             api_tx,
             api_rx,
             invalidation_rx,
             event_id_rx,
-            last_load_time_ms: None,
-            cache_hit: None,
-            system_status: None,
-            connection_stats: None,
-            last_connection_stats: None,
-            device_name: None,
-            last_system_status_update: Instant::now(),
-            last_connection_stats_fetch: Instant::now(),
-            last_transfer_rates: None,
-            last_directory_update: Instant::now(),
             icon_renderer,
             image_picker,
-            image_font_size,
             image_update_tx,
             image_update_rx,
-            sixel_cleanup_frames: 0,
-            // Performance optimizations
-            pending_sync_state_writes: Vec::new(),
+            path_map: config.path_map,
+            open_command: config.open_command,
+            clipboard_command: config.clipboard_command,
+            last_status_update: Instant::now(),
+            last_system_status_update: Instant::now(),
+            last_connection_stats_fetch: Instant::now(),
+            last_directory_update: Instant::now(),
             last_db_flush: Instant::now(),
-            ui_dirty: true, // Start dirty to draw initial frame
+            pending_sync_state_writes: Vec::new(),
+            show_file_info_image_state: None,
+            folders_state: ListState::default(),
+            breadcrumb_trail: Vec::new(),
+            pattern_selection: None,
+            show_file_info: None,
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -604,19 +542,19 @@ impl App {
 
         // Initialize system status and connection stats
         if let Ok(device_name) = app.client.get_device_name().await {
-            app.device_name = Some(device_name);
+            app.model.device_name = Some(device_name);
         }
 
         if let Ok(sys_status) = app.client.get_system_status().await {
-            app.system_status = Some(sys_status);
+            app.model.system_status = Some(sys_status);
         }
 
         if let Ok(conn_stats) = app.client.get_connection_stats().await {
-            app.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
-            app.connection_stats = Some(conn_stats);
+            app.model.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
+            app.model.connection_stats = Some(conn_stats);
         }
 
-        if !app.folders.is_empty() {
+        if !app.model.folders.is_empty() {
             app.folders_state.select(Some(0));
             app.load_root_level(true).await?; // Preview mode - focus stays on folders
         }
@@ -625,11 +563,11 @@ impl App {
     }
 
     async fn load_folder_statuses(&mut self) {
-        for folder in &self.folders {
+        for folder in &self.model.folders {
             // Try cache first - use it without validation on initial load
-            if !self.statuses_loaded {
+            if !self.model.statuses_loaded {
                 if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
-                    self.folder_statuses
+                    self.model.folder_statuses
                         .insert(folder.id.clone(), cached_status);
                     continue;
                 }
@@ -640,7 +578,7 @@ impl App {
                 let sequence = status.sequence;
 
                 // Check if sequence changed from last known value
-                if let Some(&last_seq) = self.last_known_sequences.get(&folder.id) {
+                if let Some(&last_seq) = self.model.last_known_sequences.get(&folder.id) {
                     if last_seq != sequence {
                         // Sequence changed! Invalidate cached data for this folder
                         let _ = self.cache.invalidate_folder(&folder.id);
@@ -660,22 +598,22 @@ impl App {
                 }
 
                 // Update last known sequence
-                self.last_known_sequences
+                self.model.last_known_sequences
                     .insert(folder.id.clone(), sequence);
 
                 // Save fresh status and use it
                 let _ = self.cache.save_folder_status(&folder.id, &status, sequence);
-                self.folder_statuses.insert(folder.id.clone(), status);
+                self.model.folder_statuses.insert(folder.id.clone(), status);
             }
         }
-        self.statuses_loaded = true;
+        self.model.statuses_loaded = true;
         self.last_status_update = Instant::now();
     }
 
     fn refresh_folder_statuses_nonblocking(&mut self) {
         // Non-blocking version for background polling
         // Sends status requests via API service
-        for folder in &self.folders {
+        for folder in &self.model.folders {
             let _ = self.api_tx.send(services::api::ApiRequest::GetFolderStatus {
                 folder_id: folder.id.clone(),
             });
@@ -706,7 +644,7 @@ impl App {
 
         // Check if folder has local changes
         let has_local_changes = self
-            .folder_statuses
+            .model.folder_statuses
             .get(folder_id)
             .map(|s| s.receive_only_total_items > 0)
             .unwrap_or(false);
@@ -855,7 +793,7 @@ impl App {
             };
 
             // Get folder sequence for cache validation
-            let folder_sequence = self.folder_statuses.get(&level.folder_id)
+            let folder_sequence = self.model.folder_statuses.get(&level.folder_id)
                 .map(|status| status.sequence)
                 .unwrap_or_else(|| {
                     log_debug(&format!("DEBUG [update_directory_states]: folder_id '{}' not found in folder_statuses, using sequence=0", level.folder_id));
@@ -923,11 +861,11 @@ impl App {
     }
 
     fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return;
         }
@@ -956,7 +894,7 @@ impl App {
                 };
                 let sync_key = format!("{}:{}", folder_id, file_path);
 
-                !self.loading_sync_states.contains(&sync_key)
+                !self.model.loading_sync_states.contains(&sync_key)
             })
             .take(max_concurrent) // Limit how many we fetch at once
             .map(|item| item.name.clone())
@@ -973,12 +911,12 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, file_path);
 
             // Skip if already loading
-            if self.loading_sync_states.contains(&sync_key) {
+            if self.model.loading_sync_states.contains(&sync_key) {
                 continue;
             }
 
             // Mark as loading
-            self.loading_sync_states.insert(sync_key.clone());
+            self.model.loading_sync_states.insert(sync_key.clone());
 
             log_debug(&format!(
                 "DEBUG [batch_fetch]: Requesting file_path={} for folder={}",
@@ -997,21 +935,21 @@ impl App {
     // Recursively discover and fetch states for subdirectories when hovering over a directory
     // This ensures we have complete subdirectory information for deep trees
     fn prefetch_hovered_subdirectories(&mut self, max_depth: usize, max_dirs_per_frame: usize) {
-        if !self.prefetch_enabled {
+        if !self.model.prefetch_enabled {
             return;
         }
 
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
 
         // Only run if system isn't too busy
-        let total_in_flight = self.loading_browse.len() + self.loading_sync_states.len();
+        let total_in_flight = self.model.loading_browse.len() + self.model.loading_sync_states.len();
         if total_in_flight > 15 {
             return;
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return;
         }
@@ -1039,7 +977,7 @@ impl App {
         let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
         let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
         let folder_sequence = self
-            .folder_statuses
+            .model.folder_statuses
             .get(&folder_id)
             .map(|s| s.sequence)
             .unwrap_or(0);
@@ -1067,7 +1005,7 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, dir_path);
 
             // Skip if already loading or cached
-            if self.loading_sync_states.contains(&sync_key) {
+            if self.model.loading_sync_states.contains(&sync_key) {
                 continue;
             }
 
@@ -1077,7 +1015,7 @@ impl App {
             }
 
             // Mark as loading
-            self.loading_sync_states.insert(sync_key.clone());
+            self.model.loading_sync_states.insert(sync_key.clone());
 
             // Send non-blocking request for directory's sync state
             let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
@@ -1106,12 +1044,12 @@ impl App {
         let browse_key = format!("{}:{}", folder_id, dir_path);
 
         // Check if already discovered (prevent re-querying cache every frame)
-        if self.discovered_dirs.contains(&browse_key) {
+        if self.model.discovered_dirs.contains(&browse_key) {
             return;
         }
 
         // Check if already loading
-        if self.loading_browse.contains(&browse_key) {
+        if self.model.loading_browse.contains(&browse_key) {
             return;
         }
 
@@ -1125,11 +1063,11 @@ impl App {
             cached_items
         } else {
             // Not cached - request it non-blocking and mark as discovered to prevent re-requesting
-            if !self.loading_browse.contains(&browse_key) {
-                self.loading_browse.insert(browse_key.clone());
+            if !self.model.loading_browse.contains(&browse_key) {
+                self.model.loading_browse.insert(browse_key.clone());
 
                 // Mark as discovered immediately to prevent repeated requests
-                self.discovered_dirs.insert(browse_key.clone());
+                self.model.discovered_dirs.insert(browse_key.clone());
 
                 // Send non-blocking browse request
                 let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
@@ -1142,7 +1080,7 @@ impl App {
         };
 
         // Mark this directory as discovered to prevent re-querying
-        self.discovered_dirs.insert(browse_key);
+        self.model.discovered_dirs.insert(browse_key);
 
         // Add all subdirectories to result list
         for item in &items {
@@ -1167,21 +1105,21 @@ impl App {
     // Fetch directory-level sync states for subdirectories (their own metadata, not children)
     // This is cheap and gives immediate feedback for navigation (ignored/deleted/out-of-sync dirs)
     fn fetch_directory_states(&mut self, max_concurrent: usize) {
-        if !self.prefetch_enabled {
+        if !self.model.prefetch_enabled {
             return;
         }
 
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
 
         // Only run if system isn't too busy
-        let total_in_flight = self.loading_browse.len() + self.loading_sync_states.len();
+        let total_in_flight = self.model.loading_browse.len() + self.model.loading_sync_states.len();
         if total_in_flight > 10 {
             return;
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return;
         }
@@ -1220,12 +1158,12 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, dir_path);
 
             // Skip if already loading
-            if self.loading_sync_states.contains(&sync_key) {
+            if self.model.loading_sync_states.contains(&sync_key) {
                 continue;
             }
 
             // Mark as loading
-            self.loading_sync_states.insert(sync_key.clone());
+            self.model.loading_sync_states.insert(sync_key.clone());
 
             // Send non-blocking request via API service
             // Response will be handled by handle_api_response
@@ -1238,11 +1176,11 @@ impl App {
     }
 
     fn fetch_selected_item_sync_state(&mut self) {
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return;
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
             if let Some(selected_idx) = level.state.selected() {
                 if let Some(item) = level.items.get(selected_idx) {
@@ -1262,12 +1200,12 @@ impl App {
                     let sync_key = format!("{}:{}", level.folder_id, file_path);
 
                     // Skip if already loading
-                    if self.loading_sync_states.contains(&sync_key) {
+                    if self.model.loading_sync_states.contains(&sync_key) {
                         return;
                     }
 
                     // Mark as loading
-                    self.loading_sync_states.insert(sync_key.clone());
+                    self.model.loading_sync_states.insert(sync_key.clone());
 
                     // Send non-blocking request via API service
                     // Response will be handled by handle_api_response
@@ -1312,7 +1250,7 @@ impl App {
 
     async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
         if let Some(selected) = self.folders_state.selected() {
-            if let Some(folder) = self.folders.get(selected).cloned() {
+            if let Some(folder) = self.model.folders.get(selected).cloned() {
                 // Don't try to browse paused folders
                 if folder.paused {
                     // Stay on folder list, don't enter the folder
@@ -1324,7 +1262,7 @@ impl App {
 
                 // Get folder sequence for cache validation
                 let folder_sequence = self
-                    .folder_statuses
+                    .model.folder_statuses
                     .get(&folder.id)
                     .map(|s| s.sequence)
                     .unwrap_or(0);
@@ -1338,14 +1276,14 @@ impl App {
                 let browse_key = format!("{}:", folder.id); // Empty prefix for root
 
                 // Remove from loading_browse set if it's there (cleanup from previous attempts)
-                self.loading_browse.remove(&browse_key);
+                self.model.loading_browse.remove(&browse_key);
 
                 // Try cache first
                 let (items, local_items) = if let Ok(Some(cached_items)) = self
                     .cache
                     .get_browse_items(&folder.id, None, folder_sequence)
                 {
-                    self.cache_hit = Some(true);
+                    self.model.cache_hit = Some(true);
                     let mut items = cached_items;
                     // Merge local files even from cache
                     let local_items = self
@@ -1354,10 +1292,10 @@ impl App {
                     (items, local_items)
                 } else {
                     // Mark as loading
-                    self.loading_browse.insert(browse_key.clone());
+                    self.model.loading_browse.insert(browse_key.clone());
 
                     // Cache miss - fetch from API
-                    self.cache_hit = Some(false);
+                    self.model.cache_hit = Some(false);
                     let mut items = self.client.browse_folder(&folder.id, None).await?;
 
                     // Merge local-only files from receive-only folders
@@ -1373,13 +1311,13 @@ impl App {
                     }
 
                     // Done loading
-                    self.loading_browse.remove(&browse_key);
+                    self.model.loading_browse.remove(&browse_key);
 
                     (items, local_items)
                 };
 
                 // Record load time
-                self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
+                self.model.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
                 // Create state without selecting anything - sort_current_level will handle selection
                 let state = ListState::default();
@@ -1426,7 +1364,7 @@ impl App {
 
                 // Only change focus if not in preview mode
                 if !preview_only {
-                    self.focus_level = 1;
+                    self.model.focus_level = 1;
                 }
 
                 // Apply initial sorting
@@ -1437,11 +1375,11 @@ impl App {
     }
 
     async fn enter_directory(&mut self) -> Result<()> {
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -1470,7 +1408,7 @@ impl App {
 
                 // Get folder sequence for cache validation
                 let folder_sequence = self
-                    .folder_statuses
+                    .model.folder_statuses
                     .get(&folder_id)
                     .map(|s| s.sequence)
                     .unwrap_or(0);
@@ -1479,14 +1417,14 @@ impl App {
                 let browse_key = format!("{}:{}", folder_id, new_prefix);
 
                 // Remove from loading_browse set if it's there (cleanup from previous attempts)
-                self.loading_browse.remove(&browse_key);
+                self.model.loading_browse.remove(&browse_key);
 
                 // Try cache first
                 let (items, local_items) = if let Ok(Some(cached_items)) = self
                     .cache
                     .get_browse_items(&folder_id, Some(&new_prefix), folder_sequence)
                 {
-                    self.cache_hit = Some(true);
+                    self.model.cache_hit = Some(true);
                     let mut items = cached_items;
                     // Merge local files even from cache
                     let local_items = self
@@ -1495,8 +1433,8 @@ impl App {
                     (items, local_items)
                 } else {
                     // Mark as loading
-                    self.loading_browse.insert(browse_key.clone());
-                    self.cache_hit = Some(false);
+                    self.model.loading_browse.insert(browse_key.clone());
+                    self.model.cache_hit = Some(false);
 
                     // Cache miss - fetch from API (BLOCKING)
                     let mut items = self
@@ -1517,13 +1455,13 @@ impl App {
                     );
 
                     // Done loading
-                    self.loading_browse.remove(&browse_key);
+                    self.model.loading_browse.remove(&browse_key);
 
                     (items, local_items)
                 };
 
                 // Record load time
-                self.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
+                self.model.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
                 // Create state without selecting anything - sort_current_level will handle selection
                 let state = ListState::default();
@@ -1598,7 +1536,7 @@ impl App {
                     ignored_exists,
                 });
 
-                self.focus_level += 1;
+                self.model.focus_level += 1;
 
                 // Apply initial sorting
                 self.sort_current_level();
@@ -1609,11 +1547,11 @@ impl App {
     }
 
     fn go_back(&mut self) {
-        if self.focus_level > 1 {
+        if self.model.focus_level > 1 {
             self.breadcrumb_trail.pop();
-            self.focus_level -= 1;
-        } else if self.focus_level == 1 {
-            self.focus_level = 0;
+            self.model.focus_level -= 1;
+        } else if self.model.focus_level == 1 {
+            self.model.focus_level = 0;
         }
     }
 
@@ -1628,8 +1566,8 @@ impl App {
         preserve_selection_name: Option<String>,
     ) {
         if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-            let sort_mode = self.sort_mode;
-            let reverse = self.sort_reverse;
+            let sort_mode = self.model.sort_mode;
+            let reverse = self.model.sort_reverse;
 
             // Use provided name if given, otherwise get currently selected item name
             let selected_name = preserve_selection_name.or_else(|| {
@@ -1713,14 +1651,14 @@ impl App {
     }
 
     fn sort_current_level(&mut self) {
-        if self.focus_level == 0 {
+        if self.model.focus_level == 0 {
             // In preview mode (focus on folder list), sort the first breadcrumb if it exists
             if !self.breadcrumb_trail.is_empty() {
                 self.sort_level(0);
             }
             return;
         }
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         self.sort_level(level_idx);
     }
 
@@ -1733,30 +1671,30 @@ impl App {
     }
 
     fn cycle_sort_mode(&mut self) {
-        if self.focus_level == 0 {
+        if self.model.focus_level == 0 {
             return; // No sorting for folders list
         }
 
-        self.sort_mode = self.sort_mode.next();
-        self.sort_reverse = false; // Reset reverse when changing mode
+        self.model.sort_mode = self.model.sort_mode.next();
+        self.model.sort_reverse = false; // Reset reverse when changing mode
         self.sort_all_levels(); // Apply to all levels
     }
 
     fn toggle_sort_reverse(&mut self) {
-        if self.focus_level == 0 {
+        if self.model.focus_level == 0 {
             return; // No sorting for folders list
         }
 
-        self.sort_reverse = !self.sort_reverse;
+        self.model.sort_reverse = !self.model.sort_reverse;
         self.sort_all_levels(); // Apply to all levels
     }
 
     async fn next_item(&mut self) {
-        if self.focus_level == 0 {
+        if self.model.focus_level == 0 {
             // Navigate folders
             let i = match self.folders_state.selected() {
                 Some(i) => {
-                    if i >= self.folders.len() - 1 {
+                    if i >= self.model.folders.len() - 1 {
                         0
                     } else {
                         i + 1
@@ -1769,7 +1707,7 @@ impl App {
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
@@ -1790,12 +1728,12 @@ impl App {
     }
 
     async fn previous_item(&mut self) {
-        if self.focus_level == 0 {
+        if self.model.focus_level == 0 {
             // Navigate folders
             let i = match self.folders_state.selected() {
                 Some(i) => {
                     if i == 0 {
-                        self.folders.len() - 1
+                        self.model.folders.len() - 1
                     } else {
                         i - 1
                     }
@@ -1807,7 +1745,7 @@ impl App {
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
@@ -1828,14 +1766,14 @@ impl App {
     }
 
     async fn jump_to_first(&mut self) {
-        if self.focus_level == 0 {
-            if !self.folders.is_empty() {
+        if self.model.focus_level == 0 {
+            if !self.model.folders.is_empty() {
                 self.folders_state.select(Some(0));
                 // Auto-load the selected folder's root directory as preview (don't change focus)
                 let _ = self.load_root_level(true).await;
             }
         } else {
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if !level.items.is_empty() {
                     level.state.select(Some(0));
@@ -1845,14 +1783,14 @@ impl App {
     }
 
     async fn jump_to_last(&mut self) {
-        if self.focus_level == 0 {
-            if !self.folders.is_empty() {
-                self.folders_state.select(Some(self.folders.len() - 1));
+        if self.model.focus_level == 0 {
+            if !self.model.folders.is_empty() {
+                self.folders_state.select(Some(self.model.folders.len() - 1));
                 // Auto-load the selected folder's root directory as preview (don't change focus)
                 let _ = self.load_root_level(true).await;
             }
         } else {
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if !level.items.is_empty() {
                     level.state.select(Some(level.items.len() - 1));
@@ -1862,19 +1800,19 @@ impl App {
     }
 
     async fn page_down(&mut self, page_size: usize) {
-        if self.focus_level == 0 {
-            if self.folders.is_empty() {
+        if self.model.focus_level == 0 {
+            if self.model.folders.is_empty() {
                 return;
             }
             let i = match self.folders_state.selected() {
-                Some(i) => (i + page_size).min(self.folders.len() - 1),
+                Some(i) => (i + page_size).min(self.model.folders.len() - 1),
                 None => 0,
             };
             self.folders_state.select(Some(i));
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
@@ -1889,8 +1827,8 @@ impl App {
     }
 
     async fn page_up(&mut self, page_size: usize) {
-        if self.focus_level == 0 {
-            if self.folders.is_empty() {
+        if self.model.focus_level == 0 {
+            if self.model.folders.is_empty() {
                 return;
             }
             let i = match self.folders_state.selected() {
@@ -1901,7 +1839,7 @@ impl App {
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
@@ -1925,10 +1863,10 @@ impl App {
 
     fn rescan_selected_folder(&mut self) -> Result<()> {
         // Get the folder ID to rescan
-        let folder_id = if self.focus_level == 0 {
+        let folder_id = if self.model.focus_level == 0 {
             // On folder list - rescan selected folder
             if let Some(selected) = self.folders_state.selected() {
-                if let Some(folder) = self.folders.get(selected) {
+                if let Some(folder) = self.model.folders.get(selected) {
                     folder.id.clone()
                 } else {
                     return Ok(());
@@ -1960,11 +1898,11 @@ impl App {
 
     async fn restore_selected_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -1972,7 +1910,7 @@ impl App {
         let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
 
         // Check if this is a receive-only folder with local changes
-        if let Some(status) = self.folder_statuses.get(&folder_id) {
+        if let Some(status) = self.model.folder_statuses.get(&folder_id) {
             if status.receive_only_total_items > 0 {
                 // Receive-only folder with local changes - fetch the list of changed files
                 let changed_files = self
@@ -1982,7 +1920,7 @@ impl App {
                     .unwrap_or_else(|_| Vec::new());
 
                 // Show confirmation prompt with file list
-                self.confirm_revert = Some((folder_id, changed_files));
+                self.model.confirm_revert = Some((folder_id, changed_files));
                 return Ok(());
             }
         }
@@ -1998,11 +1936,11 @@ impl App {
 
     async fn delete_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -2039,7 +1977,7 @@ impl App {
         let is_dir = std::path::Path::new(&host_path).is_dir();
 
         // Show confirmation prompt
-        self.confirm_delete = Some((host_path, item.name.clone(), is_dir));
+        self.model.confirm_delete = Some((host_path, item.name.clone(), is_dir));
 
         Ok(())
     }
@@ -2047,7 +1985,7 @@ impl App {
     fn open_selected_item(&mut self) -> Result<()> {
         // Check if open_command is configured
         let Some(ref open_cmd) = self.open_command else {
-            self.toast_message = Some((
+            self.model.toast_message = Some((
                 "Error: open_command not configured".to_string(),
                 Instant::now(),
             ));
@@ -2055,11 +1993,11 @@ impl App {
         };
 
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -2112,7 +2050,7 @@ impl App {
                 }
                 // Show toast notification with full path
                 let toast_msg = format!("Opened: {}", host_path);
-                self.toast_message = Some((toast_msg, Instant::now()));
+                self.model.toast_message = Some((toast_msg, Instant::now()));
             }
             Err(e) => {
                 log_debug(&format!(
@@ -2121,7 +2059,7 @@ impl App {
                 ));
                 // Show error toast
                 let toast_msg = format!("Error: Failed to open with '{}'", open_cmd);
-                self.toast_message = Some((toast_msg, Instant::now()));
+                self.model.toast_message = Some((toast_msg, Instant::now()));
             }
         }
 
@@ -2129,10 +2067,10 @@ impl App {
     }
 
     fn copy_to_clipboard(&mut self) -> Result<()> {
-        let text_to_copy = if self.focus_level == 0 {
+        let text_to_copy = if self.model.focus_level == 0 {
             // In folder list - copy folder ID
             if let Some(selected) = self.folders_state.selected() {
-                if let Some(folder) = self.folders.get(selected) {
+                if let Some(folder) = self.model.folders.get(selected) {
                     Some(folder.id.clone())
                 } else {
                     None
@@ -2146,7 +2084,7 @@ impl App {
                 return Ok(());
             }
 
-            let level_idx = self.focus_level - 1;
+            let level_idx = self.model.focus_level - 1;
             if level_idx >= self.breadcrumb_trail.len() {
                 return Ok(());
             }
@@ -2210,7 +2148,7 @@ impl App {
                             });
                         // Show toast notification with full path
                         let toast_msg = format!("Copied to clipboard: {}", text);
-                        self.toast_message = Some((toast_msg, Instant::now()));
+                        self.model.toast_message = Some((toast_msg, Instant::now()));
                     }
                     Err(e) => {
                         let _ = std::fs::OpenOptions::new()
@@ -2226,7 +2164,7 @@ impl App {
                             });
                         // Show error toast
                         let toast_msg = format!("Error: Failed to copy with '{}'", clipboard_cmd);
-                        self.toast_message = Some((toast_msg, Instant::now()));
+                        self.model.toast_message = Some((toast_msg, Instant::now()));
                     }
                 }
             } else {
@@ -2239,7 +2177,7 @@ impl App {
                         writeln!(f, "No clipboard_command configured - set clipboard_command in config.yaml")
                     });
                 // Show error toast
-                self.toast_message = Some((
+                self.model.toast_message = Some((
                     "Error: clipboard_command not configured".to_string(),
                     Instant::now(),
                 ));
@@ -2256,7 +2194,7 @@ impl App {
         browse_item: BrowseItem,
     ) {
         // Find the folder
-        let folder = match self.folders.iter().find(|f| f.id == folder_id) {
+        let folder = match self.model.folders.iter().find(|f| f.id == folder_id) {
             Some(f) => f.clone(),
             None => {
                 self.show_file_info = Some(FileInfoPopupState {
@@ -2662,11 +2600,11 @@ impl App {
         log_bug("toggle_ignore: START");
 
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -2729,7 +2667,7 @@ impl App {
                     "Cannot un-ignore: deletion in progress for {}",
                     pending_path.display()
                 );
-                self.toast_message = Some((message, Instant::now()));
+                self.model.toast_message = Some((message, Instant::now()));
                 log_debug(&format!("Blocked un-ignore: path {:?} is pending deletion", pending_path));
                 return Ok(());
             }
@@ -2888,11 +2826,11 @@ impl App {
 
     async fn ignore_and_delete(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
-        let level_idx = self.focus_level - 1;
+        let level_idx = self.model.focus_level - 1;
         if level_idx >= self.breadcrumb_trail.len() {
             return Ok(());
         }
@@ -3006,7 +2944,7 @@ impl App {
                 }
 
                 // Mark that rescan has been triggered for this folder
-                if let Some(pending_info) = self.pending_ignore_deletes.get_mut(&folder_id) {
+                if let Some(pending_info) = self.model.pending_ignore_deletes.get_mut(&folder_id) {
                     pending_info.rescan_triggered = true;
                 }
 
@@ -3148,28 +3086,28 @@ async fn run_app<B: ratatui::backend::Backend>(
 
     loop {
         // Clear terminal to remove sixel graphics if needed (brief flash but necessary)
-        if app.sixel_cleanup_frames > 0 {
+        if app.model.sixel_cleanup_frames > 0 {
             terminal.clear()?;
-            app.sixel_cleanup_frames = 0;
+            app.model.sixel_cleanup_frames = 0;
         }
 
         // Conditional rendering based on dirty flag
-        if app.ui_dirty {
+        if app.model.ui_dirty {
             terminal.draw(|f| {
                 ui::render(f, app);
             })?;
-            app.ui_dirty = false;
+            app.model.ui_dirty = false;
         }
 
         // Auto-dismiss toast after 1.5 seconds
-        if let Some((_, timestamp)) = app.toast_message {
+        if let Some((_, timestamp)) = app.model.toast_message {
             if timestamp.elapsed().as_millis() >= 1500 {
-                app.toast_message = None;
-                app.ui_dirty = true; // Toast changed, need redraw
+                app.model.toast_message = None;
+                app.model.ui_dirty = true; // Toast changed, need redraw
             }
         }
 
-        if app.should_quit {
+        if app.model.should_quit {
             // Flush any pending writes before quitting
             app.flush_pending_db_writes();
             break;
@@ -3178,7 +3116,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Process API responses (non-blocking)
         while let Ok(response) = app.api_rx.try_recv() {
             app.handle_api_response(response);
-            app.ui_dirty = true; // API response may have updated state
+            app.model.ui_dirty = true; // API response may have updated state
         }
 
         // Flush if batch is ready
@@ -3193,7 +3131,7 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         while let Ok(invalidation) = app.invalidation_rx.try_recv() {
             app.handle_cache_invalidation(invalidation);
-            app.ui_dirty = true; // Cache invalidation may affect displayed data
+            app.model.ui_dirty = true; // Cache invalidation may affect displayed data
             events_processed += 1;
 
             if events_processed >= MAX_EVENTS_PER_FRAME {
@@ -3251,13 +3189,13 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         // Update UI periodically for live stats (uptime, transfer rates)
         if last_stats_update.elapsed() >= std::time::Duration::from_secs(1) {
-            app.ui_dirty = true;
+            app.model.ui_dirty = true;
             last_stats_update = Instant::now();
         }
 
         // Only run prefetch operations when user has been idle for 300ms
         // This prevents blocking keyboard input and reduces CPU usage
-        let idle_time = app.last_user_action.elapsed();
+        let idle_time = app.model.last_user_action.elapsed();
         if idle_time >= std::time::Duration::from_millis(300) {
             // Cleanup stale pending deletes (60s timeout fallback)
             app.cleanup_stale_pending_deletes();
@@ -3282,8 +3220,8 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.batch_fetch_visible_sync_states(5);
 
             // Update directory states based on their children (uses cache only, non-blocking)
-            if app.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
-                app.update_directory_states(app.focus_level - 1);
+            if app.model.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
+                app.update_directory_states(app.model.focus_level - 1);
             }
         }
 
@@ -3293,7 +3231,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                 // Flush before processing user input to ensure consistency
                 app.flush_pending_db_writes();
                 app.handle_key(key).await?;
-                app.ui_dirty = true; // User input likely changed state
+                app.model.ui_dirty = true; // User input likely changed state
             }
         }
     }
