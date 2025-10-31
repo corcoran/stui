@@ -1282,43 +1282,6 @@ impl App {
     }
 
     /// Check which ignored files exist on disk (done once on directory load, not per-frame)
-    fn check_ignored_existence(
-        &self,
-        items: &[BrowseItem],
-        file_sync_states: &HashMap<String, SyncState>,
-        translated_base_path: &str,
-        prefix: Option<&str>,
-        parent_exists: Option<bool>,
-    ) -> HashMap<String, bool> {
-        let mut ignored_exists = HashMap::new();
-
-        for item in items {
-            if let Some(SyncState::Ignored) = file_sync_states.get(&item.name) {
-                // Optimization: If parent directory doesn't exist, children can't either
-                if parent_exists == Some(false) {
-                    ignored_exists.insert(item.name.clone(), false);
-                    log_debug(&format!(
-                        "DEBUG [check_ignored_existence]: item={} skipped (parent doesn't exist)",
-                        item.name
-                    ));
-                    continue;
-                }
-
-                // Check filesystem for this item
-                let host_path = format!(
-                    "{}/{}",
-                    translated_base_path.trim_end_matches('/'),
-                    item.name
-                );
-                let exists = std::path::Path::new(&host_path).exists();
-                log_debug(&format!("DEBUG [check_ignored_existence]: item={} prefix={:?} translated_base_path={} host_path={} exists={}",
-                    item.name, prefix, translated_base_path, host_path, exists));
-                ignored_exists.insert(item.name.clone(), exists);
-            }
-        }
-
-        ignored_exists
-    }
 
     /// Update ignored_exists status for a single file in a breadcrumb level
     fn update_ignored_exists_for_file(
@@ -1442,11 +1405,10 @@ impl App {
 
                 // Check which ignored files exist on disk (one-time check, not per-frame)
                 // Root level: no parent to check
-                let ignored_exists = self.check_ignored_existence(
+                let ignored_exists = logic::sync_states::check_ignored_existence(
                     &items,
                     &file_sync_states,
                     &translated_base_path,
-                    None,
                     None,
                 );
 
@@ -1616,11 +1578,10 @@ impl App {
                 // Check which ignored files exist on disk (one-time check, not per-frame)
                 // Determine if parent directory exists (optimization for ignored directories)
                 let parent_exists = Some(std::path::Path::new(&translated_base_path).exists());
-                let ignored_exists = self.check_ignored_existence(
+                let ignored_exists = logic::sync_states::check_ignored_existence(
                     &items,
                     &file_sync_states,
                     &translated_base_path,
-                    Some(&new_prefix),
                     parent_exists,
                 );
 
