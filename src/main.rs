@@ -46,6 +46,7 @@ mod cache;
 mod config;
 mod event_listener;
 mod handlers;
+mod logic;
 mod messages;
 mod state;
 mod ui;
@@ -93,18 +94,6 @@ fn log_bug(msg: &str) {
     }
 }
 
-fn sync_state_priority(state: SyncState) -> u8 {
-    // Lower number = higher priority (displayed first)
-    match state {
-        SyncState::OutOfSync => 0,  // ⚠️ Most important
-        SyncState::Syncing => 1,    // 🔄 Active operation
-        SyncState::RemoteOnly => 2, // ☁️
-        SyncState::LocalOnly => 3,  // 💻
-        SyncState::Ignored => 4,    // 🚫
-        SyncState::Unknown => 5,    // ❓
-        SyncState::Synced => 6,     // ✅ Least important
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -477,58 +466,6 @@ impl App {
             || self.last_db_flush.elapsed() > Duration::from_millis(MAX_BATCH_AGE_MS)
     }
 
-    fn pattern_matches(&self, pattern: &str, file_path: &str) -> bool {
-        // Syncthing ignore patterns are similar to .gitignore
-        // Patterns starting with / are relative to folder root
-        // Patterns without / match anywhere in the path
-
-        let pattern = pattern.trim();
-
-        // Exact match
-        if pattern == file_path {
-            return true;
-        }
-
-        // Pattern starts with / - match from root
-        if let Some(pattern_without_slash) = pattern.strip_prefix('/') {
-            // Exact match without leading slash
-            if pattern_without_slash == file_path.trim_start_matches('/') {
-                return true;
-            }
-
-            // Try glob matching
-            if let Ok(pattern_obj) = glob::Pattern::new(pattern_without_slash) {
-                if pattern_obj.matches(file_path.trim_start_matches('/')) {
-                    return true;
-                }
-            }
-        } else {
-            // Pattern without / - match anywhere
-            // Try matching the full path
-            if let Ok(pattern_obj) = glob::Pattern::new(pattern) {
-                if pattern_obj.matches(file_path.trim_start_matches('/')) {
-                    return true;
-                }
-
-                // Also try matching just the filename
-                if let Some(filename) = file_path.split('/').last() {
-                    if pattern_obj.matches(filename) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    fn find_matching_patterns(&self, patterns: &[String], file_path: &str) -> Vec<String> {
-        patterns
-            .iter()
-            .filter(|p| self.pattern_matches(p, file_path))
-            .cloned()
-            .collect()
-    }
 
     async fn new(config: Config) -> Result<Self> {
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
@@ -1788,8 +1725,8 @@ impl App {
                             .copied()
                             .unwrap_or(SyncState::Unknown);
 
-                        let a_priority = sync_state_priority(a_state);
-                        let b_priority = sync_state_priority(b_state);
+                        let a_priority = logic::sync_states::sync_state_priority(a_state);
+                        let b_priority = logic::sync_states::sync_state_priority(b_state);
 
                         a_priority
                             .cmp(&b_priority)
@@ -2854,7 +2791,7 @@ impl App {
 
             // File is ignored - find matching patterns and remove them
             let file_path = format!("/{}", relative_path);
-            let matching_patterns = self.find_matching_patterns(&patterns, &file_path);
+            let matching_patterns = logic::ignore::find_matching_patterns(&patterns, &file_path);
 
             if matching_patterns.is_empty() {
                 return Ok(()); // No patterns match (shouldn't happen)
