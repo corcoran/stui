@@ -62,13 +62,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
                     if delete_result.is_ok() {
                         // Get current folder info for cache invalidation
-                        if app.model.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
+                        if app.model.focus_level > 0 && !app.model.breadcrumb_trail.is_empty() {
                             let level_idx = app.model.focus_level - 1;
 
                             // Extract all needed data first (immutable borrow)
                             let deletion_info =
-                                if let Some(level) = app.breadcrumb_trail.get(level_idx) {
-                                    let selected_idx = level.state.selected();
+                                if let Some(level) = app.model.breadcrumb_trail.get(level_idx) {
+                                    let selected_idx = level.selected_index;
                                     selected_idx.and_then(|idx| {
                                         level.items.get(idx).map(|item| {
                                             (
@@ -101,7 +101,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 }
 
                                 // Immediately remove from current view (mutable borrow)
-                                if let Some(level) = app.breadcrumb_trail.get_mut(level_idx) {
+                                if let Some(level) = app.model.breadcrumb_trail.get_mut(level_idx) {
                                     // Remove from items
                                     if idx < level.items.len() {
                                         level.items.remove(idx);
@@ -117,7 +117,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                     } else {
                                         Some(idx)
                                     };
-                                    level.state.select(new_selection);
+                                    level.selected_index = new_selection;
                                 }
 
                                 // Invalidate browse cache for this directory
@@ -147,30 +147,30 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
 
         // Handle pattern selection menu
-        if let Some((folder_id, item_name, patterns, state)) = &mut app.pattern_selection {
+        if let Some(pattern_state) = &mut app.model.pattern_selection {
             match key.code {
                 KeyCode::Up => {
-                    let selected = state.selected().unwrap_or(0);
+                    let selected = pattern_state.selected_index.unwrap_or(0);
                     if selected > 0 {
-                        state.select(Some(selected - 1));
+                        pattern_state.selected_index = Some(selected - 1);
                     }
                     return Ok(());
                 }
                 KeyCode::Down => {
-                    let selected = state.selected().unwrap_or(0);
-                    if selected < patterns.len() - 1 {
-                        state.select(Some(selected + 1));
+                    let selected = pattern_state.selected_index.unwrap_or(0);
+                    if selected < pattern_state.patterns.len() - 1 {
+                        pattern_state.selected_index = Some(selected + 1);
                     }
                     return Ok(());
                 }
                 KeyCode::Enter => {
                     // Remove the selected pattern
-                    let selected = state.selected().unwrap_or(0);
-                    if selected < patterns.len() {
-                        let pattern_to_remove = patterns[selected].clone();
-                        let folder_id = folder_id.clone();
-                        let item_name = item_name.clone();
-                        app.pattern_selection = None;
+                    let selected = pattern_state.selected_index.unwrap_or(0);
+                    if selected < pattern_state.patterns.len() {
+                        let pattern_to_remove = pattern_state.patterns[selected].clone();
+                        let folder_id = pattern_state.folder_id.clone();
+                        let item_name = pattern_state.item_name.clone();
+                        app.model.pattern_selection = None;
 
                         // Get all patterns and remove the selected one
                         let all_patterns = app.client.get_ignore_patterns(&folder_id).await?;
@@ -185,9 +185,9 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         crate::log_bug("pattern_selection: updated .stignore");
 
                         // Immediately show as Unknown to give user feedback
-                        if app.model.focus_level > 0 && app.model.focus_level <= app.breadcrumb_trail.len() {
+                        if app.model.focus_level > 0 && app.model.focus_level <= app.model.breadcrumb_trail.len() {
                             let level_idx = app.model.focus_level - 1;
-                            if let Some(level) = app.breadcrumb_trail.get_mut(level_idx) {
+                            if let Some(level) = app.model.breadcrumb_trail.get_mut(level_idx) {
                                 level
                                     .file_sync_states
                                     .insert(item_name.clone(), SyncState::Unknown);
@@ -221,10 +221,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         let item_name_clone = item_name.clone();
 
                         let file_path_for_api = if app.model.focus_level > 0
-                            && app.model.focus_level <= app.breadcrumb_trail.len()
+                            && app.model.focus_level <= app.model.breadcrumb_trail.len()
                         {
                             let level_idx = app.model.focus_level - 1;
-                            if let Some(level) = app.breadcrumb_trail.get(level_idx) {
+                            if let Some(level) = app.model.breadcrumb_trail.get(level_idx) {
                                 if let Some(ref prefix) = level.prefix {
                                     format!("{}/{}", prefix.trim_matches('/'), &item_name_clone)
                                 } else {
@@ -259,7 +259,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 KeyCode::Esc => {
                     // Cancel
-                    app.pattern_selection = None;
+                    app.model.pattern_selection = None;
                     return Ok(());
                 }
                 _ => {
@@ -270,14 +270,14 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
 
         // Handle file info popup
-        if let Some(popup_state) = &mut app.show_file_info {
+        if let Some(popup_state) = &mut app.model.file_info_popup {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => {
                     // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
                     if popup_state.is_image {
                         app.model.sixel_cleanup_frames = 1;
                     }
-                    app.show_file_info = None;
+                    app.model.file_info_popup = None;
                     return Ok(());
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -421,16 +421,16 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('?') if app.model.focus_level > 0 => {
                 // Toggle file information popup
-                if let Some(popup_state) = &app.show_file_info {
+                if let Some(popup_state) = &app.model.file_info_popup {
                     // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
                     if popup_state.is_image {
                         app.model.sixel_cleanup_frames = 1;
                     }
-                    app.show_file_info = None;
+                    app.model.file_info_popup = None;
                 } else {
                     // Open popup for selected item
-                    if let Some(level) = app.breadcrumb_trail.get(app.model.focus_level - 1) {
-                        if let Some(selected_idx) = level.state.selected() {
+                    if let Some(level) = app.model.breadcrumb_trail.get(app.model.focus_level - 1) {
+                        if let Some(selected_idx) = level.selected_index {
                             if let Some(item) = level.items.get(selected_idx) {
                                 // Construct full path
                                 let file_path = if let Some(prefix) = &level.prefix {

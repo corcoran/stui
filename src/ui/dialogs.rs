@@ -10,8 +10,9 @@ use ratatui::{
 };
 
 use super::icons::IconRenderer;
+use crate::model::FileInfoPopupState;
 use crate::utils;
-use crate::{api::Device, FileInfoPopupState, ImagePreviewState};
+use crate::{api::Device, ImagePreviewState};
 
 /// Render the revert confirmation dialog (for restoring deleted files in receive-only folders)
 pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[String]) {
@@ -225,7 +226,7 @@ fn render_metadata_column(
 
     // Image resolution (if this is an image with loaded metadata)
     if state.is_image {
-        if let Some(ref image_state) = state.image_state {
+        if let Some(ref image_state) = None::<crate::ImagePreviewState> {
             match image_state {
                 crate::ImagePreviewState::Ready { metadata, .. }
                 | crate::ImagePreviewState::Failed { metadata } => {
@@ -395,8 +396,8 @@ fn render_preview_column(
     image_font_size: Option<(u16, u16)>,
 ) {
     // Check if this is an image with an image state
-    if state.is_image && state.image_state.is_some() {
-        match state.image_state.as_ref().unwrap() {
+    if state.is_image && None::<crate::ImagePreviewState>.is_some() {
+        match None::<crate::ImagePreviewState>.as_ref().unwrap() {
             ImagePreviewState::Loading => {
                 // Show loading message
                 let paragraph = Paragraph::new("Loading image...")
@@ -414,7 +415,7 @@ fn render_preview_column(
                 if let Some(ImagePreviewState::Ready {
                     ref mut protocol,
                     ref metadata,
-                }) = state.image_state
+                }) = None::<crate::ImagePreviewState>
                 {
                     // Create bordered block with dimensions in title
                     let title = if let Some((w, h)) = metadata.dimensions {
@@ -509,7 +510,7 @@ fn render_preview_column(
                 }
             }
             ImagePreviewState::Failed { metadata } => {
-                // Show image metadata as fallback
+                // Show image &metadata as fallback
                 render_image_metadata(f, area, metadata);
             }
         }

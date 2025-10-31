@@ -177,34 +177,10 @@ impl std::fmt::Debug for ImagePreviewState {
     }
 }
 
-#[derive(Debug)]
-pub struct FileInfoPopupState {
-    pub folder_id: String,
-    pub file_path: String,
-    pub browse_item: BrowseItem,
-    pub file_details: Option<FileDetails>,
-    pub file_content: Result<String, String>, // Ok(content) or Err(error message)
-    pub exists_on_disk: bool,
-    pub is_binary: bool,
-    pub is_image: bool,
-    pub scroll_offset: u16, // Vertical scroll offset for preview
-    pub image_state: Option<ImagePreviewState>,
-}
-
-#[derive(Clone)]
-pub struct BreadcrumbLevel {
-    pub folder_id: String,
-    pub folder_label: String,
-    pub folder_path: String, // Cache the folder's container path
-    pub prefix: Option<String>,
-    pub items: Vec<BrowseItem>,
-    pub state: ListState,
-    pub translated_base_path: String, // Cached translated base path for this level
-    pub file_sync_states: HashMap<String, SyncState>, // Cache sync states by filename
-    pub ignored_exists: HashMap<String, bool>, // Track if ignored files exist on disk (checked once on load)
-}
-
-// model::PendingDeleteInfo moved to model module
+// Old types moved to model module:
+// - BreadcrumbLevel (now uses Option<usize> instead of ListState)
+// - model::FileInfoPopupState (without image_state field)
+// - PendingDeleteInfo
 
 pub struct App {
     // ✅ Pure application state (Elm Architecture Model)
@@ -238,15 +214,8 @@ pub struct App {
     pending_sync_state_writes: Vec<(String, String, SyncState, u64)>,
 
     // 🖼️ Image State (Runtime - not cloneable)
-    /// Image state for file info popup (separate from model because ImagePreviewState is not Clone)
-    #[allow(dead_code)] // Will be used when we integrate file info popup with model
-    show_file_info_image_state: Option<ImagePreviewState>,
-
-    // 🔄 Complex State (temporarily using ratatui ListState - to be migrated)
-    pub folders_state: ListState,
-    pub breadcrumb_trail: Vec<BreadcrumbLevel>, // TEMPORARY: uses old BreadcrumbLevel with ListState
-    pub pattern_selection: Option<(String, String, Vec<String>, ListState)>, // TEMPORARY: pattern menu with ListState
-    pub show_file_info: Option<FileInfoPopupState>, // TEMPORARY: file info popup with image_state
+    /// Maps file paths to their image preview states (ImagePreviewState is not Clone, so kept separate from Model)
+    image_state_map: std::collections::HashMap<String, ImagePreviewState>,
 }
 
 impl App {
@@ -530,11 +499,7 @@ impl App {
             last_directory_update: Instant::now(),
             last_db_flush: Instant::now(),
             pending_sync_state_writes: Vec::new(),
-            show_file_info_image_state: None,
-            folders_state: ListState::default(),
-            breadcrumb_trail: Vec::new(),
-            pattern_selection: None,
-            show_file_info: None,
+            image_state_map: HashMap::new(),
         };
 
         // Load folder statuses first (needed for cache validation)
@@ -555,7 +520,7 @@ impl App {
         }
 
         if !app.model.folders.is_empty() {
-            app.folders_state.select(Some(0));
+            app.model.folders_state_selection = Some(0);
             app.load_root_level(true).await?; // Preview mode - focus stays on folders
         }
 
@@ -585,10 +550,10 @@ impl App {
 
                         // Clear in-memory sync states for this folder if we're currently viewing it
                         // This ensures files that changed get refreshed
-                        if !self.breadcrumb_trail.is_empty()
-                            && self.breadcrumb_trail[0].folder_id == folder.id
+                        if !self.model.breadcrumb_trail.is_empty()
+                            && self.model.breadcrumb_trail[0].folder_id == folder.id
                         {
-                            for level in &mut self.breadcrumb_trail {
+                            for level in &mut self.model.breadcrumb_trail {
                                 if level.folder_id == folder.id {
                                     level.file_sync_states.clear();
                                 }
@@ -755,11 +720,11 @@ impl App {
         }
         self.last_directory_update = Instant::now();
 
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return;
         }
 
-        let level = &self.breadcrumb_trail[level_idx];
+        let level = &self.model.breadcrumb_trail[level_idx];
         let mut dir_states: HashMap<String, SyncState> = HashMap::new();
 
         // Collect directory names first
@@ -846,7 +811,7 @@ impl App {
         }
 
         // Apply computed states
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+        if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
             for (dir_name, state) in dir_states {
                 let current = level.file_sync_states.get(&dir_name).copied();
                 if current != Some(state) {
@@ -861,25 +826,25 @@ impl App {
     }
 
     fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return;
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return;
         }
 
         // Get items that need fetching (don't have sync state and aren't loading)
-        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.model.breadcrumb_trail[level_idx].prefix.clone();
 
-        let items_to_fetch: Vec<String> = self.breadcrumb_trail[level_idx]
+        let items_to_fetch: Vec<String> = self.model.breadcrumb_trail[level_idx]
             .items
             .iter()
             .filter(|item| {
                 // Skip if already have sync state
-                if self.breadcrumb_trail[level_idx]
+                if self.model.breadcrumb_trail[level_idx]
                     .file_sync_states
                     .contains_key(&item.name)
                 {
@@ -939,7 +904,7 @@ impl App {
             return;
         }
 
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return;
         }
 
@@ -950,17 +915,17 @@ impl App {
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return;
         }
 
         // Get the currently selected/hovered item
-        let selected_idx = self.breadcrumb_trail[level_idx].state.selected();
+        let selected_idx = self.model.breadcrumb_trail[level_idx].selected_index;
         if selected_idx.is_none() {
             return;
         }
 
-        let selected_item = if let Some(item) = self.breadcrumb_trail[level_idx]
+        let selected_item = if let Some(item) = self.model.breadcrumb_trail[level_idx]
             .items
             .get(selected_idx.unwrap())
         {
@@ -974,8 +939,8 @@ impl App {
             return;
         }
 
-        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.model.breadcrumb_trail[level_idx].prefix.clone();
         let folder_sequence = self
             .model.folder_statuses
             .get(&folder_id)
@@ -1109,7 +1074,7 @@ impl App {
             return;
         }
 
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return;
         }
 
@@ -1120,15 +1085,15 @@ impl App {
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return;
         }
 
-        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.breadcrumb_trail[level_idx].folder_id.clone();
+        let prefix = self.model.breadcrumb_trail[level_idx].prefix.clone();
 
         // Find directories that don't have their own sync state cached
-        let dirs_to_fetch: Vec<String> = self.breadcrumb_trail[level_idx]
+        let dirs_to_fetch: Vec<String> = self.model.breadcrumb_trail[level_idx]
             .items
             .iter()
             .filter(|item| {
@@ -1138,7 +1103,7 @@ impl App {
                 }
 
                 // Check if we already have this directory's state
-                self.breadcrumb_trail[level_idx]
+                self.model.breadcrumb_trail[level_idx]
                     .file_sync_states
                     .get(&item.name)
                     .is_none()
@@ -1176,13 +1141,13 @@ impl App {
     }
 
     fn fetch_selected_item_sync_state(&mut self) {
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return;
         }
 
         let level_idx = self.model.focus_level - 1;
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
-            if let Some(selected_idx) = level.state.selected() {
+        if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(selected_idx) = level.selected_index {
                 if let Some(item) = level.items.get(selected_idx) {
                     // Check if we already have the sync state cached
                     if level.file_sync_states.contains_key(&item.name) {
@@ -1228,7 +1193,7 @@ impl App {
         file_name: &str,
         new_state: SyncState,
     ) {
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+        if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
             if new_state == SyncState::Ignored {
                 // File is now ignored - check if it exists
                 // translated_base_path already includes the full path to this directory level
@@ -1249,7 +1214,7 @@ impl App {
     }
 
     async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
-        if let Some(selected) = self.folders_state.selected() {
+        if let Some(selected) = self.model.folders_state_selection {
             if let Some(folder) = self.model.folders.get(selected).cloned() {
                 // Don't try to browse paused folders
                 if folder.paused {
@@ -1319,9 +1284,6 @@ impl App {
                 // Record load time
                 self.model.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
-                // Create state without selecting anything - sort_current_level will handle selection
-                let state = ListState::default();
-
                 // Compute translated base path once
                 let translated_base_path = logic::path::translate_path(&folder.path, "", &self.path_map);
 
@@ -1350,13 +1312,13 @@ impl App {
                     None,
                 );
 
-                self.breadcrumb_trail = vec![BreadcrumbLevel {
+                self.model.breadcrumb_trail = vec![model::BreadcrumbLevel {
                     folder_id: folder.id.clone(),
                     folder_label: folder.label.clone().unwrap_or_else(|| folder.id.clone()),
                     folder_path: folder.path.clone(),
                     prefix: None,
                     items,
-                    state,
+                    selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
                     ignored_exists,
@@ -1375,20 +1337,20 @@ impl App {
     }
 
     async fn enter_directory(&mut self) -> Result<()> {
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
         // Start timing
         let start = Instant::now();
 
-        let current_level = &self.breadcrumb_trail[level_idx];
-        if let Some(selected_idx) = current_level.state.selected() {
+        let current_level = &self.model.breadcrumb_trail[level_idx];
+        if let Some(selected_idx) = current_level.selected_index {
             if let Some(item) = current_level.items.get(selected_idx) {
                 // Only enter if it's a directory
                 if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
@@ -1463,9 +1425,6 @@ impl App {
                 // Record load time
                 self.model.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
-                // Create state without selecting anything - sort_current_level will handle selection
-                let state = ListState::default();
-
                 // Compute translated base path once for this level
                 let full_relative_path = new_prefix.trim_end_matches('/');
                 let container_path = format!(
@@ -1488,7 +1447,7 @@ impl App {
                     .unwrap_or(container_path);
 
                 // Truncate breadcrumb trail to current level + 1
-                self.breadcrumb_trail.truncate(level_idx + 1);
+                self.model.breadcrumb_trail.truncate(level_idx + 1);
 
                 // Load cached sync states for items
                 let mut file_sync_states =
@@ -1524,13 +1483,13 @@ impl App {
                 );
 
                 // Add new level
-                self.breadcrumb_trail.push(BreadcrumbLevel {
+                self.model.breadcrumb_trail.push(model::BreadcrumbLevel {
                     folder_id,
                     folder_label,
                     folder_path,
                     prefix: Some(new_prefix),
                     items,
-                    state,
+                    selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
                     ignored_exists,
@@ -1548,7 +1507,7 @@ impl App {
 
     fn go_back(&mut self) {
         if self.model.focus_level > 1 {
-            self.breadcrumb_trail.pop();
+            self.model.breadcrumb_trail.pop();
             self.model.focus_level -= 1;
         } else if self.model.focus_level == 1 {
             self.model.focus_level = 0;
@@ -1565,15 +1524,15 @@ impl App {
         level_idx: usize,
         preserve_selection_name: Option<String>,
     ) {
-        if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+        if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
             let sort_mode = self.model.sort_mode;
             let reverse = self.model.sort_reverse;
 
             // Use provided name if given, otherwise get currently selected item name
             let selected_name = preserve_selection_name.or_else(|| {
                 level
-                    .state
-                    .selected()
+                    .selected_index
+                    
                     .and_then(|idx| level.items.get(idx))
                     .map(|item| item.name.clone())
             });
@@ -1642,10 +1601,10 @@ impl App {
             // Restore selection to the same item
             if let Some(name) = selected_name {
                 let new_idx = level.items.iter().position(|item| item.name == name);
-                level.state.select(new_idx.or(Some(0))); // Default to first item if not found
+                level.selected_index = new_idx.or(Some(0)); // Default to first item if not found
             } else if !level.items.is_empty() {
                 // No previous selection, select first item
-                level.state.select(Some(0));
+                level.selected_index = Some(0);
             }
         }
     }
@@ -1653,7 +1612,7 @@ impl App {
     fn sort_current_level(&mut self) {
         if self.model.focus_level == 0 {
             // In preview mode (focus on folder list), sort the first breadcrumb if it exists
-            if !self.breadcrumb_trail.is_empty() {
+            if !self.model.breadcrumb_trail.is_empty() {
                 self.sort_level(0);
             }
             return;
@@ -1664,7 +1623,7 @@ impl App {
 
     fn sort_all_levels(&mut self) {
         // Apply sorting to all breadcrumb levels
-        let num_levels = self.breadcrumb_trail.len();
+        let num_levels = self.model.breadcrumb_trail.len();
         for idx in 0..num_levels {
             self.sort_level(idx);
         }
@@ -1692,7 +1651,7 @@ impl App {
     async fn next_item(&mut self) {
         if self.model.focus_level == 0 {
             // Navigate folders
-            let i = match self.folders_state.selected() {
+            let i = match self.model.folders_state_selection {
                 Some(i) => {
                     if i >= self.model.folders.len() - 1 {
                         0
@@ -1702,17 +1661,17 @@ impl App {
                 }
                 None => 0,
             };
-            self.folders_state.select(Some(i));
+            self.model.folders_state_selection = Some(i);
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
                 }
-                let i = match level.state.selected() {
+                let i = match level.selected_index {
                     Some(i) => {
                         if i >= level.items.len() - 1 {
                             0
@@ -1722,7 +1681,7 @@ impl App {
                     }
                     None => 0,
                 };
-                level.state.select(Some(i));
+                level.selected_index = Some(i);
             }
         }
     }
@@ -1730,7 +1689,7 @@ impl App {
     async fn previous_item(&mut self) {
         if self.model.focus_level == 0 {
             // Navigate folders
-            let i = match self.folders_state.selected() {
+            let i = match self.model.folders_state_selection {
                 Some(i) => {
                     if i == 0 {
                         self.model.folders.len() - 1
@@ -1740,17 +1699,17 @@ impl App {
                 }
                 None => 0,
             };
-            self.folders_state.select(Some(i));
+            self.model.folders_state_selection = Some(i);
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
                 }
-                let i = match level.state.selected() {
+                let i = match level.selected_index {
                     Some(i) => {
                         if i == 0 {
                             level.items.len() - 1
@@ -1760,7 +1719,7 @@ impl App {
                     }
                     None => 0,
                 };
-                level.state.select(Some(i));
+                level.selected_index = Some(i);
             }
         }
     }
@@ -1768,15 +1727,15 @@ impl App {
     async fn jump_to_first(&mut self) {
         if self.model.focus_level == 0 {
             if !self.model.folders.is_empty() {
-                self.folders_state.select(Some(0));
+                self.model.folders_state_selection = Some(0);
                 // Auto-load the selected folder's root directory as preview (don't change focus)
                 let _ = self.load_root_level(true).await;
             }
         } else {
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if !level.items.is_empty() {
-                    level.state.select(Some(0));
+                    level.selected_index = Some(0);
                 }
             }
         }
@@ -1785,15 +1744,15 @@ impl App {
     async fn jump_to_last(&mut self) {
         if self.model.focus_level == 0 {
             if !self.model.folders.is_empty() {
-                self.folders_state.select(Some(self.model.folders.len() - 1));
+                self.model.folders_state_selection = Some(self.model.folders.len() - 1);
                 // Auto-load the selected folder's root directory as preview (don't change focus)
                 let _ = self.load_root_level(true).await;
             }
         } else {
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if !level.items.is_empty() {
-                    level.state.select(Some(level.items.len() - 1));
+                    level.selected_index = Some(level.items.len() - 1);
                 }
             }
         }
@@ -1804,24 +1763,24 @@ impl App {
             if self.model.folders.is_empty() {
                 return;
             }
-            let i = match self.folders_state.selected() {
+            let i = match self.model.folders_state_selection {
                 Some(i) => (i + page_size).min(self.model.folders.len() - 1),
                 None => 0,
             };
-            self.folders_state.select(Some(i));
+            self.model.folders_state_selection = Some(i);
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
                 }
-                let i = match level.state.selected() {
+                let i = match level.selected_index {
                     Some(i) => (i + page_size).min(level.items.len() - 1),
                     None => 0,
                 };
-                level.state.select(Some(i));
+                level.selected_index = Some(i);
             }
         }
     }
@@ -1831,24 +1790,24 @@ impl App {
             if self.model.folders.is_empty() {
                 return;
             }
-            let i = match self.folders_state.selected() {
+            let i = match self.model.folders_state_selection {
                 Some(i) => i.saturating_sub(page_size),
                 None => 0,
             };
-            self.folders_state.select(Some(i));
+            self.model.folders_state_selection = Some(i);
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             let level_idx = self.model.focus_level - 1;
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 if level.items.is_empty() {
                     return;
                 }
-                let i = match level.state.selected() {
+                let i = match level.selected_index {
                     Some(i) => i.saturating_sub(page_size),
                     None => 0,
                 };
-                level.state.select(Some(i));
+                level.selected_index = Some(i);
             }
         }
     }
@@ -1865,7 +1824,7 @@ impl App {
         // Get the folder ID to rescan
         let folder_id = if self.model.focus_level == 0 {
             // On folder list - rescan selected folder
-            if let Some(selected) = self.folders_state.selected() {
+            if let Some(selected) = self.model.folders_state_selection {
                 if let Some(folder) = self.model.folders.get(selected) {
                     folder.id.clone()
                 } else {
@@ -1876,8 +1835,8 @@ impl App {
             }
         } else {
             // In a breadcrumb level - rescan the current folder
-            if !self.breadcrumb_trail.is_empty() {
-                self.breadcrumb_trail[0].folder_id.clone()
+            if !self.model.breadcrumb_trail.is_empty() {
+                self.model.breadcrumb_trail[0].folder_id.clone()
             } else {
                 return Ok(());
             }
@@ -1898,16 +1857,16 @@ impl App {
 
     async fn restore_selected_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
-        let folder_id = self.breadcrumb_trail[level_idx].folder_id.clone();
+        let folder_id = self.model.breadcrumb_trail[level_idx].folder_id.clone();
 
         // Check if this is a receive-only folder with local changes
         if let Some(status) = self.model.folder_statuses.get(&folder_id) {
@@ -1936,19 +1895,19 @@ impl App {
 
     async fn delete_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
-        let level = &self.breadcrumb_trail[level_idx];
+        let level = &self.model.breadcrumb_trail[level_idx];
 
         // Get selected item
-        let selected = match level.state.selected() {
+        let selected = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
@@ -1993,19 +1952,19 @@ impl App {
         };
 
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
-        let level = &self.breadcrumb_trail[level_idx];
+        let level = &self.model.breadcrumb_trail[level_idx];
 
         // Get selected item
-        let selected = match level.state.selected() {
+        let selected = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
@@ -2069,7 +2028,7 @@ impl App {
     fn copy_to_clipboard(&mut self) -> Result<()> {
         let text_to_copy = if self.model.focus_level == 0 {
             // In folder list - copy folder ID
-            if let Some(selected) = self.folders_state.selected() {
+            if let Some(selected) = self.model.folders_state_selection {
                 if let Some(folder) = self.model.folders.get(selected) {
                     Some(folder.id.clone())
                 } else {
@@ -2080,19 +2039,19 @@ impl App {
             }
         } else {
             // In breadcrumbs - copy file/directory path (mapped host path)
-            if self.breadcrumb_trail.is_empty() {
+            if self.model.breadcrumb_trail.is_empty() {
                 return Ok(());
             }
 
             let level_idx = self.model.focus_level - 1;
-            if level_idx >= self.breadcrumb_trail.len() {
+            if level_idx >= self.model.breadcrumb_trail.len() {
                 return Ok(());
             }
 
-            let level = &self.breadcrumb_trail[level_idx];
+            let level = &self.model.breadcrumb_trail[level_idx];
 
             // Get selected item
-            let selected = match level.state.selected() {
+            let selected = match level.selected_index {
                 Some(idx) => idx,
                 None => return Ok(()),
             };
@@ -2197,7 +2156,7 @@ impl App {
         let folder = match self.model.folders.iter().find(|f| f.id == folder_id) {
             Some(f) => f.clone(),
             None => {
-                self.show_file_info = Some(FileInfoPopupState {
+                self.model.file_info_popup = Some(model::FileInfoPopupState {
                     folder_id,
                     file_path,
                     browse_item,
@@ -2207,7 +2166,6 @@ impl App {
                     is_binary: false,
                     is_image: false,
                     scroll_offset: 0,
-                    image_state: None,
                 });
                 return;
             }
@@ -2217,7 +2175,7 @@ impl App {
         let is_image = Self::is_image_file(&file_path);
 
         // Initialize popup state with loading message first
-        self.show_file_info = Some(FileInfoPopupState {
+        self.model.file_info_popup = Some(model::FileInfoPopupState {
             folder_id: folder_id.clone(),
             file_path: file_path.clone(),
             browse_item: browse_item.clone(),
@@ -2227,11 +2185,6 @@ impl App {
             is_binary: false,
             is_image,
             scroll_offset: 0,
-            image_state: if is_image {
-                Some(ImagePreviewState::Loading)
-            } else {
-                None
-            },
         });
 
         // 1. Fetch file details from API
@@ -2324,7 +2277,7 @@ impl App {
         };
 
         // 3. Update popup state with results
-        self.show_file_info = Some(FileInfoPopupState {
+        self.model.file_info_popup = Some(model::FileInfoPopupState {
             folder_id,
             file_path,
             browse_item,
@@ -2334,7 +2287,6 @@ impl App {
             is_binary,
             is_image,
             scroll_offset: 0,
-            image_state,
         });
     }
 
@@ -2600,16 +2552,16 @@ impl App {
         log_bug("toggle_ignore: START");
 
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
-        let level = &self.breadcrumb_trail[level_idx];
+        let level = &self.model.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
         let prefix = level.prefix.clone();
         log_bug(&format!(
@@ -2619,7 +2571,7 @@ impl App {
         ));
 
         // Get selected item
-        let selected = match level.state.selected() {
+        let selected = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
@@ -2653,7 +2605,7 @@ impl App {
         if sync_state == SyncState::Ignored {
             // File is ignored - check if un-ignore is allowed (not pending deletion)
             // Build host path to check against pending deletes
-            let level = &self.breadcrumb_trail[level_idx];
+            let level = &self.model.breadcrumb_trail[level_idx];
             let host_path = format!(
                 "{}/{}",
                 level.translated_base_path.trim_end_matches('/'),
@@ -2697,7 +2649,7 @@ impl App {
                 // (could be Synced, RemoteOnly, OutOfSync, LocalOnly, or Syncing)
                 // Let the FileInfo API response provide the correct state
 
-                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                     // Clear Ignored state (will be updated by FileInfo)
                     level.file_sync_states.remove(&item_name);
 
@@ -2756,10 +2708,12 @@ impl App {
                 });
             } else {
                 // Multiple patterns match - show selection menu
-                let mut selection_state = ListState::default();
-                selection_state.select(Some(0));
-                self.pattern_selection =
-                    Some((folder_id, item_name, matching_patterns, selection_state));
+                self.model.pattern_selection = Some(model::PatternSelectionState {
+                    folder_id,
+                    item_name,
+                    patterns: matching_patterns,
+                    selected_index: Some(0),
+                });
             }
         } else {
             // File is not ignored - add it to ignore
@@ -2778,7 +2732,7 @@ impl App {
                 .await?;
 
             // Immediately mark as ignored in UI
-            if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+            if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                 level
                     .file_sync_states
                     .insert(item_name.clone(), SyncState::Ignored);
@@ -2813,10 +2767,10 @@ impl App {
         }
 
         // Log HashMap size when returning
-        if !self.breadcrumb_trail.is_empty() {
+        if !self.model.breadcrumb_trail.is_empty() {
             log_bug(&format!(
                 "toggle_ignore: END - HashMap now has {} states",
-                self.breadcrumb_trail[0].file_sync_states.len()
+                self.model.breadcrumb_trail[0].file_sync_states.len()
             ));
         } else {
             log_bug("toggle_ignore: END");
@@ -2826,20 +2780,20 @@ impl App {
 
     async fn ignore_and_delete(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.focus_level == 0 || self.breadcrumb_trail.is_empty() {
+        if self.model.focus_level == 0 || self.model.breadcrumb_trail.is_empty() {
             return Ok(());
         }
 
         let level_idx = self.model.focus_level - 1;
-        if level_idx >= self.breadcrumb_trail.len() {
+        if level_idx >= self.model.breadcrumb_trail.len() {
             return Ok(());
         }
 
-        let level = &self.breadcrumb_trail[level_idx];
+        let level = &self.model.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
 
         // Get selected item
-        let selected = match level.state.selected() {
+        let selected = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
@@ -2880,7 +2834,7 @@ impl App {
                     .set_ignore_patterns(&folder_id, updated_patterns)
                     .await?;
 
-                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                     level
                         .file_sync_states
                         .insert(item_name.clone(), SyncState::Ignored);
@@ -2934,7 +2888,7 @@ impl App {
                     log_debug(&format!("Successfully deleted file: {}", host_path));
                 }
 
-                if let Some(level) = self.breadcrumb_trail.get_mut(level_idx) {
+                if let Some(level) = self.model.breadcrumb_trail.get_mut(level_idx) {
                     level
                         .file_sync_states
                         .insert(item_name.clone(), SyncState::Ignored);
@@ -3150,22 +3104,22 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Process image updates from background loading tasks (non-blocking)
         while let Ok((file_path, image_state)) = app.image_update_rx.try_recv() {
             // Update popup if it's still showing the same file
-            if let Some(ref mut popup_state) = app.show_file_info {
+            if let Some(ref mut popup_state) = app.model.file_info_popup {
                 if popup_state.file_path == file_path {
                     log_debug(&format!("Updating image state for {}", file_path));
-                    popup_state.image_state = Some(image_state);
-
-                    // Also update file_content to reflect loaded state
-                    match &popup_state.image_state {
-                        Some(ImagePreviewState::Ready { .. }) => {
-                            popup_state.file_content =
-                                Ok("[Image preview - see right panel]".to_string());
-                        }
-                        Some(ImagePreviewState::Failed { .. }) => {
-                            popup_state.file_content = Err("Image preview unavailable".to_string());
-                        }
-                        _ => {}
-                    }
+// TODO(Elm-migration): Re-integrate with image_state_map:                     popup_state.image_state = Some(image_state);
+// TODO(Elm-migration): Re-integrate with image_state_map: 
+// TODO(Elm-migration): Re-integrate with image_state_map:                     // Also update file_content to reflect loaded state
+// TODO(Elm-migration): Re-integrate with image_state_map:                     match &popup_state.image_state {
+// TODO(Elm-migration): Re-integrate with image_state_map:                         Some(ImagePreviewState::Ready { .. }) => {
+// TODO(Elm-migration): Re-integrate with image_state_map:                             popup_state.file_content =
+// TODO(Elm-migration): Re-integrate with image_state_map:                                 Ok("[Image preview - see right panel]".to_string());
+// TODO(Elm-migration): Re-integrate with image_state_map:                         }
+// TODO(Elm-migration): Re-integrate with image_state_map:                         Some(ImagePreviewState::Failed { .. }) => {
+// TODO(Elm-migration): Re-integrate with image_state_map:                             popup_state.file_content = Err("Image preview unavailable".to_string());
+// TODO(Elm-migration): Re-integrate with image_state_map:                         }
+// TODO(Elm-migration): Re-integrate with image_state_map:                         _ => {}
+// TODO(Elm-migration): Re-integrate with image_state_map:                     }
                 }
             }
         }
@@ -3220,7 +3174,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.batch_fetch_visible_sync_states(5);
 
             // Update directory states based on their children (uses cache only, non-blocking)
-            if app.model.focus_level > 0 && !app.breadcrumb_trail.is_empty() {
+            if app.model.focus_level > 0 && !app.model.breadcrumb_trail.is_empty() {
                 app.update_directory_states(app.model.focus_level - 1);
             }
         }

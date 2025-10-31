@@ -49,10 +49,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             };
 
             // Check if we're currently viewing this directory - if so, trigger refresh
-            if !app.breadcrumb_trail.is_empty()
-                && app.breadcrumb_trail[0].folder_id == folder_id
+            if !app.model.breadcrumb_trail.is_empty()
+                && app.model.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.breadcrumb_trail.iter_mut().enumerate() {
+                for (_idx, level) in app.model.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Don't clear state immediately - causes flicker to Unknown
                         // The Browse response will naturally update the state with fresh data
@@ -107,10 +107,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             );
 
             // Clear in-memory state for all files in this directory and trigger refresh if viewing
-            if !app.breadcrumb_trail.is_empty()
-                && app.breadcrumb_trail[0].folder_id == folder_id
+            if !app.model.breadcrumb_trail.is_empty()
+                && app.model.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.breadcrumb_trail.iter_mut().enumerate() {
+                for (_idx, level) in app.model.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Remove all states that start with this directory path
                         let dir_prefix = if dir_path.is_empty() {

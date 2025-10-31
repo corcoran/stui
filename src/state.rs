@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use crate::api::{BrowseItem, ConnectionStats, Device, Folder, FolderStatus, SyncState, SystemStatus};
-use crate::model::PendingDeleteInfo;
-use crate::{DisplayMode, FileInfoPopupState, SortMode};
+use crate::model::{FileInfoPopupState, PendingDeleteInfo};
+use crate::{DisplayMode, SortMode};
 
 /// Core application state - folders, devices, and sync status
 #[derive(Debug)]

@@ -40,12 +40,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // but skip if we've navigated completely away from this folder
             let is_relevant = if app.model.focus_level == 0 {
                 false // At folder list, no browse results are relevant
-            } else if app.breadcrumb_trail.is_empty() {
+            } else if app.model.breadcrumb_trail.is_empty() {
                 false // No breadcrumb trail, nothing is relevant
             } else {
                 // Check if this folder_id matches any level in our current breadcrumb trail
                 // This allows prefetching subdirectories that aren't yet open
-                app.breadcrumb_trail
+                app.model.breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id)
             };
@@ -111,7 +111,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             crate::log_debug(&format!("DEBUG [BrowseResult]: folder={} prefix={:?} focus_level={} breadcrumb_count={}",
-                               folder_id, prefix, app.model.focus_level, app.breadcrumb_trail.len()));
+                               folder_id, prefix, app.model.focus_level, app.model.breadcrumb_trail.len()));
 
             // Save merged items to cache
             if let Err(e) = app.cache.save_browse_items(
@@ -130,12 +130,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Find matching breadcrumb level (works for both root and non-root)
             let matching_level_idx = if prefix.is_none() {
                 // Root level: match folder_id and no prefix
-                app.breadcrumb_trail
+                app.model.breadcrumb_trail
                     .iter()
                     .position(|level| level.folder_id == folder_id && level.prefix.is_none())
             } else {
                 // Non-root level: match folder_id and prefix
-                app.breadcrumb_trail
+                app.model.breadcrumb_trail
                     .iter()
                     .position(|level| level.folder_id == folder_id && level.prefix == prefix)
             };
@@ -150,11 +150,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 let cached_states =
                     app.load_sync_states_from_cache(&folder_id, &items, prefix.as_deref());
 
-                if let Some(level) = app.breadcrumb_trail.get_mut(idx) {
+                if let Some(level) = app.model.breadcrumb_trail.get_mut(idx) {
                     // Save currently selected item name BEFORE replacing items
                     let selected_name = level
-                        .state
-                        .selected()
+                        .selected_index
+                        
                         .and_then(|sel_idx| level.items.get(sel_idx))
                         .map(|item| item.name.clone());
 
@@ -223,11 +223,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Check if this response is still relevant to current navigation
             let is_relevant = if app.model.focus_level == 0 {
                 false // At folder list, no file info is relevant
-            } else if app.breadcrumb_trail.is_empty() {
+            } else if app.model.breadcrumb_trail.is_empty() {
                 false // No breadcrumb trail, nothing is relevant
             } else {
                 // Check if this folder_id matches any level in our current breadcrumb trail
-                app.breadcrumb_trail
+                app.model.breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id)
             };
@@ -260,7 +260,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // Update UI if this file is visible in current level
             let mut updated = false;
-            for (_level_idx, level) in app.breadcrumb_trail.iter_mut().enumerate() {
+            for (_level_idx, level) in app.model.breadcrumb_trail.iter_mut().enumerate() {
                 if level.folder_id == folder_id {
                     // Check if this file path belongs to this level
                     let level_prefix = level.prefix.as_deref().unwrap_or("");
@@ -321,12 +321,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             if let Some(&last_seq) = app.model.last_known_sequences.get(&folder_id) {
                 if last_seq != sequence {
                     // Log HashMap size BEFORE any operations
-                    if !app.breadcrumb_trail.is_empty()
-                        && app.breadcrumb_trail[0].folder_id == folder_id
+                    if !app.model.breadcrumb_trail.is_empty()
+                        && app.model.breadcrumb_trail[0].folder_id == folder_id
                     {
                         crate::log_bug(&format!(
                             "seq_change: BEFORE operations - HashMap has {} states",
-                            app.breadcrumb_trail[0].file_sync_states.len()
+                            app.model.breadcrumb_trail[0].file_sync_states.len()
                         ));
                     }
 
@@ -337,12 +337,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     let _ = app.cache.invalidate_folder(&folder_id);
 
                     // Log HashMap size AFTER cache invalidation
-                    if !app.breadcrumb_trail.is_empty()
-                        && app.breadcrumb_trail[0].folder_id == folder_id
+                    if !app.model.breadcrumb_trail.is_empty()
+                        && app.model.breadcrumb_trail[0].folder_id == folder_id
                     {
                         crate::log_bug(&format!(
                             "seq_change: after cache.invalidate - HashMap has {} states",
-                            app.breadcrumb_trail[0].file_sync_states.len()
+                            app.model.breadcrumb_trail[0].file_sync_states.len()
                         ));
                     }
 
@@ -351,12 +351,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
 
                     // Log HashMap size after discovered_dirs.retain
-                    if !app.breadcrumb_trail.is_empty()
-                        && app.breadcrumb_trail[0].folder_id == folder_id
+                    if !app.model.breadcrumb_trail.is_empty()
+                        && app.model.breadcrumb_trail[0].folder_id == folder_id
                     {
                         crate::log_bug(&format!(
                             "seq_change: after discovered_dirs.retain - HashMap has {} states",
-                            app.breadcrumb_trail[0].file_sync_states.len()
+                            app.model.breadcrumb_trail[0].file_sync_states.len()
                         ));
                     }
                 }
@@ -368,10 +368,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     crate::log_debug(&format!("DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}", last_count, receive_only_count, folder_id));
 
                     // Trigger refresh for currently viewed directory
-                    if !app.breadcrumb_trail.is_empty()
-                        && app.breadcrumb_trail[0].folder_id == folder_id
+                    if !app.model.breadcrumb_trail.is_empty()
+                        && app.model.breadcrumb_trail[0].folder_id == folder_id
                     {
-                        for level in &mut app.breadcrumb_trail {
+                        for level in &mut app.model.breadcrumb_trail {
                             if level.folder_id == folder_id {
                                 let browse_key = format!(
                                     "{}:{}",
