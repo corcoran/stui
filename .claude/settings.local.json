@@ -24,7 +24,8 @@
       "Bash(echo:*)",
       "WebFetch(domain:docs.rs)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git mv:*)"
     ],
     "deny": [],
     "ask": []

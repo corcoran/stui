@@ -3,8 +3,8 @@
 //! Handles cache invalidation events from the Syncthing event stream.
 //! These events tell us when files/directories change so we can refresh the UI.
 
-use crate::api_service::{ApiRequest, Priority};
-use crate::event_listener::CacheInvalidation;
+use crate::services::api::{ApiRequest, Priority};
+use crate::services::events::CacheInvalidation;
 use crate::App;
 
 /// Handle cache invalidation messages from event listener

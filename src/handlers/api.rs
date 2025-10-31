@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use crate::api::SyncState;
-use crate::api_service::{ApiRequest, ApiResponse, Priority};
+use crate::services::api::{ApiRequest, ApiResponse, Priority};
 use crate::App;
 
 /// Handle API response from background service

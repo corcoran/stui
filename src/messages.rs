@@ -16,8 +16,8 @@
 
 use crossterm::event::KeyEvent;
 
-use crate::api_service::ApiResponse;
-use crate::event_listener::CacheInvalidation;
+use crate::services::api::ApiResponse;
+use crate::services::events::CacheInvalidation;
 use crate::ImagePreviewState;
 
 /// Unified message type for all application events

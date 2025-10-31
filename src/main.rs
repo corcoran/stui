@@ -41,13 +41,12 @@ static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
 static BUG_MODE: AtomicBool = AtomicBool::new(false);
 
 mod api;
-mod api_service;
 mod cache;
 mod config;
-mod event_listener;
 mod handlers;
 mod logic;
 mod messages;
+mod services;
 mod state;
 mod ui;
 mod utils;
@@ -254,10 +253,10 @@ pub struct App {
     // Pending ignore+delete operations (safety mechanism to prevent un-ignore during deletion)
     pub pending_ignore_deletes: HashMap<String, PendingDeleteInfo>, // folder_id -> pending delete info
     // API service channels
-    api_tx: tokio::sync::mpsc::UnboundedSender<api_service::ApiRequest>,
-    api_rx: tokio::sync::mpsc::UnboundedReceiver<api_service::ApiResponse>,
+    api_tx: tokio::sync::mpsc::UnboundedSender<services::api::ApiRequest>,
+    api_rx: tokio::sync::mpsc::UnboundedReceiver<services::api::ApiResponse>,
     // Event listener channels
-    invalidation_rx: tokio::sync::mpsc::UnboundedReceiver<event_listener::CacheInvalidation>,
+    invalidation_rx: tokio::sync::mpsc::UnboundedReceiver<services::events::CacheInvalidation>,
     event_id_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
     // Performance metrics
     pub last_load_time_ms: Option<u64>, // Time to load current directory (milliseconds)
@@ -474,7 +473,7 @@ impl App {
         let devices = client.get_devices().await.unwrap_or_default();
 
         // Spawn API service worker
-        let (api_tx, api_rx) = api_service::spawn_api_service(client.clone());
+        let (api_tx, api_rx) = services::api::spawn_api_service(client.clone());
 
         // Get last event ID from cache
         let last_event_id = cache.get_last_event_id().unwrap_or(0);
@@ -487,7 +486,7 @@ impl App {
         let (image_update_tx, image_update_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Spawn event listener
-        event_listener::spawn_event_listener(
+        services::events::spawn_event_listener(
             config.base_url.clone(),
             config.api_key.clone(),
             last_event_id,
@@ -692,7 +691,7 @@ impl App {
         // Non-blocking version for background polling
         // Sends status requests via API service
         for folder in &self.folders {
-            let _ = self.api_tx.send(api_service::ApiRequest::GetFolderStatus {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetFolderStatus {
                 folder_id: folder.id.clone(),
             });
         }
@@ -700,13 +699,13 @@ impl App {
 
     /// Handle API responses from background worker
     /// Delegated to handlers::api module
-    fn handle_api_response(&mut self, response: api_service::ApiResponse) {
+    fn handle_api_response(&mut self, response: services::api::ApiResponse) {
         handlers::handle_api_response(self, response);
     }
 
     /// Handle cache invalidation messages from event listener
     /// Delegated to handlers::events module
-    fn handle_cache_invalidation(&mut self, invalidation: event_listener::CacheInvalidation) {
+    fn handle_cache_invalidation(&mut self, invalidation: services::events::CacheInvalidation) {
         handlers::handle_cache_invalidation(self, invalidation);
     }
 
@@ -1002,10 +1001,10 @@ impl App {
             ));
 
             // Send non-blocking request via channel
-            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
                 folder_id: folder_id.clone(),
                 file_path: file_path.clone(),
-                priority: api_service::Priority::Medium,
+                priority: services::api::Priority::Medium,
             });
         }
     }
@@ -1096,10 +1095,10 @@ impl App {
             self.loading_sync_states.insert(sync_key.clone());
 
             // Send non-blocking request for directory's sync state
-            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
                 folder_id: folder_id.clone(),
                 file_path: dir_path.to_string(),
-                priority: api_service::Priority::Low, // Low priority, it's speculative prefetch
+                priority: services::api::Priority::Low, // Low priority, it's speculative prefetch
             });
         }
     }
@@ -1148,10 +1147,10 @@ impl App {
                 self.discovered_dirs.insert(browse_key.clone());
 
                 // Send non-blocking browse request
-                let _ = self.api_tx.send(api_service::ApiRequest::BrowseFolder {
+                let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
                     folder_id: folder_id.to_string(),
                     prefix: Some(dir_path.to_string()),
-                    priority: api_service::Priority::Low,
+                    priority: services::api::Priority::Low,
                 });
             }
             return; // Skip this iteration, will process when cached
@@ -1245,10 +1244,10 @@ impl App {
 
             // Send non-blocking request via API service
             // Response will be handled by handle_api_response
-            let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
                 folder_id: folder_id.clone(),
                 file_path: dir_path.clone(),
-                priority: api_service::Priority::Medium,
+                priority: services::api::Priority::Medium,
             });
         }
     }
@@ -1287,10 +1286,10 @@ impl App {
 
                     // Send non-blocking request via API service
                     // Response will be handled by handle_api_response
-                    let _ = self.api_tx.send(api_service::ApiRequest::GetFileInfo {
+                    let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
                         folder_id: level.folder_id.clone(),
                         file_path: file_path.clone(),
-                        priority: api_service::Priority::High, // High priority for selected item
+                        priority: services::api::Priority::High, // High priority for selected item
                     });
                 }
             }
@@ -2008,7 +2007,7 @@ impl App {
         // Trigger rescan via non-blocking API
         let _ = self
             .api_tx
-            .send(api_service::ApiRequest::RescanFolder { folder_id });
+            .send(services::api::ApiRequest::RescanFolder { folder_id });
 
         Ok(())
     }
@@ -2865,10 +2864,10 @@ impl App {
                         file_path_for_api
                     ));
                     // Fetch file info as fallback (for files already synced, no ItemStarted will fire)
-                    let _ = api_tx.send(api_service::ApiRequest::GetFileInfo {
+                    let _ = api_tx.send(services::api::ApiRequest::GetFileInfo {
                         folder_id: folder_id_clone,
                         file_path: file_path_for_api,
-                        priority: api_service::Priority::Medium,
+                        priority: services::api::Priority::Medium,
                     });
                 });
             } else {
@@ -3295,12 +3294,12 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Refresh device/system status periodically (less frequently than folder stats)
         // System status every 30 seconds, connection stats every 2-3 seconds
         if app.last_system_status_update.elapsed() >= std::time::Duration::from_secs(30) {
-            let _ = app.api_tx.send(api_service::ApiRequest::GetSystemStatus);
+            let _ = app.api_tx.send(services::api::ApiRequest::GetSystemStatus);
             app.last_system_status_update = Instant::now();
         }
 
         if app.last_connection_stats_fetch.elapsed() >= std::time::Duration::from_millis(5000) {
-            let _ = app.api_tx.send(api_service::ApiRequest::GetConnectionStats);
+            let _ = app.api_tx.send(services::api::ApiRequest::GetConnectionStats);
             app.last_connection_stats_fetch = Instant::now();
         }
 

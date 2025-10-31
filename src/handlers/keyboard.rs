@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::api::SyncState;
-use crate::api_service;
+use crate::services::api;
 use crate::App;
 
 /// Handle keyboard input
@@ -248,10 +248,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 file_path_for_api
                             ));
                             // Fetch file info as fallback
-                            let _ = api_tx.send(api_service::ApiRequest::GetFileInfo {
+                            let _ = api_tx.send(crate::services::api::ApiRequest::GetFileInfo {
                                 folder_id: folder_id_clone,
                                 file_path: file_path_for_api,
-                                priority: api_service::Priority::Medium,
+                                priority: crate::services::api::Priority::Medium,
                             });
                         });
                     }
