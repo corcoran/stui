@@ -36,7 +36,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             });
 
             // Update last change info for this folder
-            app.model.last_folder_updates.insert(
+            app.model.syncthing.last_folder_updates.insert(
                 folder_id.clone(),
                 (std::time::SystemTime::now(), file_path.clone()),
             );
@@ -49,10 +49,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             };
 
             // Check if we're currently viewing this directory - if so, trigger refresh
-            if !app.model.breadcrumb_trail.is_empty()
-                && app.model.breadcrumb_trail[0].folder_id == folder_id
+            if !app.model.navigation.breadcrumb_trail.is_empty()
+                && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.model.breadcrumb_trail.iter_mut().enumerate() {
+                for (_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Don't clear state immediately - causes flicker to Unknown
                         // The Browse response will naturally update the state with fresh data
@@ -65,8 +65,8 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                             // Trigger a fresh browse request
                             let browse_key =
                                 format!("{}:{}", folder_id, parent_dir.unwrap_or(""));
-                            if !app.model.loading_browse.contains(&browse_key) {
-                                app.model.loading_browse.insert(browse_key);
+                            if !app.model.performance.loading_browse.contains(&browse_key) {
+                                app.model.performance.loading_browse.insert(browse_key);
 
                                 let _ =
                                     app.api_tx.send(ApiRequest::BrowseFolder {
@@ -101,16 +101,16 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             });
 
             // Update last change info for this folder
-            app.model.last_folder_updates.insert(
+            app.model.syncthing.last_folder_updates.insert(
                 folder_id.clone(),
                 (std::time::SystemTime::now(), dir_path.clone()),
             );
 
             // Clear in-memory state for all files in this directory and trigger refresh if viewing
-            if !app.model.breadcrumb_trail.is_empty()
-                && app.model.breadcrumb_trail[0].folder_id == folder_id
+            if !app.model.navigation.breadcrumb_trail.is_empty()
+                && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.model.breadcrumb_trail.iter_mut().enumerate() {
+                for (_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate() {
                     if level.folder_id == folder_id {
                         // Remove all states that start with this directory path
                         let dir_prefix = if dir_path.is_empty() {
@@ -146,8 +146,8 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                             // This level is showing the changed directory - trigger refresh
                             let browse_key =
                                 format!("{}:{}", folder_id, level_prefix.unwrap_or(""));
-                            if !app.model.loading_browse.contains(&browse_key) {
-                                app.model.loading_browse.insert(browse_key);
+                            if !app.model.performance.loading_browse.contains(&browse_key) {
+                                app.model.performance.loading_browse.insert(browse_key);
 
                                 let _ =
                                     app.api_tx.send(ApiRequest::BrowseFolder {
@@ -165,7 +165,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
 
             // Clear discovered directories cache for this path
             let dir_key_prefix = format!("{}:{}", folder_id, dir_path);
-            app.model.discovered_dirs
+            app.model.performance.discovered_dirs
                 .retain(|key| !key.starts_with(&dir_key_prefix));
         }
         CacheInvalidation::ItemStarted {
