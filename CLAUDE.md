@@ -96,6 +96,50 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `p`: Pause/resume folder (folder view only, with confirmation)
 - Vim keybindings (optional): `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
 
+### Search Feature
+
+**Real-time recursive file search** with wildcard support and intelligent filtering:
+
+- **Trigger**: `Ctrl-F` (normal mode) or `/` (vim mode) in breadcrumb view
+- **Search Scope**: Recursively searches all cached files/directories in current folder, including deeply nested subdirectories
+- **Search Input**:
+  - Appears above hotkey legend with `Match: ` prompt and blinking cursor
+  - Cyan border when active, gray when inactive
+  - Shows match count in title: `Search (3 matches) - Esc to cancel`
+- **Real-Time Filtering**: Items filter as you type (no debouncing needed - fast!)
+- **Pattern Matching**:
+  - Case-insensitive substring matching
+  - Wildcard support: `*` matches any sequence of characters
+  - Examples: `*jeff*`, `*.txt`, `photo*`
+  - Matches file names and path components
+- **Intelligent Display**:
+  - Shows parent directories if they contain matching descendants
+  - Example: Searching "jeff" in root shows "Movies/" if "Movies/Photos/jeff-1.txt" exists
+  - Drilling into "Movies/" shows "Photos/" breadcrumb
+  - Drilling into "Photos/" shows actual "jeff-1.txt" file
+- **Search Persistence**:
+  - Query persists when navigating into subdirectories
+  - Search automatically applies to new directories
+  - **Context-aware clearing**: Only clears when backing out past the directory where search was initiated
+    - Start search in `Foo/` → navigate to `Foo/Bar/` → search persists
+    - Back out to `Foo/` → search still active
+    - Back out to folder list → search clears automatically
+- **Exit Options**:
+  - `Esc`: Clear search and restore all items
+  - `Enter`: Accept search (keep filtering, deactivate input)
+  - `Backspace` to empty: Auto-exit and restore all items
+- **Performance**: Optimized for speed - handles 1000+ files instantly with recursive search
+- **UI Integration**:
+  - Search box appears between main content and legend
+  - Legend shows mode-specific hotkey: `^F:Search` or `/:Search`
+  - During search: `Esc:Exit Search` or `Esc:Clear Search`
+
+**Implementation Details**:
+- Uses SQLite cache for fast recursive queries across all subdirectories
+- Prefetch system ensures all subdirectories are cached for instant search
+- State tracking prevents duplicate API requests with `discovered_dirs` HashSet
+- Search origin level tracking (`search_origin_level`) enables context-aware clearing
+
 ### Status Bar & UI Elements
 
 **UI Layout (top to bottom):**
@@ -188,7 +232,7 @@ CLI flags:
   - `ui.rs` - UI preferences, dialogs, popups
   - `performance.rs` - Loading tracking, metrics, pending operations
   - `types.rs` - Shared types (BreadcrumbLevel, FileInfoPopupState, etc.)
-- `src/logic/` - Pure business logic functions (15 functions, 67 tests)
+- `src/logic/` - Pure business logic functions (18 functions, 100+ tests)
   - `file.rs` - File type detection
   - `folder.rs` - Folder validation and state checking
   - `formatting.rs` - Data formatting (uptime, file sizes)
@@ -197,15 +241,17 @@ CLI flags:
   - `navigation.rs` - Selection navigation logic
   - `path.rs` - Path translation (container ↔ host)
   - `performance.rs` - Batching and throttling logic
+  - `search.rs` - Search pattern matching (wildcards, case-insensitive)
   - `sync_states.rs` - Sync state priority and validation
   - `ui.rs` - UI state transitions (display modes, sort, vim commands)
-- `src/ui/` - Rendering components (11 modules)
+- `src/ui/` - Rendering components (12 modules)
   - `render.rs` - Main render coordinator
   - `folder_list.rs` - Folder list panel with status icons
   - `breadcrumb.rs` - Breadcrumb navigation panels with scrollbars
   - `dialogs.rs` - Confirmation dialogs and popups
   - `icons.rs` - Icon rendering (emoji/nerdfont) with color themes
   - `legend.rs` - Context-aware hotkey legend
+  - `search.rs` - Search input box with real-time filtering
   - `status_bar.rs` - Bottom status bar with sync info
   - `system_bar.rs` - Top system bar with device info
   - `layout.rs` - Panel layout calculations
@@ -293,14 +339,13 @@ CLI flags:
 
 **Architecture Quality:**
 - ✅ Clean separation: Model (pure state) vs Runtime (services)
-- ✅ Pure business logic extracted (15 functions, 67 tests)
-- ✅ 124 total tests passing (67 logic + 34 model + 17 state + 6 misc)
+- ✅ Pure business logic extracted (18 functions, 100+ tests)
+- ✅ 157 total tests passing (100+ logic + 43+ model + 14 misc)
 - ✅ Zero warnings, production-ready code
 - ✅ Comprehensive refactoring complete (see ELM_REWRITE_PREP.md)
 
 ### Known Limitations
 - No async loading spinners (planned)
-- No filtering by file type or name (planned)
 - No batch operations for multi-select
 - Error handling and timeout management needs improvement
 
@@ -320,13 +365,38 @@ CLI flags:
 - **Error Handling**: Graceful degradation, show errors in status bar or toast messages
 - **Non-Blocking**: Keep UI responsive during all API calls
 - **Cache Coherency**: Use sequence numbers to validate cached data
-- **Testing**:
-  - Test with real Syncthing Docker instances with large datasets
-  - **IMPORTANT**: Always add unit tests when refactoring code or adding new features
-  - Pure business logic in `src/logic/` should have comprehensive test coverage
-  - Model state transitions should have tests in corresponding test modules
-  - Run `cargo test` before committing to ensure all 124+ tests pass
-  - Aim for zero compiler warnings (`cargo build` should be clean)
+- **Testing - CRITICAL REQUIREMENT**:
+  - **ALWAYS write tests when:**
+    1. Adding new features (especially state management)
+    2. Fixing bugs or edge cases
+    3. Refactoring existing code
+    4. Adding new model fields or business logic
+  - **Test-Driven Development Pattern:**
+    1. User reports bug or requests feature
+    2. **IMMEDIATELY think: "What tests do I need?"**
+    3. Write tests FIRST that cover:
+       - Happy path (expected behavior)
+       - Edge cases (boundary conditions)
+       - Error cases (what happens when things go wrong)
+       - State transitions (before/after)
+    4. Implement the feature/fix
+    5. Run tests to verify
+    6. If tests fail, fix implementation (not tests)
+  - **Test Coverage Requirements:**
+    - Model state changes → tests in `src/model/*/tests`
+    - Business logic → tests in `src/logic/*/tests`
+    - Integration behavior → document in commit message
+    - Aim for 100% coverage of new code paths
+  - **When Claude forgets to write tests:**
+    - User should immediately call it out
+    - Claude should apologize and write tests before proceeding
+    - This is a critical discipline for production code quality
+  - **Existing test guidelines:**
+    - Test with real Syncthing Docker instances with large datasets
+    - Pure business logic in `src/logic/` should have comprehensive test coverage
+    - Model state transitions should have tests in corresponding test modules
+    - Run `cargo test` before committing to ensure all 157+ tests pass
+    - Aim for zero compiler warnings (`cargo build` should be clean)
 - **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
 
 ### Adding New Features - Common Patterns

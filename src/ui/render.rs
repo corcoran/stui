@@ -3,7 +3,7 @@ use ratatui::Frame;
 
 use super::{
     breadcrumb::{self, DisplayMode},
-    dialogs, folder_list, layout, legend, status_bar, system_bar, toast,
+    dialogs, folder_list, layout, legend, search, status_bar, system_bar, toast,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -82,6 +82,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         pending_operations_count,
     );
 
+    // Determine if search should be visible
+    let search_visible = app.model.ui.search_mode || !app.model.ui.search_query.is_empty();
+
     let layout_info = layout::calculate_layout(
         size,
         app.model.navigation.breadcrumb_trail.len(),
@@ -91,6 +94,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         can_restore,
         app.open_command.is_some(),
         status_height,
+        search_visible,
     );
 
     // Render system info bar at the top
@@ -188,6 +192,29 @@ pub fn render(f: &mut Frame, app: &mut App) {
         breadcrumb_idx += 1;
     }
 
+    // Render search input if visible
+    if let Some(search_area) = layout_info.search_area {
+        let match_count = if app.model.navigation.focus_level > 0 {
+            let level_idx = app.model.navigation.focus_level - 1;
+            app.model
+                .navigation
+                .breadcrumb_trail
+                .get(level_idx)
+                .map(|level| level.items.len())
+        } else {
+            None
+        };
+
+        search::render_search_input(
+            f,
+            search_area,
+            &app.model.ui.search_query,
+            app.model.ui.search_mode,
+            match_count,
+            app.model.ui.vim_mode,
+        );
+    }
+
     // Render hotkey legend if there's space
     if let Some(legend_area) = layout_info.legend_area {
         legend::render_legend(
@@ -197,6 +224,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
             app.model.navigation.focus_level,
             can_restore,
             app.open_command.is_some(),
+            app.model.ui.search_mode,
+            !app.model.ui.search_query.is_empty(),
         );
     }
 

@@ -12,6 +12,8 @@ pub fn build_legend_paragraph(
     focus_level: usize,
     can_restore: bool,
     has_open_command: bool,
+    search_mode: bool,
+    has_search_query: bool,
 ) -> Paragraph<'static> {
     // Build a single line with all hotkeys that will wrap automatically
     let mut hotkey_spans = vec![];
@@ -55,6 +57,29 @@ pub fn build_legend_paragraph(
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Copy path  "),
         ]);
+
+        // Search key - contextual based on search state
+        if search_mode {
+            // Actively typing in search input
+            hotkey_spans.extend(vec![
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(":Exit Search  "),
+            ]);
+        } else if has_search_query {
+            // Search accepted (Enter pressed), showing filtered results
+            hotkey_spans.extend(vec![
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(":Clear Search  "),
+            ]);
+        } else {
+            // No active search, show trigger key
+            let search_key = if vim_mode { "/" } else { "^F" };
+            hotkey_spans.extend(vec![
+                Span::styled(search_key, Style::default().fg(Color::Yellow)),
+                Span::raw(":Search  "),
+            ]);
+        }
+
         hotkey_spans.extend(vec![
             Span::styled("s", Style::default().fg(Color::Yellow)),
             Span::raw(":Sort  "),
@@ -120,8 +145,17 @@ pub fn render_legend(
     focus_level: usize,
     can_restore: bool,
     has_open_command: bool,
+    search_mode: bool,
+    has_search_query: bool,
 ) {
-    let legend = build_legend_paragraph(vim_mode, focus_level, can_restore, has_open_command);
+    let legend = build_legend_paragraph(
+        vim_mode,
+        focus_level,
+        can_restore,
+        has_open_command,
+        search_mode,
+        has_search_query,
+    );
     f.render_widget(legend, area);
 }
 
@@ -132,6 +166,8 @@ pub fn calculate_legend_height(
     focus_level: usize,
     can_restore: bool,
     has_open_command: bool,
+    search_mode: bool,
+    has_search_query: bool,
 ) -> u16 {
     // Build paragraph WITHOUT block borders for accurate line counting
     // (line_count() doesn't account for borders correctly when block is attached)
@@ -176,6 +212,29 @@ pub fn calculate_legend_height(
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Copy path  "),
         ]);
+
+        // Search key - contextual based on search state
+        if search_mode {
+            // Actively typing in search input
+            hotkey_spans.extend(vec![
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(":Exit Search  "),
+            ]);
+        } else if has_search_query {
+            // Search accepted (Enter pressed), showing filtered results
+            hotkey_spans.extend(vec![
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(":Clear Search  "),
+            ]);
+        } else {
+            // No active search, show trigger key
+            let search_key = if vim_mode { "/" } else { "^F" };
+            hotkey_spans.extend(vec![
+                Span::styled(search_key, Style::default().fg(Color::Yellow)),
+                Span::raw(":Search  "),
+            ]);
+        }
+
         hotkey_spans.extend(vec![
             Span::styled("s", Style::default().fg(Color::Yellow)),
             Span::raw(":Sort  "),

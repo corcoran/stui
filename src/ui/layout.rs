@@ -8,6 +8,8 @@ pub struct LayoutInfo {
     pub folders_area: Option<Rect>,
     /// Breadcrumb pane areas
     pub breadcrumb_areas: Vec<Rect>,
+    /// Search input area (if visible)
+    pub search_area: Option<Rect>,
     /// Hotkey legend area (full width)
     pub legend_area: Option<Rect>,
     /// Bottom status bar area
@@ -28,22 +30,29 @@ pub fn calculate_layout(
     can_restore: bool,
     has_open_command: bool,
     status_height: u16,
+    search_visible: bool,
 ) -> LayoutInfo {
     // Calculate dynamic legend height based on terminal width and content
+    // Note: We use search_visible for both parameters since we need visibility for layout
     let legend_height = super::legend::calculate_legend_height(
         terminal_size.width,
         vim_mode,
         focus_level,
         can_restore,
         has_open_command,
+        search_visible, // search_mode (approximation for layout)
+        search_visible, // has_search_query (approximation for layout)
     );
 
-    // Create main layout: system bar (top) + content area + legend + status bar (bottom)
+    let search_height = if search_visible { 3 } else { 0 };
+
+    // Create main layout: system bar (top) + content area + search + legend + status bar (bottom)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),            // System info bar (3 lines: top border, text, bottom border)
             Constraint::Min(3),               // Content area (folders + breadcrumbs)
+            Constraint::Length(search_height), // Search input (3 lines when visible, 0 when hidden)
             Constraint::Length(legend_height), // Legend area (dynamic height, exact fit for wrapped content)
             Constraint::Length(status_height), // Status bar (dynamic height, exact fit for wrapped content)
         ])
@@ -51,8 +60,13 @@ pub fn calculate_layout(
 
     let system_area = main_chunks[0];
     let content_area = main_chunks[1];
-    let legend_area = main_chunks[2];
-    let status_area = main_chunks[3];
+    let search_area = if search_visible {
+        Some(main_chunks[2])
+    } else {
+        None
+    };
+    let legend_area = main_chunks[3];
+    let status_area = main_chunks[4];
 
     // Calculate which panes should be visible based on available width
     let pane_range = crate::logic::layout::calculate_visible_pane_range(
@@ -107,6 +121,7 @@ pub fn calculate_layout(
         system_area,
         folders_area,
         breadcrumb_areas,
+        search_area,
         legend_area: Some(legend_area), // Always show legend
         status_area,
         start_pane,

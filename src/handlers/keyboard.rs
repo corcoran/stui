@@ -462,6 +462,105 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
 
+        // Handle search input mode (process before other keys)
+        // Only process these keys if actively typing (search_mode = true)
+        if app.model.ui.search_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    // Exit search mode and clear query
+                    app.model.ui.search_mode = false;
+                    app.model.ui.search_query.clear();
+                    app.model.ui.search_origin_level = None;
+                    // Clear prefetch tracking
+                    app.model.performance.discovered_dirs.clear();
+                    // Reload all breadcrumb levels without filter
+                    app.refresh_all_breadcrumbs().await?;
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    // Accept search and exit input mode (keep filtering active)
+                    crate::log_debug(&format!(
+                        "DEBUG [keyboard]: Enter pressed in search mode, query='{}', keeping filter active",
+                        app.model.ui.search_query
+                    ));
+                    app.model.ui.search_mode = false;
+                    return Ok(());
+                }
+                KeyCode::Backspace => {
+                    // Remove last character
+                    app.model.ui.search_query.pop();
+
+                    // If query is now empty, exit search mode
+                    if app.model.ui.search_query.is_empty() {
+                        app.model.ui.search_mode = false;
+                        app.model.ui.search_origin_level = None;
+                        app.refresh_current_breadcrumb().await?;
+                    } else {
+                        // Re-filter current breadcrumb
+                        app.apply_search_filter();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char(c) => {
+                    // Add character to query
+                    app.model.ui.search_query.push(c);
+
+                    // When query reaches 2 characters, trigger recursive prefetch
+                    if app.model.ui.search_query.len() == 2 {
+                        if let Some(level) = app
+                            .model
+                            .navigation
+                            .breadcrumb_trail
+                            .get(app.model.navigation.focus_level.saturating_sub(1))
+                        {
+                            let folder_id = level.folder_id.clone();
+                            let prefix = level.prefix.clone();
+
+                            crate::log_debug(&format!(
+                                "DEBUG [keyboard]: Search query reached 2 chars, starting prefetch for folder '{}' prefix '{:?}'",
+                                folder_id,
+                                prefix
+                            ));
+
+                            // Clear previous prefetch tracking for new search
+                            app.model.performance.discovered_dirs.clear();
+
+                            // Start prefetch from current location
+                            app.prefetch_subdirectories_for_search(&folder_id, prefix.as_deref());
+                        }
+                    }
+
+                    // Re-filter current breadcrumb in real-time (only applies filter if >= 2 chars)
+                    app.apply_search_filter();
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys in search mode
+                    return Ok(());
+                }
+            }
+        }
+
+        // Handle Esc in breadcrumbs - clear search if active (even when not in search_mode)
+        if key.code == KeyCode::Esc {
+            crate::log_debug(&format!(
+                "DEBUG [keyboard]: Esc pressed - focus_level={}, search_query='{}', search_mode={}",
+                app.model.navigation.focus_level,
+                app.model.ui.search_query,
+                app.model.ui.search_mode
+            ));
+
+            if app.model.navigation.focus_level > 0 && !app.model.ui.search_query.is_empty() {
+                crate::log_debug("DEBUG [keyboard]: Clearing search...");
+                app.model.ui.search_query.clear();
+                // Clear prefetch tracking
+                app.model.performance.discovered_dirs.clear();
+                // Reload all breadcrumb levels without filter
+                app.refresh_all_breadcrumbs().await?;
+                return Ok(());
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => app.model.ui.should_quit = true,
             KeyCode::Char('r') => {
@@ -484,6 +583,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             {
                 app.model.ui.vim_command_state = model::VimCommandState::None;
                 app.half_page_up(20).await;
+            }
+            KeyCode::Char('f')
+                if !app.model.ui.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                // Ctrl-F: Enter search mode (normal mode only - vim uses / instead)
+                // Only available in breadcrumb view, not folder list
+                if app.model.navigation.focus_level > 0 {
+                    app.model.ui.search_mode = true;
+                    app.model.ui.search_query.clear();
+                    app.model.ui.search_origin_level = Some(app.model.navigation.focus_level);
+                }
             }
             KeyCode::Char('f')
                 if app.model.ui.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -571,6 +681,15 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Char('t') => {
                 // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
                 app.model.ui.display_mode = crate::logic::ui::cycle_display_mode(app.model.ui.display_mode);
+            }
+            KeyCode::Char('/') if app.model.ui.vim_mode => {
+                // /: Enter search mode (vim mode only)
+                // Only available in breadcrumb view, not folder list
+                if app.model.navigation.focus_level > 0 {
+                    app.model.ui.search_mode = true;
+                    app.model.ui.search_query.clear();
+                    app.model.ui.search_origin_level = Some(app.model.navigation.focus_level);
+                }
             }
             KeyCode::Char('?') if app.model.navigation.focus_level > 0 => {
                 // Toggle file information popup

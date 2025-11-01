@@ -1473,6 +1473,11 @@ impl App {
 
                 // Apply initial sorting
                 self.sort_current_level();
+
+                // Apply search filter if search is active
+                if !self.model.ui.search_query.is_empty() {
+                    self.apply_search_filter();
+                }
             }
         }
 
@@ -1480,10 +1485,54 @@ impl App {
     }
 
     fn go_back(&mut self) {
+        // Only clear search if backing out past the level where it was initiated
+        let should_clear_search = if let Some(origin_level) = self.model.ui.search_origin_level {
+            // Clear search if we're backing out of the origin level or below it
+            self.model.navigation.focus_level <= origin_level
+        } else {
+            false
+        };
+
+        if should_clear_search {
+            self.model.ui.search_mode = false;
+            self.model.ui.search_query.clear();
+            self.model.ui.search_origin_level = None;
+            self.model.performance.discovered_dirs.clear();
+        }
+
         if self.model.navigation.focus_level > 1 {
+            // Backing out to a parent breadcrumb - refresh it if search was cleared
+            if should_clear_search && self.model.navigation.focus_level >= 2 {
+                let parent_idx = self.model.navigation.focus_level - 2;
+                if let Some(parent_level) = self.model.navigation.breadcrumb_trail.get(parent_idx) {
+                    let folder_id = parent_level.folder_id.clone();
+                    let prefix = parent_level.prefix.clone();
+
+                    let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                        folder_id,
+                        prefix,
+                        priority: services::api::Priority::High,
+                    });
+                }
+            }
+
             self.model.navigation.breadcrumb_trail.pop();
             self.model.navigation.focus_level -= 1;
         } else if self.model.navigation.focus_level == 1 {
+            // Going back to folder view - refresh root directory if search was cleared
+            if should_clear_search {
+                if let Some(root_level) = self.model.navigation.breadcrumb_trail.first() {
+                    let folder_id = root_level.folder_id.clone();
+                    let prefix = root_level.prefix.clone();
+
+                    let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                        folder_id,
+                        prefix,
+                        priority: services::api::Priority::High,
+                    });
+                }
+            }
+
             self.model.navigation.focus_level = 0;
         }
     }
@@ -1622,6 +1671,297 @@ impl App {
             self.model.ui.sort_reverse = new_reverse;
             self.sort_all_levels(); // Apply to all levels
         }
+    }
+
+    /// Recursively prefetch all subdirectories for search
+    ///
+    /// Queues browse requests for all subdirectories found in the cache.
+    /// Uses discovered_dirs to prevent duplicate fetches.
+    fn prefetch_subdirectories_for_search(&mut self, folder_id: &str, prefix: Option<&str>) {
+        let folder_sequence = self
+            .model
+            .syncthing
+            .folder_statuses
+            .get(folder_id)
+            .map(|status| status.sequence)
+            .unwrap_or(0);
+
+        // Check cache for items at this prefix
+        if let Ok(Some(items)) = self
+            .cache
+            .get_browse_items(folder_id, prefix, folder_sequence)
+        {
+            // Queue browse requests for all subdirectories
+            for item in items {
+                if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                    let subdir_prefix = if let Some(p) = prefix {
+                        format!("{}{}/", p, item.name)
+                    } else {
+                        format!("{}/", item.name)
+                    };
+
+                    // Check if we've already queued this directory
+                    let prefetch_key = format!("{}:{}", folder_id, subdir_prefix);
+                    if self.model.performance.discovered_dirs.contains(&prefetch_key) {
+                        continue; // Already queued, skip
+                    }
+
+                    crate::log_debug(&format!(
+                        "DEBUG [prefetch]: Queuing browse for '{}'",
+                        subdir_prefix
+                    ));
+
+                    // Mark as queued BEFORE sending request
+                    self.model.performance.discovered_dirs.insert(prefetch_key);
+
+                    // Queue the browse request (low priority)
+                    let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                        folder_id: folder_id.to_string(),
+                        prefix: Some(subdir_prefix),
+                        priority: services::api::Priority::Low,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Apply search filter to current breadcrumb level
+    ///
+    /// Searches ALL cached items in the folder recursively and filters the current
+    /// level to show items that either match or have descendants that match.
+    fn apply_search_filter(&mut self) {
+        // Don't filter folder list (only breadcrumbs)
+        if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        let level_idx = self.model.navigation.focus_level - 1;
+        if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+            let folder_id = level.folder_id.clone();
+            let prefix = level.prefix.clone();
+            let query = self.model.ui.search_query.clone();
+
+            // If query is empty, reload without filter
+            if query.is_empty() {
+                // Queue API request to reload the breadcrumb level
+                let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                    folder_id,
+                    prefix,
+                    priority: services::api::Priority::High,
+                });
+                return;
+            }
+
+            // Minimum 2 characters required for search
+            if query.len() < 2 {
+                return;
+            }
+
+            // Get folder sequence for cache validation
+            let folder_sequence = self
+                .model
+                .syncthing
+                .folder_statuses
+                .get(&folder_id)
+                .map(|status| status.sequence)
+                .unwrap_or(0);
+
+            // Get ALL cached items in the folder recursively
+            crate::log_debug(&format!(
+                "DEBUG [apply_search_filter]: Calling get_all_browse_items for folder={}, sequence={}",
+                folder_id,
+                folder_sequence
+            ));
+            let all_items = match self.cache.get_all_browse_items(&folder_id, folder_sequence) {
+                Ok(items) => {
+                    crate::log_debug(&format!(
+                        "DEBUG [apply_search_filter]: Got {} total cached items for folder {}",
+                        items.len(),
+                        folder_id
+                    ));
+                    items
+                }
+                Err(e) => {
+                    crate::log_debug(&format!(
+                        "DEBUG [apply_search_filter]: Failed to get all items: {:?}",
+                        e
+                    ));
+                    // Fallback to current directory only if cache query fails
+                    // Fallback to current directory only if cache query fails
+                    if let Ok(Some(cached_items)) =
+                        self.cache
+                            .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
+                    {
+                        let filtered = logic::search::filter_items(
+                            &cached_items,
+                            &query,
+                            prefix.as_deref(),
+                        );
+                        level.items = filtered;
+                        level.selected_index = if level.items.is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        };
+                    }
+                    return;
+                }
+            };
+
+            // Get current directory items from cache (unfiltered)
+            let current_items = match self
+                .cache
+                .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
+            {
+                Ok(Some(items)) => items,
+                _ => {
+                    // If we can't get current items, nothing to filter
+                    return;
+                }
+            };
+
+            // Build current path for comparison
+            let current_path = prefix.as_deref().unwrap_or("");
+
+            // Filter current level items: show items that match OR have matching descendants
+            crate::log_debug(&format!(
+                "DEBUG [apply_search_filter]: Filtering {} items at path '{}' with query '{}'",
+                current_items.len(),
+                current_path,
+                query
+            ));
+
+            let filtered_items: Vec<api::BrowseItem> = current_items
+                .into_iter()
+                .filter(|item| {
+                    let item_path = if current_path.is_empty() {
+                        item.name.clone()
+                    } else {
+                        // current_path already ends with /, so just append
+                        format!("{}{}", current_path, item.name)
+                    };
+
+                    crate::log_debug(&format!(
+                        "DEBUG [apply_search_filter]: Processing item '{}' (type: {}), all_items.len()={}",
+                        item_path,
+                        item.item_type,
+                        all_items.len()
+                    ));
+
+                    // Check if item itself matches
+                    if logic::search::search_matches(&query, &item_path) {
+                        crate::log_debug(&format!(
+                            "DEBUG [apply_search_filter]: MATCH - Item '{}' matches query",
+                            item_path
+                        ));
+                        return true;
+                    }
+
+                    // For directories, check if any descendant (at any depth) matches
+                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                        let descendant_prefix = format!("{}/", item_path);
+                        crate::log_debug(&format!(
+                            "DEBUG [apply_search_filter]: Checking directory '{}' for descendants matching '{}'",
+                            item_path,
+                            query
+                        ));
+
+                        // Check if ANY file/folder inside this directory tree matches the query
+                        let has_matching_descendant = all_items.iter().any(|(full_path, _)| {
+                            // If this item is a descendant of our directory
+                            if full_path.starts_with(&descendant_prefix) {
+                                let matches = logic::search::search_matches(&query, full_path);
+                                if matches {
+                                    crate::log_debug(&format!(
+                                        "DEBUG [apply_search_filter]: Found matching descendant '{}' in directory '{}'",
+                                        full_path,
+                                        item_path
+                                    ));
+                                }
+                                matches
+                            } else {
+                                false
+                            }
+                        });
+
+                        if has_matching_descendant {
+                            crate::log_debug(&format!(
+                                "DEBUG [apply_search_filter]: MATCH - Directory '{}' has matching descendants",
+                                item_path
+                            ));
+                        } else {
+                            crate::log_debug(&format!(
+                                "DEBUG [apply_search_filter]: NO MATCH - Directory '{}' has no matching descendants",
+                                item_path
+                            ));
+                        }
+
+                        has_matching_descendant
+                    } else {
+                        crate::log_debug(&format!(
+                            "DEBUG [apply_search_filter]: NO MATCH - File '{}' does not match query",
+                            item_path
+                        ));
+                        false
+                    }
+                })
+                .collect();
+
+            crate::log_debug(&format!(
+                "DEBUG [apply_search_filter]: Filtered to {} items",
+                filtered_items.len()
+            ));
+
+            // Update items with filtered list
+            level.items = filtered_items;
+
+            // Reset selection to first item (if any matches)
+            level.selected_index = if level.items.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        }
+    }
+
+    /// Refresh current breadcrumb without search filter (restore original items)
+    async fn refresh_current_breadcrumb(&mut self) -> Result<()> {
+        if self.model.navigation.focus_level == 0 {
+            return Ok(());
+        }
+
+        let level_idx = self.model.navigation.focus_level - 1;
+        if let Some(level) = self.model.navigation.breadcrumb_trail.get(level_idx) {
+            let folder_id = level.folder_id.clone();
+            let prefix = level.prefix.clone();
+
+            // Re-fetch from API (will go through cache)
+            let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                folder_id,
+                prefix,
+                priority: services::api::Priority::High,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Refresh all breadcrumb levels (used when clearing search)
+    async fn refresh_all_breadcrumbs(&mut self) -> Result<()> {
+        // Refresh each level in the breadcrumb trail
+        for level in &self.model.navigation.breadcrumb_trail {
+            let folder_id = level.folder_id.clone();
+            let prefix = level.prefix.clone();
+
+            // Re-fetch from API (will go through cache)
+            let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                folder_id,
+                prefix,
+                priority: services::api::Priority::High,
+            });
+        }
+
+        Ok(())
     }
 
     async fn next_item(&mut self) {

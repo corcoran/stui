@@ -121,4 +121,59 @@ mod tests {
         let model = PerformanceModel::new();
         let _cloned = model.clone();
     }
+
+    #[test]
+    fn test_discovered_dirs_tracking() {
+        let mut model = PerformanceModel::new();
+
+        // Should start empty
+        assert!(model.discovered_dirs.is_empty());
+
+        // Can add items
+        model.discovered_dirs.insert("folder1:subdir/".to_string());
+        assert_eq!(model.discovered_dirs.len(), 1);
+        assert!(model.discovered_dirs.contains("folder1:subdir/"));
+
+        // Can check if already discovered
+        assert!(model.discovered_dirs.contains("folder1:subdir/"));
+        assert!(!model.discovered_dirs.contains("folder1:other/"));
+
+        // Can add multiple
+        model.discovered_dirs.insert("folder1:other/".to_string());
+        assert_eq!(model.discovered_dirs.len(), 2);
+
+        // Can clear
+        model.discovered_dirs.clear();
+        assert!(model.discovered_dirs.is_empty());
+    }
+
+    #[test]
+    fn test_discovered_dirs_prevents_duplicates() {
+        let mut model = PerformanceModel::new();
+
+        // Insert same key twice
+        model.discovered_dirs.insert("folder:path/".to_string());
+        model.discovered_dirs.insert("folder:path/".to_string());
+
+        // Should only have one entry (HashSet behavior)
+        assert_eq!(model.discovered_dirs.len(), 1);
+    }
+
+    #[test]
+    fn test_discovered_dirs_cleared_on_new_search() {
+        let mut model = PerformanceModel::new();
+
+        // Simulate previous search session
+        model.discovered_dirs.insert("folder:dir1/".to_string());
+        model.discovered_dirs.insert("folder:dir2/".to_string());
+        assert_eq!(model.discovered_dirs.len(), 2);
+
+        // Simulate starting new search (should clear)
+        model.discovered_dirs.clear();
+        assert!(model.discovered_dirs.is_empty());
+
+        // Can add new entries for new search
+        model.discovered_dirs.insert("folder:dir3/".to_string());
+        assert_eq!(model.discovered_dirs.len(), 1);
+    }
 }

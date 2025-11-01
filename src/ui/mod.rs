@@ -8,6 +8,7 @@
 // - folder_list: Renders the left folder panel
 // - breadcrumb: Renders breadcrumb navigation panels
 // - legend: Renders hotkey legend
+// - search: Renders search input box with query and match count
 // - status_bar: Renders bottom status bar with metrics
 // - dialogs: Renders confirmation dialogs (revert, delete, pattern selection)
 // - toast: Renders toast notifications (brief pop-up messages)
@@ -19,6 +20,7 @@ pub mod icons;
 pub mod layout;
 pub mod legend;
 pub mod render;
+pub mod search;
 pub mod status_bar;
 pub mod system_bar;
 pub mod toast;

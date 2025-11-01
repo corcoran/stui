@@ -252,6 +252,61 @@ impl CacheDb {
         Ok(Some(items))
     }
 
+    /// Get all browse items for a folder (all prefixes) for recursive search
+    ///
+    /// Returns a list of (full_path, BrowseItem) tuples for all cached items in the folder.
+    /// Only returns items from cache if folder_sequence matches.
+    pub fn get_all_browse_items(
+        &self,
+        folder_id: &str,
+        folder_sequence: u64,
+    ) -> Result<Vec<(String, BrowseItem)>> {
+        // Check if any cache exists for this folder with the correct sequence
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT folder_sequence FROM browse_cache
+             WHERE folder_id = ?1 LIMIT 1",
+        )?;
+
+        let cached_seq: Option<i64> = stmt
+            .query_row(params![folder_id], |row| row.get(0))
+            .ok();
+
+        if cached_seq.map_or(true, |seq| seq as u64 != folder_sequence) {
+            // Cache is stale or doesn't exist
+            return Ok(Vec::new());
+        }
+
+        // Fetch all cached items with their prefixes
+        let mut stmt = self.conn.prepare(
+            "SELECT prefix, name, item_type, mod_time, size FROM browse_cache
+             WHERE folder_id = ?1 AND folder_sequence = ?2",
+        )?;
+
+        let items = stmt
+            .query_map(params![folder_id, folder_sequence as i64], |row| {
+                let prefix: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let item = BrowseItem {
+                    name: name.clone(),
+                    item_type: row.get(2)?,
+                    mod_time: row.get(3)?,
+                    size: row.get(4)?,
+                };
+
+                // Build full path
+                let full_path = if prefix.is_empty() {
+                    name
+                } else {
+                    format!("{}/{}", prefix, name)
+                };
+
+                Ok((full_path, item))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(items)
+    }
+
     pub fn save_browse_items(
         &self,
         folder_id: &str,

@@ -38,10 +38,14 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Check if this response is still relevant to current navigation
             // We allow caching for subdirectories of the current folder (prefetch),
             // but skip if we've navigated completely away from this folder
-            let is_relevant = if app.model.navigation.focus_level == 0 {
-                false // At folder list, no browse results are relevant
-            } else if app.model.navigation.breadcrumb_trail.is_empty() {
+            let is_relevant = if app.model.navigation.breadcrumb_trail.is_empty() {
                 false // No breadcrumb trail, nothing is relevant
+            } else if app.model.navigation.focus_level == 0 {
+                // At folder list - only accept browse results that match a breadcrumb in the trail
+                // (e.g., when backing out from a folder with active search, we need to refresh the root)
+                app.model.navigation.breadcrumb_trail
+                    .iter()
+                    .any(|level| level.folder_id == folder_id && level.prefix == prefix)
             } else {
                 // Check if this folder_id matches any level in our current breadcrumb trail
                 // This allows prefetching subdirectories that aren't yet open
@@ -173,6 +177,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Sort and restore selection using the saved name
                     app.sort_level_with_selection(idx, selected_name);
 
+                    // Apply search filter if search is active
+                    if !app.model.ui.search_query.is_empty() {
+                        app.apply_search_filter();
+                    }
+
                     // Request FileInfo for ALL items (no filtering, let API service deduplicate)
                     for item in &items {
                         let file_path = if let Some(ref pfx) = prefix {
@@ -197,6 +206,16 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 // Browse items are already saved to cache, skip UI update
                 crate::log_debug(&format!("DEBUG [BrowseResult]: No matching level for folder={} prefix={:?} (prefetch)",
                                    folder_id, prefix));
+
+                // Continue prefetch if search is active (>= 2 chars)
+                if !app.model.ui.search_query.is_empty() && app.model.ui.search_query.len() >= 2 {
+                    crate::log_debug(&format!(
+                        "DEBUG [BrowseResult]: Continuing prefetch from '{:?}'",
+                        prefix
+                    ));
+                    // This will recursively queue subdirectories, but discovered_dirs prevents duplicates
+                    app.prefetch_subdirectories_for_search(&folder_id, prefix.as_deref());
+                }
             }
         }
 

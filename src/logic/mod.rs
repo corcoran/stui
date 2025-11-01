@@ -9,6 +9,7 @@
 //! - navigation: Navigation selection calculations
 //! - path: Path mapping and translation utilities
 //! - performance: Batching and performance optimizations
+//! - search: Search query matching and filtering
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
@@ -20,5 +21,6 @@ pub mod layout;
 pub mod navigation;
 pub mod path;
 pub mod performance;
+pub mod search;
 pub mod sync_states;
 pub mod ui;

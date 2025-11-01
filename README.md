@@ -20,6 +20,12 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 ### 📁 File & Folder Management
 - **Multi-Pane Navigation**: Breadcrumb-style directory traversal with smart sizing (current folder gets 50-60% width)
 - **Ancestor Highlighting**: All parent folders stay highlighted (blue border) when drilling deeper
+- **Real-Time Recursive Search**: Fast wildcard search across all cached files/directories
+  - Trigger with `Ctrl-F` (normal) or `/` (vim mode)
+  - Instant filtering as you type with match count display
+  - Wildcard patterns: `*jeff*`, `*.txt`, `photo*`
+  - Context-aware clearing: only clears when backing out past search origin
+  - Shows parent directories if they contain matching descendants
 - **Flexible Sorting**: Sort by sync state, name, timestamp, or size with one keypress
 - **File Info Display**: Toggle between no info, timestamps only, or timestamps + human-readable sizes
 - **Detailed File Preview**: Press `?` on any file to open a comprehensive popup showing:
@@ -174,6 +180,7 @@ synctui --debug
 
 | Key | Action | Confirmation |
 |-----|--------|--------------|
+| `Ctrl-F` / `/` | **Search**: Enter search mode (recursive wildcard search) | No |
 | `?` | Show detailed file info popup (metadata, sync state, preview) | No |
 | `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
 | `p` | Pause/resume folder (folder view only) | Yes |
@@ -187,6 +194,12 @@ synctui --debug
 | `S` | Reverse current sort order | No |
 | `t` | Toggle info display (Off → Timestamp → Size+Timestamp) | No |
 | `q` | Quit synctui | No |
+
+**Search Mode Keys** (when search is active):
+- Type to filter results in real-time
+- `Enter` — Accept search (keep filtering, deactivate input)
+- `Backspace` — Delete character (auto-exits when query becomes empty)
+- `Esc` — Clear search and restore all items
 
 ### Display Modes
 
@@ -223,6 +236,13 @@ Full-width bar showing:
 - **Folders Panel**: Left side, lists all Syncthing folders
 - **Breadcrumb Panels**: Right side, current folder gets 50-60% width, parents share remaining space
 - **Ancestor Highlighting**: All parent folders stay highlighted (blue) when drilling deeper
+
+### Search Input (Above Legend)
+Dynamic search box that appears when triggered:
+- **Cyan border** when actively typing, **gray** when accepted
+- **Match count** in title (e.g., `Search (3 matches) - Esc to clear`)
+- **Blinking cursor** shows current input position
+- Filters results recursively across all cached subdirectories
 
 ### Hotkey Legend (Above Status)
 Full-width bar with context-aware key display:
@@ -290,7 +310,7 @@ rm ~/.cache/synctui/cache.db
 ## Limitations
 
 - No async loading spinners (planned)
-- No file type filtering or batch operations yet (planned)
+- No batch operations for multi-select yet (planned)
 
 ## Contributing
 
