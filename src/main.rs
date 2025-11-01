@@ -2772,21 +2772,37 @@ impl App {
         match tokio::fs::read(&host_path).await {
             Ok(bytes) => {
                 // Check if binary (null bytes in first 8KB)
+                // Exception: .ans/.asc files (ANSI art) can have null bytes but should be treated as text
                 let check_size = std::cmp::min(bytes.len(), BINARY_CHECK_SIZE);
-                let is_binary = logic::file::is_binary_content(&bytes[..check_size]);
+                let path_lower = host_path.to_lowercase();
+                let has_ansi_extension = path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
+                let is_binary = !has_ansi_extension && logic::file::is_binary_content(&bytes[..check_size]);
 
                 if is_binary {
                     // Attempt text extraction (similar to 'strings' command)
                     let extracted = Self::extract_text_from_binary(&bytes);
                     (Ok(extracted), exists, true)
                 } else {
-                    // Try to decode as UTF-8
-                    match String::from_utf8(bytes.clone()) {
-                        Ok(content) => (Ok(content), exists, false),
-                        Err(_) => {
-                            // Try lossy conversion
-                            let content = String::from_utf8_lossy(&bytes).to_string();
-                            (Ok(content), exists, true)
+                    // Check if content has ANSI codes on raw bytes BEFORE decoding
+                    // ANSI art files use CP437 encoding and need special handling
+                    let has_ansi_codes = logic::file::contains_ansi_codes(&bytes);
+                    let should_use_cp437 = has_ansi_extension || has_ansi_codes;
+
+                    if should_use_cp437 {
+                        use codepage_437::{CP437_CONTROL, BorrowFromCp437};
+                        // Decode from CP437 to Unicode string
+                        // CP437_CONTROL variant preserves control characters (important for ANSI escape codes)
+                        let decoded = String::borrow_from_cp437(&bytes, &CP437_CONTROL);
+                        (Ok(decoded.to_string()), exists, false)
+                    } else {
+                        // Try to decode as UTF-8
+                        match String::from_utf8(bytes.clone()) {
+                            Ok(content) => (Ok(content), exists, false),
+                            Err(_) => {
+                                // Try lossy conversion
+                                let content = String::from_utf8_lossy(&bytes).to_string();
+                                (Ok(content), exists, true)
+                            }
                         }
                     }
                 }

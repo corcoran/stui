@@ -27,7 +27,9 @@
       "Bash(git commit:*)",
       "Bash(git mv:*)",
       "Bash(find:*)",
-      "Bash({} ;)"
+      "Bash({} ;)",
+      "Bash(cat:*)",
+      "Bash(iconv:*)"
     ],
     "deny": [],
     "ask": []

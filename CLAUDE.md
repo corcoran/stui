@@ -7,9 +7,10 @@ Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing 
 **What makes this app unique:**
 - **Advanced file management**: Breadcrumb navigation, selective ignore, and visibility of ignored files that still exist on disk
 - **Terminal image preview**: High-performance image rendering (40-200ms) with adaptive quality using Kitty/iTerm2/Sixel/Halfblocks protocols
+- **ANSI art rendering**: Full-featured ANSI/ASCII art viewer with CP437 encoding, 80-column wrapping, and proper color support
 - **Real-time sync monitoring**: Event-driven cache invalidation with granular file-level updates
 
-The file management and image preview features are core differentiators and should be modified with care.
+The file management, image preview, and ANSI art rendering features are core differentiators and should be modified with care.
 
 ## claude instructions
 
@@ -17,6 +18,23 @@ The file management and image preview features are core differentiators and shou
 - Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
 - Make logging comprehensive but concise - debug logs should be informative without overwhelming
 - When adding new features or fixes, git commit once user has confirmed working and tests are written
+
+## CRITICAL: Data Type Constants
+
+**BrowseItem.item_type values** (from Syncthing API):
+- Directory: `"FILE_INFO_TYPE_DIRECTORY"` (the ONLY directory type)
+- File: Anything else (various file types, but NOT equal to `"FILE_INFO_TYPE_DIRECTORY"`)
+
+**NEVER use**:
+- ❌ `"directory"`
+- ❌ `"file"`
+- ❌ `"dir"`
+
+**ALWAYS use**:
+- ✅ `item.item_type == "FILE_INFO_TYPE_DIRECTORY"` for checking directories
+- ✅ `item.item_type != "FILE_INFO_TYPE_DIRECTORY"` for checking files
+
+See `src/api.rs:31` for `BrowseItem` struct definition.
 
 
 ## Architecture Context
@@ -44,6 +62,7 @@ The file management and image preview features are core differentiators and shou
   - `glob` (pattern matching)
   - `clap` (CLI argument parsing)
   - `unicode-width` (text width calculations)
+  - `codepage-437` (CP437 encoding for ANSI art)
 
 ## Core Features
 
@@ -54,7 +73,7 @@ The file management and image preview features are core differentiators and shou
 - Multi-pane breadcrumb navigation showing directory hierarchy
 - Keyboard navigation:
   - `↑` / `↓`: Navigate items
-  - `Enter`: Drill into folder
+  - `Enter`: Preview file (if file) or drill into folder (if directory)
   - `←` / `Backspace`: Go back
   - `q`: Quit
 
@@ -72,8 +91,18 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### User Actions
 
-- `?`: Show detailed file info popup with metadata (sync state, permissions, device availability) and preview:
+- `?` or `Enter` (on files): Show detailed file info popup with metadata (sync state, permissions, device availability) and preview:
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
+  - **ANSI art files**: Full-featured ANSI/ASCII art rendering with auto-detection
+    - Auto-detects ANSI codes in any file (ESC[ sequences), not just .ans/.asc extensions
+    - CP437 encoding support (original IBM PC character set with box-drawing characters)
+    - 80-column automatic wrapping (matching PabloDraw and other ANSI art viewers)
+    - Line buffer rendering with proper cursor positioning (CSI `[nC` codes)
+    - Full SGR color support (foreground colors 30-37, 90-97; background colors 40-47, 100-107)
+    - SAUCE metadata stripping (Ctrl-Z delimiter)
+    - Multiple line ending formats (\r\n, \n, \r)
+    - Background color stripping from spaces to prevent bleeding
+    - Fixed 80-character width container with text wrapping enabled
   - **Image files**: Terminal image rendering with Kitty/iTerm2/Sixel/Halfblocks protocols
     - Auto-detects terminal capabilities and font size
     - Non-blocking background loading (popup appears immediately)
@@ -232,8 +261,8 @@ CLI flags:
   - `ui.rs` - UI preferences, dialogs, popups
   - `performance.rs` - Loading tracking, metrics, pending operations
   - `types.rs` - Shared types (BreadcrumbLevel, FileInfoPopupState, etc.)
-- `src/logic/` - Pure business logic functions (18 functions, 100+ tests)
-  - `file.rs` - File type detection
+- `src/logic/` - Pure business logic functions (18 functions, 110+ tests)
+  - `file.rs` - File type detection, binary detection, ANSI art parsing with CP437 encoding
   - `folder.rs` - Folder validation and state checking
   - `formatting.rs` - Data formatting (uptime, file sizes)
   - `ignore.rs` - Pattern matching for .stignore
@@ -325,6 +354,27 @@ CLI flags:
 - **Event ID persistence**: Survives app restarts
 - **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/synctui/cache.db`)
 
+### ANSI Art Rendering
+- **Auto-Detection**: Content-based detection of ANSI escape codes (ESC[ sequences) in addition to .ans/.asc extensions
+  - `contains_ansi_codes()` function scans file bytes for ESC[ followed by valid ANSI parameters
+  - Enables ANSI rendering for any file containing ANSI codes, regardless of extension
+- **CP437 Encoding**: Uses `codepage-437` crate to decode original IBM PC character set (box-drawing, extended ASCII)
+- **80-Column Wrapping**: Standard ANSI art format - automatically wraps at column 80 (matching PabloDraw, Ansilove)
+- **Line Buffer Algorithm**: Fixed-width buffer (80 chars) with cursor positioning support
+  - Characters written at absolute column positions
+  - Cursor forward (`ESC[nC`) moves position without inserting characters
+  - When buffer reaches 80 chars, flushes as new line and resets
+  - Later content can overwrite earlier content at same position
+- **SGR Color Support**: Full ANSI color codes
+  - Foreground: 30-37 (standard), 90-97 (bright)
+  - Background: 40-47 (standard), 100-107 (bright)
+  - Modifiers: bold (1), italic (3), underline (4)
+- **SAUCE Metadata**: Strips binary metadata block after Ctrl-Z character (0x1A)
+- **Line Endings**: Normalizes \r\n, \n, and \r to uniform format
+- **Background Stripping**: Removes background colors from spacing characters to prevent bleeding
+- **Fixed-Width Container**: 83 columns (80 + 3 for borders/padding), centered horizontally
+- **Text Wrapping**: Enabled to handle lines that exceed 80 characters
+
 ### State Transition Validation
 - **Logic-Based Protection**: Validates state transitions based on user actions, not arbitrary timeouts
 - **Action Tracking**: `ManualStateChange` struct tracks what action was performed (SetIgnored/SetUnignored) with timestamp
@@ -339,10 +389,11 @@ CLI flags:
 
 **Architecture Quality:**
 - ✅ Clean separation: Model (pure state) vs Runtime (services)
-- ✅ Pure business logic extracted (18 functions, 100+ tests)
-- ✅ 157 total tests passing (100+ logic + 43+ model + 14 misc)
+- ✅ Pure business logic extracted (18 functions, 110+ tests)
+- ✅ 169 total tests passing (110+ logic + 43+ model + 16 misc)
 - ✅ Zero warnings, production-ready code
 - ✅ Comprehensive refactoring complete (see ELM_REWRITE_PREP.md)
+- ✅ Full ANSI art support with CP437 encoding and 80-column wrapping
 
 ### Known Limitations
 - No async loading spinners (planned)

@@ -62,6 +62,309 @@ pub fn is_binary_content(bytes: &[u8]) -> bool {
     bytes.contains(&0)
 }
 
+/// Detect if file content contains ANSI escape codes
+///
+/// Checks for the presence of ANSI escape sequences (ESC[...m for colors/styles,
+/// ESC[...C for cursor positioning) which are commonly found in ANSI art files.
+/// This allows auto-detection of ANSI content even if the file doesn't have
+/// .ans or .asc extension.
+///
+/// # Arguments
+/// * `bytes` - File content to check (first few KB is usually sufficient)
+///
+/// # Returns
+/// `true` if ANSI escape sequences are detected, `false` otherwise
+///
+/// # Examples
+/// ```
+/// use synctui::logic::file::contains_ansi_codes;
+///
+/// // Text with ANSI color codes
+/// assert!(contains_ansi_codes(b"\x1b[31mRed text\x1b[0m"));
+/// assert!(contains_ansi_codes(b"Normal \x1b[1;32mBold green\x1b[0m"));
+///
+/// // Text with cursor positioning
+/// assert!(contains_ansi_codes(b"Text\x1b[5Chere"));
+///
+/// // Plain text without ANSI codes
+/// assert!(!contains_ansi_codes(b"Just plain text"));
+/// assert!(!contains_ansi_codes(b"No escape codes here"));
+/// ```
+pub fn contains_ansi_codes(bytes: &[u8]) -> bool {
+    // Look for ESC[ sequences which are the start of ANSI codes
+    // Common patterns:
+    // - ESC[...m (SGR - colors/styles)
+    // - ESC[...C (cursor forward)
+    // - ESC[...H (cursor position)
+    // We just check for ESC[ followed by any sequence ending in a letter
+
+    let mut i = 0;
+    while i < bytes.len().saturating_sub(2) {
+        // Check for ESC character (0x1B)
+        if bytes[i] == 0x1B && bytes[i + 1] == b'[' {
+            // Found ESC[, this is likely an ANSI code
+            // Verify it's followed by valid ANSI sequence (digits/semicolons then a letter)
+            let mut j = i + 2;
+            while j < bytes.len() && j < i + 20 { // Check next 20 bytes max
+                let ch = bytes[j];
+                if ch.is_ascii_alphabetic() {
+                    // Valid ANSI sequence found (ends with letter)
+                    return true;
+                } else if ch.is_ascii_digit() || ch == b';' {
+                    // Still in the parameter part, continue
+                    j += 1;
+                } else {
+                    // Invalid character, not a valid ANSI sequence
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    false
+}
+
+/// Parse ANSI codes and convert to Ratatui Text with styling
+///
+/// This is a safe, custom ANSI parser that ONLY handles SGR (color/style) codes.
+/// It ignores all cursor positioning, screen clearing, and other potentially
+/// dangerous ANSI codes that could corrupt the TUI.
+///
+/// Supported SGR codes:
+/// - 0: Reset
+/// - 1: Bold
+/// - 3: Italic
+/// - 4: Underline
+/// - 30-37: Foreground colors (8 colors)
+/// - 40-47: Background colors (8 colors)
+/// - 90-97: Bright foreground colors
+/// - 100-107: Bright background colors
+///
+/// # Arguments
+/// * `text` - Text with ANSI escape codes
+///
+/// # Returns
+/// Ratatui `Text` with styling applied, all non-SGR codes stripped
+pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span, Text};
+
+    let mut lines = Vec::new();
+
+    // Strip SAUCE metadata if present (common in ANSI art files)
+    // SAUCE starts with Ctrl-Z (0x1A) followed by "SAUCE00"
+    let text_without_sauce = if let Some(pos) = text.find('\x1A') {
+        &text[..pos]
+    } else {
+        text
+    };
+
+    // Handle different line endings: \n, \r\n, or \r
+    // Replace \r\n with \n first, then split on both \n and \r
+    let normalized_text = text_without_sauce.replace("\r\n", "\n").replace('\r', "\n");
+
+    // Use fixed-width line buffer for proper ANSI art rendering
+    // ANSI art uses cursor positioning to create multi-column layouts
+    // Standard ANSI art wraps at 80 columns
+    const LINE_WIDTH: usize = 80;
+
+    for line_text in normalized_text.lines() {
+        // Create a line buffer with (char, style) pairs
+        let mut line_buffer: Vec<(char, Style)> = vec![(' ', Style::default()); LINE_WIDTH];
+        let mut current_column = 0;
+        let mut current_style = Style::default();
+        let mut chars = line_text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+
+                // Parse the parameter bytes
+                let mut params = String::new();
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_ascii_digit() || next_ch == ';' {
+                        params.push(next_ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+
+                // Get the final byte (command)
+                let command = chars.next();
+
+                // Handle cursor forward (CUF) - move cursor n columns forward
+                if command == Some('C') {
+                    let move_amount = params.parse::<usize>().unwrap_or(1);
+                    current_column = (current_column + move_amount).min(LINE_WIDTH - 1);
+                }
+                // Only process SGR codes (ending in 'm')
+                else if command == Some('m') {
+                    // Parse SGR parameters
+                    // Empty params = reset (0)
+                    let codes: Vec<u8> = if params.is_empty() {
+                        vec![0]
+                    } else {
+                        params
+                            .split(';')
+                            .filter_map(|s| {
+                                let trimmed = s.trim();
+                                if trimmed.is_empty() {
+                                    Some(0) // Empty parameter = reset
+                                } else {
+                                    trimmed.parse().ok()
+                                }
+                            })
+                            .collect()
+                    };
+
+                    for code in codes {
+                        match code {
+                            0 => current_style = Style::default(), // Reset
+                            1 => current_style = current_style.add_modifier(Modifier::BOLD),
+                            3 => current_style = current_style.add_modifier(Modifier::ITALIC),
+                            4 => current_style = current_style.add_modifier(Modifier::UNDERLINED),
+                            // Foreground colors (30-37)
+                            30 => current_style = current_style.fg(Color::Black),
+                            31 => current_style = current_style.fg(Color::Red),
+                            32 => current_style = current_style.fg(Color::Green),
+                            33 => current_style = current_style.fg(Color::Yellow),
+                            34 => current_style = current_style.fg(Color::Blue),
+                            35 => current_style = current_style.fg(Color::Magenta),
+                            36 => current_style = current_style.fg(Color::Cyan),
+                            37 => current_style = current_style.fg(Color::White),
+                            // Background colors (40-47)
+                            40 => current_style = current_style.bg(Color::Black),
+                            41 => current_style = current_style.bg(Color::Red),
+                            42 => current_style = current_style.bg(Color::Green),
+                            43 => current_style = current_style.bg(Color::Yellow),
+                            44 => current_style = current_style.bg(Color::Blue),
+                            45 => current_style = current_style.bg(Color::Magenta),
+                            46 => current_style = current_style.bg(Color::Cyan),
+                            47 => current_style = current_style.bg(Color::White),
+                            // Bright foreground colors (90-97)
+                            90 => current_style = current_style.fg(Color::DarkGray),
+                            91 => current_style = current_style.fg(Color::LightRed),
+                            92 => current_style = current_style.fg(Color::LightGreen),
+                            93 => current_style = current_style.fg(Color::LightYellow),
+                            94 => current_style = current_style.fg(Color::LightBlue),
+                            95 => current_style = current_style.fg(Color::LightMagenta),
+                            96 => current_style = current_style.fg(Color::LightCyan),
+                            97 => current_style = current_style.fg(Color::Gray),
+                            // Bright background colors (100-107)
+                            100 => current_style = current_style.bg(Color::DarkGray),
+                            101 => current_style = current_style.bg(Color::LightRed),
+                            102 => current_style = current_style.bg(Color::LightGreen),
+                            103 => current_style = current_style.bg(Color::LightYellow),
+                            104 => current_style = current_style.bg(Color::LightBlue),
+                            105 => current_style = current_style.bg(Color::LightMagenta),
+                            106 => current_style = current_style.bg(Color::LightCyan),
+                            107 => current_style = current_style.bg(Color::Gray),
+                            _ => {} // Ignore unknown SGR codes
+                        }
+                    }
+                }
+                // All non-SGR codes are silently ignored (cursor movement, etc.)
+            } else {
+                // Write character to buffer at current position
+                if current_column < LINE_WIDTH {
+                    line_buffer[current_column] = (ch, current_style);
+                    current_column += 1;
+
+                    // If we hit column 80, flush the buffer as a line and start new one
+                    if current_column >= LINE_WIDTH {
+                        // Build spans from current line buffer
+                        let spans = build_spans_from_buffer(&line_buffer);
+                        lines.push(Line::from(spans));
+
+                        // Reset buffer for next line
+                        line_buffer = vec![(' ', Style::default()); LINE_WIDTH];
+                        current_column = 0;
+                    }
+                }
+            }
+        }
+
+        // Convert remaining line buffer to spans, trimming trailing spaces
+        let mut max_col = 0;
+        for (i, (ch, _)) in line_buffer.iter().enumerate() {
+            if *ch != ' ' {
+                max_col = i + 1;
+            }
+        }
+
+        // Build spans from line buffer only if there's content
+        if max_col > 0 {
+            let spans = build_spans_from_buffer_upto(&line_buffer, max_col);
+            lines.push(Line::from(spans));
+        } else if lines.is_empty() {
+            // Empty line at start - add it
+            lines.push(Line::from(vec![Span::raw("")]));
+        }
+    }
+
+    Text::from(lines)
+}
+
+/// Helper function to build spans from entire line buffer
+fn build_spans_from_buffer(line_buffer: &[(char, ratatui::style::Style)]) -> Vec<ratatui::text::Span<'static>> {
+    build_spans_from_buffer_upto(line_buffer, line_buffer.len())
+}
+
+/// Helper function to build spans from line buffer up to a certain column
+fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], max_col: usize) -> Vec<ratatui::text::Span<'static>> {
+    use ratatui::text::Span;
+    use ratatui::style::Style;
+
+    let mut spans = Vec::new();
+    if max_col == 0 {
+        spans.push(Span::raw(""));
+        return spans;
+    }
+
+    let mut current_span_text = String::new();
+    let mut current_span_style = line_buffer[0].1;
+
+    for i in 0..max_col {
+        let (ch, mut style) = line_buffer[i];
+
+        // Strip background color from spaces to prevent unwanted background bleeding
+        if ch == ' ' && style.bg.is_some() {
+            style = Style {
+                fg: style.fg,
+                bg: None,
+                add_modifier: style.add_modifier,
+                sub_modifier: style.sub_modifier,
+                underline_color: style.underline_color,
+            };
+        }
+
+        if style == current_span_style {
+            current_span_text.push(ch);
+        } else {
+            // Style changed, save current span and start new one
+            if !current_span_text.is_empty() {
+                spans.push(Span::styled(current_span_text.clone(), current_span_style));
+                current_span_text.clear();
+            }
+            current_span_text.push(ch);
+            current_span_style = style;
+        }
+    }
+
+    // Add final span
+    if !current_span_text.is_empty() {
+        spans.push(Span::styled(current_span_text, current_span_style));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::raw(""));
+    }
+
+    spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +451,204 @@ mod tests {
     fn test_is_binary_content_null_at_end() {
         // Null byte at end
         assert!(is_binary_content(b"text before null\x00"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_with_color() {
+        // Red foreground color
+        assert!(contains_ansi_codes(b"\x1b[31mRed text\x1b[0m"));
+        // Green background
+        assert!(contains_ansi_codes(b"\x1b[42mGreen background\x1b[0m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_with_multiple_params() {
+        // Bold + red foreground + black background
+        assert!(contains_ansi_codes(b"\x1b[1;31;40mStyled text\x1b[0m"));
+        // Multiple semicolons
+        assert!(contains_ansi_codes(b"Normal \x1b[1;32mBold green\x1b[0m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_with_cursor() {
+        // Cursor forward
+        assert!(contains_ansi_codes(b"Text\x1b[5Chere"));
+        // Cursor position
+        assert!(contains_ansi_codes(b"\x1b[10;20HPositioned"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_plain_text() {
+        // No ANSI codes
+        assert!(!contains_ansi_codes(b"Just plain text"));
+        assert!(!contains_ansi_codes(b"No escape codes here"));
+        assert!(!contains_ansi_codes(b""));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_partial_sequences() {
+        // Incomplete ESC sequence (no '[')
+        assert!(!contains_ansi_codes(b"\x1bText"));
+        // ESC[ but invalid character breaks sequence (newline before terminator)
+        assert!(!contains_ansi_codes(b"\x1b[\n"));
+        // ESC[ with special char that's not digit/semicolon/letter
+        assert!(!contains_ansi_codes(b"\x1b[@#$"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_mixed_content() {
+        // ANSI codes in middle of text
+        assert!(contains_ansi_codes(b"Start \x1b[31mred\x1b[0m end"));
+        // Multiple ANSI sequences
+        assert!(contains_ansi_codes(b"\x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_reset_code() {
+        // Reset code (ESC[0m)
+        assert!(contains_ansi_codes(b"\x1b[0m"));
+        // Empty SGR params (ESC[m) - should be valid
+        assert!(contains_ansi_codes(b"\x1b[m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_bright_colors() {
+        // Bright foreground
+        assert!(contains_ansi_codes(b"\x1b[91mBright red\x1b[0m"));
+        // Bright background
+        assert!(contains_ansi_codes(b"\x1b[104mBright blue bg\x1b[0m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_codes_edge_cases() {
+        // ESC at end of buffer (too short for valid sequence)
+        assert!(!contains_ansi_codes(b"Text\x1b"));
+        // ESC[ at end (no terminator)
+        assert!(!contains_ansi_codes(b"Text\x1b["));
+        // Very long parameter string (should still detect within 20 byte limit)
+        assert!(contains_ansi_codes(b"\x1b[1;2;3;4;5mText"));
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_plain() {
+        let text = parse_ansi_to_text("Hello, world!");
+        assert_eq!(text.lines.len(), 1);
+        assert_eq!(text.lines[0].spans.len(), 1);
+        assert_eq!(text.lines[0].spans[0].content, "Hello, world!");
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_colors() {
+        use ratatui::style::Color;
+
+        // Red foreground
+        let text = parse_ansi_to_text("\x1b[31mRed\x1b[0m");
+        assert_eq!(text.lines.len(), 1);
+        assert_eq!(text.lines[0].spans[0].style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_cursor_forward() {
+        // Cursor forward should add spaces
+        let text = parse_ansi_to_text("A\x1b[5CB");
+        assert_eq!(text.lines.len(), 1);
+        // Should have "A" + 5 spaces + "B"
+        let full_text: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "A     B");
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_80_column_wrap() {
+        // Create a line with exactly 80 characters
+        let long_line = "x".repeat(80);
+        let text = parse_ansi_to_text(&long_line);
+        assert_eq!(text.lines.len(), 1);
+
+        // Create a line with 81 characters - should wrap
+        let longer_line = "x".repeat(81);
+        let text = parse_ansi_to_text(&longer_line);
+        assert_eq!(text.lines.len(), 2);
+        assert_eq!(text.lines[0].spans[0].content, "x".repeat(80));
+        assert_eq!(text.lines[1].spans[0].content, "x");
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_sauce_stripping() {
+        // SAUCE metadata starts with Ctrl-Z
+        let text_with_sauce = "Content\x1ASAUCE00metadata";
+        let text = parse_ansi_to_text(text_with_sauce);
+        let full_text: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "Content");
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_line_endings() {
+        // Test \r\n line endings
+        let text = parse_ansi_to_text("Line1\r\nLine2\r\nLine3");
+        assert_eq!(text.lines.len(), 3);
+
+        // Test \r line endings
+        let text = parse_ansi_to_text("Line1\rLine2\rLine3");
+        assert_eq!(text.lines.len(), 3);
+
+        // Test \n line endings
+        let text = parse_ansi_to_text("Line1\nLine2\nLine3");
+        assert_eq!(text.lines.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_background_stripped_from_spaces() {
+        use ratatui::style::Color;
+
+        // Set background color, write text, then spaces via cursor forward
+        let text = parse_ansi_to_text("\x1b[41mText\x1b[5C");
+        let line = &text.lines[0];
+
+        // First span should have red background (the "Text")
+        assert_eq!(line.spans[0].content, "Text");
+        assert_eq!(line.spans[0].style.bg, Some(Color::Red));
+
+        // Spaces from cursor forward should NOT have background
+        if line.spans.len() > 1 {
+            assert_eq!(line.spans[1].style.bg, None);
+        }
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_multiple_styles() {
+        use ratatui::style::{Color, Modifier};
+
+        // Bold + Red foreground + Black background
+        let text = parse_ansi_to_text("\x1b[1;31;40mStyled\x1b[0m");
+        let span = &text.lines[0].spans[0];
+
+        assert_eq!(span.content, "Styled");
+        assert_eq!(span.style.fg, Some(Color::Red));
+        assert_eq!(span.style.bg, Some(Color::Black));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_empty_sgr_params() {
+        // Empty SGR parameters should reset (like \x1b[m)
+        let text = parse_ansi_to_text("\x1b[31mRed\x1b[mNormal");
+        assert_eq!(text.lines.len(), 1);
+        // Should have two spans: "Red" (colored) and "Normal" (reset)
+        assert!(text.lines[0].spans.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_ansi_to_text_line_buffer_positioning() {
+        // Test that cursor positioning works correctly within 80-column buffer
+        // Write at column 0, jump to column 40, write again
+        let text = parse_ansi_to_text("Start\x1b[35CHere");
+        let line = &text.lines[0];
+        let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // Should have "Start" at position 0, spaces, then "Here" at position 40
+        assert!(full_text.starts_with("Start"));
+        assert!(full_text.contains("Here"));
+        // The "Here" should be at approximately position 40
+        assert!(full_text.len() <= 80);
     }
 }

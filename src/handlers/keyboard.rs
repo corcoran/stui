@@ -386,7 +386,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Handle file info popup
         if let Some(popup_state) = &mut app.model.ui.file_info_popup {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('?') => {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Left | KeyCode::Backspace => {
                     // Close popup and trigger sixel cleanup if it was an image (terminal.clear once)
                     if popup_state.is_image {
                         app.model.ui.sixel_cleanup_frames = 1;
@@ -800,7 +800,31 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if app.model.navigation.focus_level == 0 {
                     app.load_root_level(false).await?; // Not preview - actually enter folder
                 } else {
-                    app.enter_directory().await?;
+                    // Check if selected item is a file - if so, show preview instead of navigating
+                    if let Some(level) = app.model.navigation.breadcrumb_trail.get(app.model.navigation.focus_level - 1) {
+                        if let Some(selected_idx) = level.selected_index {
+                            if let Some(item) = level.items.get(selected_idx) {
+                                if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
+                                    // File - show preview (same logic as '?' key)
+                                    let file_path = if let Some(prefix) = &level.prefix {
+                                        format!("{}{}", prefix, item.name)
+                                    } else {
+                                        item.name.clone()
+                                    };
+
+                                    app.fetch_file_info_and_content(
+                                        level.folder_id.clone(),
+                                        file_path,
+                                        item.clone(),
+                                    )
+                                    .await;
+                                } else {
+                                    // Directory - navigate into it
+                                    app.enter_directory().await?;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             KeyCode::Up => {

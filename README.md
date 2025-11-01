@@ -31,6 +31,12 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Detailed File Preview**: Press `?` on any file to open a comprehensive popup showing:
   - **Metadata**: Sync state, permissions, resolution (images), device availability
   - **Text Preview**: Scrollable with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b)
+  - **ANSI Art Rendering**: Full-featured viewer with auto-detection
+    - Auto-detects ANSI codes in any file (not just .ans/.asc extensions)
+    - CP437 encoding (original IBM PC character set)
+    - 80-column automatic wrapping (matches PabloDraw standard)
+    - Full SGR color support (16 foreground + 16 background colors)
+    - Proper cursor positioning and SAUCE metadata handling
   - **Image Preview**: Terminal graphics rendering (Kitty/iTerm2/Sixel/Halfblocks)
     - Non-blocking load (40-200ms)
     - Smart centering and aspect ratio preservation
@@ -164,7 +170,7 @@ synctui --debug
 
 **Standard Navigation:**
 - `↑` / `↓` — Navigate items
-- `Enter` / `→` — Enter directory or open folder
+- `Enter` / `→` — Preview file (if file) or enter directory (if folder)
 - `←` / `Backspace` — Go back to parent directory
 - `PageUp` / `PageDown` — Scroll by page (hidden feature)
 - `Home` / `End` — Jump to first/last item (hidden feature)
@@ -181,7 +187,7 @@ synctui --debug
 | Key | Action | Confirmation |
 |-----|--------|--------------|
 | `Ctrl-F` / `/` | **Search**: Enter search mode (recursive wildcard search) | No |
-| `?` | Show detailed file info popup (metadata, sync state, preview) | No |
+| `?` | Show detailed file info popup (metadata, sync state, preview). Note: `Enter` on files also opens preview. | No |
 | `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
 | `p` | Pause/resume folder (folder view only) | Yes |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |

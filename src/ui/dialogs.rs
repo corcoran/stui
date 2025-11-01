@@ -628,26 +628,18 @@ fn render_preview_column(
         }
     } else {
         // Original text preview logic
-        let content = match &state.file_content {
+        let content_str = match &state.file_content {
             Ok(text) => text.clone(),
             Err(msg) => format!("Error: {}", msg),
         };
 
-        // Calculate the effective width for text (accounting for borders)
-        let text_width = area.width.saturating_sub(2) as usize; // -2 for borders
+        // Parse ANSI codes using our custom safe parser
+        // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
+        let parsed_text = crate::logic::file::parse_ansi_to_text(&content_str);
 
-        // Count total lines considering wrapping
-        let total_lines = content
-            .lines()
-            .map(|line| {
-                if line.is_empty() {
-                    1
-                } else {
-                    // Calculate how many display lines this line will take when wrapped
-                    ((line.len() + text_width - 1) / text_width).max(1)
-                }
-            })
-            .sum::<usize>();
+        // Count total lines WITHOUT wrapping (ANSI art needs fixed-width display)
+        // Each line in the parsed text is a single display line, no wrapping calculation needed
+        let total_lines = parsed_text.lines.len();
 
         // Viewport height (visible lines)
         let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
@@ -665,19 +657,55 @@ fn render_preview_column(
         // Write the clamped value back to state to prevent offset drift
         state.scroll_offset = clamped_scroll;
 
-        // Enable text wrapping with Wrap { trim: false } and scrolling
-        let paragraph = Paragraph::new(content)
+        // Check if this is an ANSI art file (by extension or content)
+        // Auto-detect ANSI codes in any file, not just .ans/.asc
+        let is_ansi_art = {
+            let path_lower = state.file_path.to_lowercase();
+            let has_ansi_extension = path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
+            let has_ansi_content = crate::logic::file::contains_ansi_codes(content_str.as_bytes());
+            has_ansi_extension || has_ansi_content
+        };
+
+        // Create a fixed 80-character width container for ANSI art only
+        // ANSI art is often designed for 80 columns
+        use ratatui::layout::{Constraint, Direction, Layout};
+
+        let preview_area = if is_ansi_art {
+            let fixed_width = 82u16; // 80 chars + 2 for borders
+            if area.width > fixed_width {
+                // Center the container horizontally
+                let horizontal_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Min(0),                    // Left padding
+                        Constraint::Length(fixed_width),       // Fixed width for ANSI art
+                        Constraint::Min(0),                    // Right padding
+                    ])
+                    .split(area);
+                horizontal_chunks[1]
+            } else {
+                // Terminal too narrow, use full width
+                area
+            }
+        } else {
+            // Not ANSI art - use full width
+            area
+        };
+
+        // For ANSI art, enable wrapping to preserve 80-column layout
+        // Non-ANSI art can also wrap safely
+        // NOTE: Don't set .style() on the Paragraph - it would override ANSI colors
+        let paragraph = Paragraph::new(parsed_text)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
                     .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)"),
             )
-            .style(Style::default().fg(Color::White))
-            .wrap(Wrap { trim: false }) // Enable line wrapping!
-            .scroll((clamped_scroll, 0)); // Enable scrolling with clamped offset!
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((clamped_scroll, 0));
 
-        f.render_widget(paragraph, area);
+        f.render_widget(paragraph, preview_area);
 
         // Render scrollbar if content is longer than viewport
         if total_lines > viewport_height {
@@ -692,7 +720,7 @@ fn render_preview_column(
 
             f.render_stateful_widget(
                 scrollbar,
-                area.inner(Margin {
+                preview_area.inner(Margin {
                     horizontal: 0,
                     vertical: 1,
                 }), // Keep scrollbar inside borders
