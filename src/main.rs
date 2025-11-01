@@ -2430,7 +2430,7 @@ impl App {
             Ok(bytes) => {
                 // Check if binary (null bytes in first 8KB)
                 let check_size = std::cmp::min(bytes.len(), BINARY_CHECK_SIZE);
-                let is_binary = bytes[..check_size].contains(&0);
+                let is_binary = logic::file::is_binary_content(&bytes[..check_size]);
 
                 if is_binary {
                     // Attempt text extraction (similar to 'strings' command)
