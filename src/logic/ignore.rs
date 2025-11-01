@@ -125,6 +125,9 @@ pub fn find_matching_patterns(patterns: &[String], file_path: &str) -> Vec<Strin
 /// assert!(validate_pattern("test[.txt").is_err());
 /// assert!(validate_pattern("line1\nline2").is_err());
 /// ```
+///
+/// Note: Currently unused but available for pattern input validation dialogs
+#[allow(dead_code)]
 pub fn validate_pattern(pattern: &str) -> Result<(), String> {
     // Check for empty pattern
     if pattern.trim().is_empty() {

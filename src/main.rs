@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
@@ -53,7 +53,7 @@ mod ui;
 mod utils;
 
 use api::{
-    BrowseItem, FileDetails, Folder, SyncState,
+    BrowseItem, Folder, SyncState,
     SyncthingClient,
 };
 use cache::CacheDb;
@@ -2134,7 +2134,7 @@ impl App {
         let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
 
         // 2. If image, spawn background loading; otherwise read as text
-        let (file_content, exists_on_disk, is_binary, image_state) = if is_image {
+        let (file_content, exists_on_disk, is_binary, _image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
             let mut host_path = container_path.clone();
