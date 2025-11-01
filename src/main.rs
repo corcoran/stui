@@ -608,11 +608,9 @@ impl App {
         let mut local_item_names = Vec::new();
 
         // Check if folder has local changes
-        let has_local_changes = self
-            .model.syncthing.folder_statuses
-            .get(folder_id)
-            .map(|s| s.receive_only_total_items > 0)
-            .unwrap_or(false);
+        let has_local_changes = logic::folder::has_local_changes(
+            self.model.syncthing.folder_statuses.get(folder_id)
+        );
 
         if !has_local_changes {
             return local_item_names;
@@ -1869,19 +1867,17 @@ impl App {
         let folder_id = self.model.navigation.breadcrumb_trail[level_idx].folder_id.clone();
 
         // Check if this is a receive-only folder with local changes
-        if let Some(status) = self.model.syncthing.folder_statuses.get(&folder_id) {
-            if status.receive_only_total_items > 0 {
-                // Receive-only folder with local changes - fetch the list of changed files
-                let changed_files = self
-                    .client
-                    .get_local_changed_files(&folder_id)
-                    .await
-                    .unwrap_or_else(|_| Vec::new());
+        if logic::folder::has_local_changes(self.model.syncthing.folder_statuses.get(&folder_id)) {
+            // Receive-only folder with local changes - fetch the list of changed files
+            let changed_files = self
+                .client
+                .get_local_changed_files(&folder_id)
+                .await
+                .unwrap_or_else(|_| Vec::new());
 
-                // Show confirmation prompt with file list
-                self.model.ui.confirm_revert = Some((folder_id, changed_files));
-                return Ok(());
-            }
+            // Show confirmation prompt with file list
+            self.model.ui.confirm_revert = Some((folder_id, changed_files));
+            return Ok(());
         }
 
         // Not receive-only or no local changes - just rescan
