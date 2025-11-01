@@ -183,7 +183,7 @@ synctui --debug
 | `d` | Delete file/directory from disk | Yes |
 | `r` | Rescan folder (refresh from disk) | No |
 | `R` | Restore deleted files (revert receive-only folder) | Yes |
-| `s` | Cycle sort mode (Icon → A-Z → DateTime → Size) | No |
+| `s` | Cycle sort mode (Sync State → A-Z → Timestamp → Size) | No |
 | `S` | Reverse current sort order | No |
 | `t` | Toggle info display (Off → Timestamp → Size+Timestamp) | No |
 | `q` | Quit synctui | No |

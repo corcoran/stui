@@ -113,7 +113,7 @@ pub enum SortMode {
 impl SortMode {
     pub fn as_str(&self) -> &str {
         match self {
-            SortMode::VisualIndicator => "Icon",
+            SortMode::VisualIndicator => "Sync State",
             SortMode::Alphabetical => "A-Z",
             SortMode::LastModified => "Timestamp",
             SortMode::FileSize => "Size",

@@ -90,7 +90,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `d`: Delete file/directory from disk (with confirmation prompt)
 - `r`: Rescan folder via `POST /rest/db/scan`
 - `R`: Restore deleted files (revert receive-only folder)
-- `s`: Cycle sort mode (Icon → A-Z → DateTime → Size)
+- `s`: Cycle sort mode (Sync State → A-Z → Timestamp → Size)
 - `S`: Toggle reverse sort order
 - `t`: Toggle info display (Off → TimestampOnly → TimestampAndSize → Off)
 - `p`: Pause/resume folder (folder view only, with confirmation)
@@ -124,7 +124,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - Scrollbar indicators: Automatically appear on breadcrumb panels when content exceeds viewport height
 - **Folder Type Display**: Status bar shows folder type (Send Only, Send & Receive, Receive Only) before state field
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
-- **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar, directories always sorted first
+- **Sorting**: Multi-mode sorting (Sync State/A-Z/Timestamp/Size) with visual indicators in status bar and toast notifications, directories always sorted first
 
 ### Configuration
 
@@ -221,6 +221,36 @@ CLI flags:
 - **Main event loop** (`main.rs:2973-3150`): Always-render pattern, processes API responses, keyboard input, cache events, image updates
 - **Keyboard handling** (`handlers/keyboard.rs`): Top-level match statement with confirmation dialogs processed first
 - **State updates**: `model.syncthing.folders` updated via `client.get_folders()` after mutations (pause/resume, etc.)
+
+**CRITICAL Architecture Rules:**
+1. **UI Side Effects (toasts, dialogs) MUST be in `handlers/keyboard.rs`**
+   - ❌ WRONG: Calling `show_toast()` in helper methods in `main.rs`
+   - ✅ CORRECT: Calling `show_toast()` in keyboard handler where user action happens
+   - Helper methods in `main.rs` should only do business logic (update state, call APIs)
+   - All user feedback (toasts, error messages) belongs at the call site in keyboard handler
+
+2. **Separation of Concerns:**
+   - `src/api.rs`: Pure API client methods (no UI, no state mutation beyond return values)
+   - `src/handlers/keyboard.rs`: Keyboard events → business logic → UI feedback (toasts, dialogs)
+   - `src/main.rs`: Orchestration methods (pure business logic, no UI side effects)
+   - `src/model/`: Pure state (cloneable, no side effects, no I/O)
+   - `src/logic/`: Pure functions (testable, no state mutation, no I/O)
+   - `src/ui/`: Pure rendering (takes state, returns widgets, no mutation)
+
+3. **Adding UI Feedback Pattern:**
+   ```rust
+   // ❌ WRONG - toast in helper method
+   fn cycle_sort_mode(&mut self) {
+       self.model.ui.sort_mode = new_mode;
+       self.model.ui.show_toast("Sort changed"); // WRONG!
+   }
+
+   // ✅ CORRECT - toast at call site
+   KeyCode::Char('s') => {
+       app.cycle_sort_mode(); // Pure business logic
+       app.model.ui.show_toast(format!("Sort: {}", app.model.ui.sort_mode.as_str())); // UI feedback here
+   }
+   ```
 
 ### Event-Driven Cache Invalidation
 - Long-polling `/rest/events` endpoint for real-time updates

@@ -180,12 +180,12 @@ pub fn next_vim_command_state(
 /// ```
 /// use synctui::logic::ui::should_dismiss_toast;
 ///
-/// assert_eq!(should_dismiss_toast(1000), false);  // 1 second - still showing
+/// assert_eq!(should_dismiss_toast(500), false);   // 0.5 seconds - still showing
+/// assert_eq!(should_dismiss_toast(1000), true);   // 1 second - dismiss
 /// assert_eq!(should_dismiss_toast(1500), true);   // 1.5 seconds - dismiss
-/// assert_eq!(should_dismiss_toast(2000), true);   // 2 seconds - dismiss
 /// ```
 pub fn should_dismiss_toast(elapsed_millis: u128) -> bool {
-    elapsed_millis >= 1500
+    elapsed_millis >= 1000
 }
 
 #[cfg(test)]
@@ -293,23 +293,23 @@ mod tests {
 
     #[test]
     fn test_should_dismiss_toast_before_timeout() {
-        // Toast shown for less than 1.5 seconds - should NOT dismiss
+        // Toast shown for less than 1 second - should NOT dismiss
         assert!(!should_dismiss_toast(0));
         assert!(!should_dismiss_toast(500));
-        assert!(!should_dismiss_toast(1000));
-        assert!(!should_dismiss_toast(1499));
+        assert!(!should_dismiss_toast(999));
     }
 
     #[test]
     fn test_should_dismiss_toast_at_timeout() {
         // Exactly at timeout threshold - should dismiss
-        assert!(should_dismiss_toast(1500));
+        assert!(should_dismiss_toast(1000));
     }
 
     #[test]
     fn test_should_dismiss_toast_after_timeout() {
-        // Toast shown for more than 1.5 seconds - should dismiss
-        assert!(should_dismiss_toast(1501));
+        // Toast shown for more than 1 second - should dismiss
+        assert!(should_dismiss_toast(1001));
+        assert!(should_dismiss_toast(1500));
         assert!(should_dismiss_toast(2000));
         assert!(should_dismiss_toast(5000));
     }

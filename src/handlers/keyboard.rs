@@ -554,10 +554,19 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Char('s') => {
                 // Cycle through sort modes
                 app.cycle_sort_mode();
+                // Show toast with new sort mode
+                app.model.ui.show_toast(format!("Sort: {}", app.model.ui.sort_mode.as_str()));
             }
             KeyCode::Char('S') => {
                 // Toggle reverse sort order
                 app.toggle_sort_reverse();
+                // Show toast with new sort direction
+                let direction = if app.model.ui.sort_reverse { "descending" } else { "ascending" };
+                app.model.ui.show_toast(format!(
+                    "Sort: {} ({})",
+                    app.model.ui.sort_mode.as_str(),
+                    direction
+                ));
             }
             KeyCode::Char('t') => {
                 // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
