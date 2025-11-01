@@ -351,52 +351,234 @@ impl Runtime {
 
 **📖 See MODEL_DESIGN.md for complete Model structure**
 
-### Step 2: Integrate Model into App ⭐ ✅ 90% COMPLETE
+### Step 2: Integrate Model into App ⭐ ✅ 100% COMPLETE
 
 **What's Done:**
-- ✅ Added `pub model: model::Model` field to App
-- ✅ Migrated 21 major state fields to Model:
-  - ✅ UI Preferences: should_quit, display_mode, sort_mode, sort_reverse, vim_mode
-  - ✅ Dialog States: toast_message, confirm_revert, confirm_delete
-  - ✅ Core Data: folders, devices, folder_statuses, statuses_loaded
-  - ✅ System Status: system_status, connection_stats, last_connection_stats, device_name, last_transfer_rates
-  - ✅ Operational State: last_folder_updates, pending_ignore_deletes, sixel_cleanup_frames
-- ✅ Updated ~100+ references across codebase
-- ✅ All tests passing, zero compilation errors
-
-**What Remains in App (Runtime):**
-- 🔧 Services: client, cache, api_tx/rx, event channels, icon_renderer, image_picker
-- ⚙️ Config: path_map, open_command, clipboard_command
-- ⏱️ Timing: last_status_update, last_system_status_update, last_connection_stats_fetch, last_db_flush
-- 📊 Performance tracking (optional): loading_browse, loading_sync_states, discovered_dirs, prefetch_enabled, last_known_sequences, last_known_receive_only_counts, last_load_time_ms, cache_hit, pending_sync_state_writes, ui_dirty
-- 🔄 Complex state (needs conversion): pattern_selection, show_file_info (contain ListState), focus_level, folders_state, breadcrumb_trail states
+- ✅ Created sub-model architecture with 4 focused domains:
+  - `SyncthingModel`: API data (folders, devices, statuses, system info)
+  - `NavigationModel`: Breadcrumbs, focus level, folder selection
+  - `UiModel`: Preferences, dialogs, popups, visual state
+  - `PerformanceModel`: Loading tracking, metrics, pending operations
+- ✅ Migrated ALL ~40 state fields to sub-models
+- ✅ Converted all ListState to Option<usize> (pure state)
+- ✅ Removed ui_dirty flag (always-render approach)
+- ✅ Updated ~150+ references across codebase
+- ✅ All 48 tests passing, zero compilation errors
+- ✅ Fixed image preview regression (ImagePreviewState in Runtime)
 
 **Current Structure:**
 ```rust
+pub struct Model {
+    pub syncthing: SyncthingModel,     // API data (12 fields)
+    pub navigation: NavigationModel,   // Breadcrumbs, focus (3 fields)
+    pub ui: UiModel,                   // Preferences, popups (13 fields)
+    pub performance: PerformanceModel, // Tracking, metrics (13 fields)
+}
+
 pub struct App {
     // ✅ Pure application state (Elm Architecture Model)
-    pub model: model::Model,  // 21 fields migrated
+    pub model: Model,  // ALL state fields migrated
 
     // 🔧 Services (Runtime) - NOT part of Model
     client: SyncthingClient,
     cache: CacheDb,
-    // ... channels, icon_renderer, etc.
+    api_tx/rx, event channels,
+    icon_renderer, image_picker,
+    image_state_map,  // ImagePreviewState not Clone
+    // ... config, timing, etc.
 }
 ```
 
-### Step 2.1: Optional - Complete Model Migration (IN PROGRESS)
-- ⏳ Migrate performance tracking fields (8 fields)
-- ⏳ Convert ListState → Option<usize> for pattern_selection, show_file_info
-- ⏳ Convert focus_level + folders_state + breadcrumb_trail state management
+### Step 2.5: Define Msg Enum ⭐ ✅ COMPLETE (UNUSED)
 
-### Step 3: Define Cmd Enum
-- Enumerate all side effects:
-  - API calls (FetchFileInfo, BrowseFolder, etc.)
-  - Filesystem ops (DeleteFile, CheckExists)
-  - Cache ops (SaveToCache)
-- Start with 5-10 most common commands
+**What's Done:**
+- ✅ Renamed AppMessage → Msg (Elm convention)
+- ✅ Organized variants by domain concern
+- ✅ Expanded ApiResponse into explicit variants:
+  - BrowseResult, FileInfoResult, FolderStatusResult
+  - RescanResult, SystemStatusResult, ConnectionStatsResult
+- ✅ Added helper constructors for all variants
 
-### Step 4: Create Pure Update Function
+**Current State:**
+- ✅ Msg enum fully defined and documented
+- ⚠️ NOT integrated into main loop (still using separate channels)
+- 📝 Marked with #[allow(dead_code)] for now
+- 💡 Available for gradual integration
+
+**Why Not Integrated:**
+Full Elm Architecture requires:
+1. Unified message channel (merge all rx channels)
+2. Pure update() function (no &mut, no .await)
+3. Command enum for side effects
+4. Runtime executor loop
+
+This is a MASSIVE refactoring. Instead, we'll take an **incremental approach**.
+
+---
+
+## 🔄 Next Phase: Incremental Functional Migration
+
+Instead of a big-bang Elm Architecture rewrite, we'll gradually make the codebase more functional **without breaking existing code**.
+
+### Philosophy
+
+**Goal:** Make code more testable, predictable, and maintainable without rewriting everything.
+
+**Approach:** Small, isolated refactorings that each provide immediate value.
+
+**Non-Goal:** Perfect Elm Architecture purity (we're building a TUI app, not a web framework).
+
+### Step 3: Extract Pure Business Logic (NEXT)
+
+**Target:** Handler functions that do state calculations.
+
+**Strategy:** Extract calculation logic into pure functions that return new state instead of mutating.
+
+**Example Refactoring:**
+
+```rust
+// BEFORE: Mutation-based (current)
+async fn handle_key(&mut self, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('s') => {
+            // Inline state mutation
+            self.model.ui.sort_mode = match self.model.ui.sort_mode {
+                SortMode::Icon => SortMode::Alphabetical,
+                SortMode::Alphabetical => SortMode::DateTime,
+                SortMode::DateTime => SortMode::Size,
+                SortMode::Size => SortMode::Icon,
+            };
+        }
+    }
+}
+
+// AFTER: Pure calculation + mutation
+async fn handle_key(&mut self, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('s') => {
+            // Pure function returns new state
+            self.model.ui.sort_mode = logic::cycle_sort_mode(self.model.ui.sort_mode);
+        }
+    }
+}
+
+// In src/logic/ui.rs (pure, testable)
+pub fn cycle_sort_mode(current: SortMode) -> SortMode {
+    match current {
+        SortMode::Icon => SortMode::Alphabetical,
+        SortMode::Alphabetical => SortMode::DateTime,
+        SortMode::DateTime => SortMode::Size,
+        SortMode::Size => SortMode::Icon,
+    }
+}
+
+#[test]
+fn test_cycle_sort_mode() {
+    assert_eq!(cycle_sort_mode(SortMode::Icon), SortMode::Alphabetical);
+    // ... more tests
+}
+```
+
+**Benefits:**
+- ✅ Pure logic is testable without App instance
+- ✅ No behavior changes (still mutates, just calls pure function)
+- ✅ Incremental (one function at a time)
+- ✅ No refactoring debt (each extraction is immediately useful)
+
+**Target Functions (Priority Order):**
+
+1. **UI State Transitions** (~5 functions, easy wins):
+   - `cycle_sort_mode()` - sort mode cycling
+   - `toggle_sort_reverse()` - reverse sorting
+   - `cycle_display_mode()` - info display cycling
+   - `next_vim_command_state()` - vim key sequences
+   - `should_dismiss_toast()` - toast timeout logic
+
+2. **Navigation Logic** (~3 functions):
+   - `calculate_scroll_position()` - breadcrumb scrolling
+   - `next_focus_level()` / `prev_focus_level()` - focus navigation
+   - `should_show_hotkey()` - context-aware hotkey display
+
+3. **Validation Logic** (~4 functions):
+   - `can_delete_file()` - delete permission checks
+   - `can_revert_folder()` - revert validation
+   - `should_show_restore()` - restore button visibility
+   - `validate_ignore_pattern()` - pattern syntax checking
+
+**Migration Process:**
+
+1. Identify calculation in handler
+2. Extract to `src/logic/[domain].rs`
+3. Add tests for edge cases
+4. Replace inline code with function call
+5. Verify no behavior change
+6. Commit
+
+**Timeline:** ~1-2 functions per session, ~15 functions total = 2-3 weeks of incremental work.
+
+### Step 4: Make Handlers Return Outcomes (LATER)
+
+Once we have pure logic extracted, we can start making handlers more functional:
+
+```rust
+// Current: Mutation-based
+async fn handle_browse_result(&mut self, folder_id: String, items: Vec<BrowseItem>) {
+    self.model.navigation.breadcrumb_trail.push(...);
+    self.cache.save_browse_result(...);
+}
+
+// Future: Outcome-based
+async fn handle_browse_result(&mut self, folder_id: String, items: Vec<BrowseItem>) {
+    let outcome = logic::process_browse_result(&self.model, folder_id, items);
+    outcome.apply_to(&mut self.model);  // Still mutates, but via explicit outcome
+    outcome.execute_side_effects(self).await;  // Side effects separated
+}
+```
+
+This is OPTIONAL and can be done gradually after Step 3.
+
+### Step 5: Full Elm Architecture (OPTIONAL)
+
+If we want to go all the way:
+1. Merge channels into unified Msg stream
+2. Create pure `update(model, msg) -> (Model, Cmd)` function
+3. Add Command enum for side effects
+4. Add Runtime executor
+
+**But this is NOT required** for the benefits we want (testability, maintainability, predictability).
+
+---
+
+## 📊 Current Status Summary
+
+**Completed:**
+- ✅ Phase 1: Modularization (27.7% code reduction)
+- ✅ Step 1: Pure Model struct with sub-models
+- ✅ Step 2: 100% Model migration (all state pure)
+- ✅ Step 2.5: Msg enum defined (unused but ready)
+
+**Current Architecture Quality:**
+- ✅ Clean separation: Model (pure) vs Runtime (services)
+- ✅ Sub-models organized by domain
+- ✅ All tests passing (48 tests)
+- ✅ Zero compilation errors
+- ✅ Always-render approach (no dirty flags)
+
+**Next Steps:**
+- 🎯 Step 3: Extract pure business logic (15 functions)
+  - Start with UI state transitions (easy wins)
+  - Add tests for each extracted function
+  - No behavior changes, just better organization
+
+**Long-Term Options:**
+- 🤔 Step 4: Outcome-based handlers (optional)
+- 🤔 Step 5: Full Elm Architecture (optional)
+
+### Step 3: Define Cmd Enum (DEPRECATED)
+**Note:** Skipping this in favor of incremental approach. Command enum only needed for full Elm Architecture.
+
+### Step 4: Create Pure Update Function (DEPRECATED)
+**Note:** Skipping this in favor of incremental approach. Pure update() only needed for full Elm Architecture.
 - Start with ONE message type (pick simplest)
 - Write `update(model: Model, msg: Msg) -> (Model, Cmd)`
 - Example: `Msg::KeyPress('q')` → quit

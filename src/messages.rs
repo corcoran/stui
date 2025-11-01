@@ -9,6 +9,10 @@
 //! - Event stream (cache invalidation from Syncthing events)
 //! - Background tasks (image loading)
 //! - Timers (periodic updates)
+//!
+//! **Current Status:** Msg enum is defined but NOT integrated into main loop.
+//! We're taking an incremental approach instead of full Elm Architecture.
+//! See ELM_REWRITE_PREP.md for migration strategy.
 
 use crossterm::event::KeyEvent;
 
@@ -21,6 +25,10 @@ use crate::ImagePreviewState;
 ///
 /// In Elm Architecture, all state changes flow through messages.
 /// This enum captures every event that can occur in the application.
+///
+/// **Note:** Currently unused - designed for future Elm Architecture integration.
+/// The app still uses separate channels (api_rx, invalidation_rx, etc.) for now.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum Msg {
     // ============================================
@@ -104,6 +112,7 @@ pub enum Msg {
 }
 
 /// Types of periodic updates
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickType {
     /// Update system status (device info, uptime) - every 30s
@@ -119,6 +128,7 @@ pub enum TickType {
     CleanupCheck,
 }
 
+#[allow(dead_code)]
 impl Msg {
     /// Create a key press message
     pub fn key_press(key: KeyEvent) -> Self {
