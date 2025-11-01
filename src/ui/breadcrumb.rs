@@ -1,10 +1,10 @@
 use super::icons::IconRenderer;
 use crate::api::{BrowseItem, SyncState};
 use ratatui::{
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
@@ -250,5 +250,33 @@ pub fn render_breadcrumb_panel(
     } else {
         let mut empty_state = ratatui::widgets::ListState::default();
         f.render_stateful_widget(list, area, &mut empty_state);
+    }
+
+    // Render scrollbar if list is longer than visible area
+    let viewport_height = area.height.saturating_sub(2) as usize; // Subtract borders
+    let total_items = items.len();
+
+    if total_items > viewport_height && (is_focused || is_parent_selected) {
+        // Calculate scroll position from ListState
+        let offset = state.offset();
+
+        // ScrollbarState needs total content length and current position
+        let mut scrollbar_state = ScrollbarState::new(total_items.saturating_sub(viewport_height))
+            .position(offset);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        f.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                horizontal: 0,
+                vertical: 1,
+            }),
+            &mut scrollbar_state,
+        );
     }
 }
