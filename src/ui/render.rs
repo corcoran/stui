@@ -112,17 +112,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render hotkey legend if there's space
     if let Some(legend_area) = layout_info.legend_area {
-        let has_breadcrumbs = !app.model.navigation.breadcrumb_trail.is_empty();
-
         // Check if restore is available (only in breadcrumbs with local changes)
-        let can_restore = if app.model.navigation.focus_level > 0 && has_breadcrumbs {
-            // Get the folder ID from the breadcrumb trail
+        let can_restore = if !app.model.navigation.breadcrumb_trail.is_empty() {
             let folder_id = &app.model.navigation.breadcrumb_trail[0].folder_id;
-            // Check if the folder has local changes to restore
-            app.model.syncthing.folder_statuses
-                .get(folder_id)
-                .map(|status| status.receive_only_total_items > 0)
-                .unwrap_or(false)
+            let folder_status = app.model.syncthing.folder_statuses.get(folder_id);
+            crate::logic::folder::should_show_restore_button(
+                app.model.navigation.focus_level,
+                folder_status,
+            )
         } else {
             false
         };

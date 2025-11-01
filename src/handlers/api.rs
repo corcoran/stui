@@ -63,11 +63,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 .unwrap_or(0);
 
             // Check if this folder has local changes and merge them synchronously
-            let has_local_changes = app
-                .model.syncthing.folder_statuses
-                .get(&folder_id)
-                .map(|s| s.receive_only_total_items > 0)
-                .unwrap_or(false);
+            let folder_status = app.model.syncthing.folder_statuses.get(&folder_id);
+            let has_local_changes = crate::logic::folder::has_local_changes(folder_status);
 
             let mut local_item_names = Vec::new();
 
