@@ -221,6 +221,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             my_device_id,
             &app.icon_renderer,
             app.model.ui.image_font_size,
+            &mut app.image_state_map,
         );
     }
 

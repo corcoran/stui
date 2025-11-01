@@ -3097,23 +3097,27 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         // Process image updates from background loading tasks (non-blocking)
         while let Ok((file_path, image_state)) = app.image_update_rx.try_recv() {
+            // Store image state in runtime map (ImagePreviewState is not Clone, so kept separate from Model)
+            app.image_state_map.insert(file_path.clone(), image_state);
+
             // Update popup if it's still showing the same file
             if let Some(ref mut popup_state) = app.model.ui.file_info_popup {
                 if popup_state.file_path == file_path {
                     log_debug(&format!("Updating image state for {}", file_path));
-// TODO(Elm-migration): Re-integrate with image_state_map:                     popup_state.image_state = Some(image_state);
-// TODO(Elm-migration): Re-integrate with image_state_map: 
-// TODO(Elm-migration): Re-integrate with image_state_map:                     // Also update file_content to reflect loaded state
-// TODO(Elm-migration): Re-integrate with image_state_map:                     match &popup_state.image_state {
-// TODO(Elm-migration): Re-integrate with image_state_map:                         Some(ImagePreviewState::Ready { .. }) => {
-// TODO(Elm-migration): Re-integrate with image_state_map:                             popup_state.file_content =
-// TODO(Elm-migration): Re-integrate with image_state_map:                                 Ok("[Image preview - see right panel]".to_string());
-// TODO(Elm-migration): Re-integrate with image_state_map:                         }
-// TODO(Elm-migration): Re-integrate with image_state_map:                         Some(ImagePreviewState::Failed { .. }) => {
-// TODO(Elm-migration): Re-integrate with image_state_map:                             popup_state.file_content = Err("Image preview unavailable".to_string());
-// TODO(Elm-migration): Re-integrate with image_state_map:                         }
-// TODO(Elm-migration): Re-integrate with image_state_map:                         _ => {}
-// TODO(Elm-migration): Re-integrate with image_state_map:                     }
+
+                    // Update file_content based on image state
+                    if let Some(img_state) = app.image_state_map.get(&file_path) {
+                        match img_state {
+                            ImagePreviewState::Ready { .. } => {
+                                popup_state.file_content =
+                                    Ok("[Image preview - see right panel]".to_string());
+                            }
+                            ImagePreviewState::Failed { .. } => {
+                                popup_state.file_content = Err("Image preview unavailable".to_string());
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }

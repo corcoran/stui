@@ -150,6 +150,7 @@ pub fn render_file_info(
     my_device_id: Option<&str>,
     icon_renderer: &IconRenderer,
     image_font_size: Option<(u16, u16)>,
+    image_state_map: &mut std::collections::HashMap<String, crate::ImagePreviewState>,
 ) {
     // Calculate centered area (90% width, 90% height)
     let area = f.area();
@@ -179,10 +180,10 @@ pub fn render_file_info(
         .split(popup_area);
 
     // Render metadata column
-    render_metadata_column(f, columns[0], state, devices, my_device_id, icon_renderer);
+    render_metadata_column(f, columns[0], state, devices, my_device_id, icon_renderer, image_state_map);
 
     // Render preview column
-    render_preview_column(f, columns[1], state, image_font_size);
+    render_preview_column(f, columns[1], state, image_font_size, image_state_map);
 }
 
 fn render_metadata_column(
@@ -192,6 +193,7 @@ fn render_metadata_column(
     devices: &[Device],
     my_device_id: Option<&str>,
     icon_renderer: &IconRenderer,
+    image_state_map: &mut std::collections::HashMap<String, crate::ImagePreviewState>,
 ) {
     let mut lines = vec![];
 
@@ -226,7 +228,7 @@ fn render_metadata_column(
 
     // Image resolution (if this is an image with loaded metadata)
     if state.is_image {
-        if let Some(ref image_state) = None::<crate::ImagePreviewState> {
+        if let Some(ref image_state) = image_state_map.get(&state.file_path) {
             match image_state {
                 crate::ImagePreviewState::Ready { metadata, .. }
                 | crate::ImagePreviewState::Failed { metadata } => {
@@ -394,28 +396,30 @@ fn render_preview_column(
     area: Rect,
     state: &mut FileInfoPopupState,
     image_font_size: Option<(u16, u16)>,
+    image_state_map: &mut std::collections::HashMap<String, crate::ImagePreviewState>,
 ) {
     // Check if this is an image with an image state
-    if state.is_image && None::<crate::ImagePreviewState>.is_some() {
-        match None::<crate::ImagePreviewState>.as_ref().unwrap() {
-            ImagePreviewState::Loading => {
-                // Show loading message
-                let paragraph = Paragraph::new("Loading image...")
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(Color::Cyan))
-                            .title("Preview"),
-                    )
-                    .style(Style::default().fg(Color::Yellow));
-                f.render_widget(paragraph, area);
-            }
-            ImagePreviewState::Ready { .. } => {
-                // Get mutable reference to protocol and metadata for rendering
-                if let Some(ImagePreviewState::Ready {
-                    ref mut protocol,
-                    ref metadata,
-                }) = None::<crate::ImagePreviewState>
+    if state.is_image {
+        if let Some(image_state) = image_state_map.get(&state.file_path) {
+            match image_state {
+                ImagePreviewState::Loading => {
+                    // Show loading message
+                    let paragraph = Paragraph::new("Loading image...")
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Cyan))
+                                .title("Preview"),
+                        )
+                        .style(Style::default().fg(Color::Yellow));
+                    f.render_widget(paragraph, area);
+                }
+                ImagePreviewState::Ready { .. } => {
+                    // Get mutable reference to protocol for rendering
+                    if let Some(ImagePreviewState::Ready {
+                        ref mut protocol,
+                        ref metadata,
+                    }) = image_state_map.get_mut(&state.file_path)
                 {
                     // Create bordered block with dimensions in title
                     let title = if let Some((w, h)) = metadata.dimensions {
@@ -508,11 +512,23 @@ fn render_preview_column(
                         .resize(ratatui_image::Resize::Fit(Some(filter)));
                     f.render_stateful_widget(image, render_rect, protocol);
                 }
+                }
+                ImagePreviewState::Failed { metadata } => {
+                    // Show image &metadata as fallback
+                    render_image_metadata(f, area, metadata);
+                }
             }
-            ImagePreviewState::Failed { metadata } => {
-                // Show image &metadata as fallback
-                render_image_metadata(f, area, metadata);
-            }
+        } else {
+            // Image but no state yet - show loading
+            let paragraph = Paragraph::new("Loading image...")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title("Preview"),
+                )
+                .style(Style::default().fg(Color::Yellow));
+            f.render_widget(paragraph, area);
         }
     } else {
         // Original text preview logic
