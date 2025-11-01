@@ -1891,7 +1891,10 @@ impl App {
 
     async fn delete_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if !logic::folder::can_delete_file(
+            self.model.navigation.focus_level,
+            self.model.navigation.breadcrumb_trail.is_empty(),
+        ) {
             return Ok(());
         }
 

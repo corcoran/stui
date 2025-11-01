@@ -1,7 +1,7 @@
 # Next Steps - Incremental Functional Migration
 
 **Last Updated:** 2025-10-31
-**Current Phase:** Step 3 - Extract Pure Business Logic (1/15 functions complete)
+**Current Phase:** Step 3 - Extract Pure Business Logic (2/15 functions complete)
 
 ---
 
@@ -20,12 +20,13 @@
 - Always-render approach (no dirty flags)
 - Image preview regression fixed
 
-**Phase 3: Pure Business Logic** (1/15 complete)
+**Phase 3: Pure Business Logic** (2/15 complete)
 - ✅ `logic::folder::has_local_changes()` - 3 tests
+- ✅ `logic::folder::can_delete_file()` - 4 tests
 
 ### 📊 Test Coverage
 
-- **51 tests passing** (34 logic + model, 17 state)
+- **55 tests passing** (38 logic + model, 17 state)
 - **Zero compilation errors**
 - **3 warnings** (unused imports/variables - harmless)
 
@@ -334,7 +335,7 @@ fn test_prev_selection() {
 
 ### Phase A: Quick Wins (2-3 hours total)
 - [x] `has_local_changes()` - 15 min ✅ DONE
-- [ ] `can_delete_file()` - 15 min
+- [x] `can_delete_file()` - 15 min ✅ DONE
 - [ ] `should_show_restore_button()` - 20 min
 - [ ] `cycle_display_mode()` - 10 min
 - [ ] `cycle_sort_mode()` - 20 min

@@ -20,6 +20,36 @@ pub fn has_local_changes(status: Option<&FolderStatus>) -> bool {
         .unwrap_or(false)
 }
 
+/// Check if file deletion is allowed given current navigation state
+///
+/// File deletion only works when viewing breadcrumb contents (not the folder list).
+/// This requires both being in a breadcrumb level (focus_level > 0) and having
+/// a valid navigation trail.
+///
+/// # Arguments
+/// * `focus_level` - Current navigation focus level (0 = folder list, >0 = breadcrumb)
+/// * `breadcrumb_trail_empty` - Whether the breadcrumb navigation trail is empty
+///
+/// # Returns
+/// `true` if file deletion is allowed (in breadcrumb view with valid trail)
+///
+/// # Examples
+/// ```
+/// use synctui::logic::folder::can_delete_file;
+///
+/// // Can delete: in breadcrumb view with trail
+/// assert!(can_delete_file(1, false));
+///
+/// // Cannot delete: in folder list view
+/// assert!(!can_delete_file(0, false));
+///
+/// // Cannot delete: no navigation trail
+/// assert!(!can_delete_file(1, true));
+/// ```
+pub fn can_delete_file(focus_level: usize, breadcrumb_trail_empty: bool) -> bool {
+    focus_level > 0 && !breadcrumb_trail_empty
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +102,32 @@ mod tests {
     #[test]
     fn test_has_local_changes_none() {
         assert!(!has_local_changes(None));
+    }
+
+    #[test]
+    fn test_can_delete_file_in_breadcrumb_view() {
+        // Can delete when in breadcrumb view (focus_level > 0) with valid trail
+        assert!(can_delete_file(1, false));
+        assert!(can_delete_file(2, false));
+        assert!(can_delete_file(5, false));
+    }
+
+    #[test]
+    fn test_can_delete_file_in_folder_list() {
+        // Cannot delete in folder list view (focus_level == 0)
+        assert!(!can_delete_file(0, false));
+    }
+
+    #[test]
+    fn test_can_delete_file_no_breadcrumb_trail() {
+        // Cannot delete without valid breadcrumb trail
+        assert!(!can_delete_file(1, true));
+        assert!(!can_delete_file(2, true));
+    }
+
+    #[test]
+    fn test_can_delete_file_folder_list_no_trail() {
+        // Cannot delete in folder list even with no trail
+        assert!(!can_delete_file(0, true));
     }
 }
