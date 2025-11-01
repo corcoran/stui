@@ -91,7 +91,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `s`: Cycle sort mode (Icon → A-Z → DateTime → Size)
 - `S`: Toggle reverse sort order
 - `t`: Toggle info display (Off → TimestampOnly → TimestampAndSize → Off)
-- `p`: Pause/resume folder (planned)
+- `p`: Pause/resume folder (folder view only, with confirmation)
 - Vim keybindings (optional): `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
 
 ### Status Bar & UI Elements
@@ -115,9 +115,10 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - TimestampOnly: Shows modification time (e.g., `2025-10-26 20:58`)
   - TimestampAndSize: Shows size + timestamp for files (e.g., `1.2M 2025-10-26 20:58`), timestamp only for directories
 - **Smart Hotkey Legend**: Context-aware display
-  - Folder view: Shows navigation, Rescan, Quit (hides Sort, Info, Ignore, Delete)
-  - Breadcrumb view: Shows all keys including file operations
+  - Folder view: Shows navigation, Pause/Resume, Rescan, Quit
+  - Breadcrumb view: Shows all keys including file operations (Sort, Info, Ignore, Delete)
   - Restore only appears when folder has local changes (receive_only_total_items > 0)
+  - Scrollbar indicators: Automatically appear on breadcrumb panels when content exceeds viewport height
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
 - **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar, directories always sorted first
 
@@ -150,17 +151,69 @@ CLI flags:
 ## Syncthing REST API Endpoints
 
 ```
-/rest/system/config                          # Get folders and devices
-/rest/db/status?folder=<id>                  # Folder sync status (with sequence numbers)
-/rest/db/browse?folder=<id>[&prefix=subdir/] # Browse contents
-/rest/db/file?folder=<id>&file=<path>        # Get file sync details
-/rest/db/ignores?folder=<id>                 # Get/set .stignore rules
-/rest/db/scan?folder=<id>                    # Trigger folder rescan
-/rest/db/revert?folder=<id>                  # Revert receive-only folder
-/rest/events?since=<id>&timeout=60           # Event stream (long-polling, IMPLEMENTED)
+/rest/system/config                           # Get folders and devices
+/rest/config/folders/<id>                     # PATCH to modify folder config (e.g., pause/resume)
+/rest/db/status?folder=<id>                   # Folder sync status (with sequence numbers)
+/rest/db/browse?folder=<id>[&prefix=subdir/]  # Browse contents
+/rest/db/file?folder=<id>&file=<path>         # Get file sync details
+/rest/db/ignores?folder=<id>                  # Get/set .stignore rules
+/rest/db/scan?folder=<id>                     # Trigger folder rescan
+/rest/db/revert?folder=<id>                   # Revert receive-only folder
+/rest/events?since=<id>&timeout=60            # Event stream (long-polling, IMPLEMENTED)
+/rest/system/status                           # System status (device info, uptime)
+/rest/system/connections                      # Connection/transfer statistics
 ```
 
 ## Architecture Highlights
+
+### Code Organization
+
+**Main Application Structure:**
+- `src/main.rs` (~3,300 lines) - App struct, main event loop, orchestration methods
+- `src/handlers/` - Event handlers (keyboard, API responses, cache events)
+  - `keyboard.rs` - All keyboard input handling with confirmation dialogs
+  - `api.rs` - API response processing and state updates
+  - `events.rs` - Event stream processing and cache invalidation
+- `src/services/` - Background services (API queue, event listener)
+  - `api.rs` - Async API service with priority queue and request deduplication
+  - `events.rs` - Long-polling event listener for real-time updates
+- `src/model/` - Pure application state (Elm Architecture)
+  - `mod.rs` - Main Model struct with helper methods
+  - `syncthing.rs` - Syncthing data (folders, devices, statuses)
+  - `navigation.rs` - Breadcrumb trail and focus state
+  - `ui.rs` - UI preferences, dialogs, popups
+  - `performance.rs` - Loading tracking, metrics, pending operations
+  - `types.rs` - Shared types (BreadcrumbLevel, FileInfoPopupState, etc.)
+- `src/logic/` - Pure business logic functions (15 functions, 67 tests)
+  - `file.rs` - File type detection
+  - `folder.rs` - Folder validation and state checking
+  - `formatting.rs` - Data formatting (uptime, file sizes)
+  - `ignore.rs` - Pattern matching for .stignore
+  - `layout.rs` - UI layout calculations
+  - `navigation.rs` - Selection navigation logic
+  - `path.rs` - Path translation (container ↔ host)
+  - `performance.rs` - Batching and throttling logic
+  - `sync_states.rs` - Sync state priority and validation
+  - `ui.rs` - UI state transitions (display modes, sort, vim commands)
+- `src/ui/` - Rendering components (11 modules)
+  - `render.rs` - Main render coordinator
+  - `folder_list.rs` - Folder list panel with status icons
+  - `breadcrumb.rs` - Breadcrumb navigation panels with scrollbars
+  - `dialogs.rs` - Confirmation dialogs and popups
+  - `icons.rs` - Icon rendering (emoji/nerdfont) with color themes
+  - `legend.rs` - Context-aware hotkey legend
+  - `status_bar.rs` - Bottom status bar with sync info
+  - `system_bar.rs` - Top system bar with device info
+  - `layout.rs` - Panel layout calculations
+- `src/api.rs` - Syncthing API client (all REST endpoints)
+- `src/cache.rs` - SQLite cache for browse results and sync states
+- `src/state.rs` - Legacy state types (being phased out)
+
+**Key Application Patterns:**
+- **App initialization** (`main.rs:361-480`): `App::new()` loads folders via `client.get_folders()`, spawns API service and event listener
+- **Main event loop** (`main.rs:2973-3150`): Always-render pattern, processes API responses, keyboard input, cache events, image updates
+- **Keyboard handling** (`handlers/keyboard.rs`): Top-level match statement with confirmation dialogs processed first
+- **State updates**: `model.syncthing.folders` updated via `client.get_folders()` after mutations (pause/resume, etc.)
 
 ### Event-Driven Cache Invalidation
 - Long-polling `/rest/events` endpoint for real-time updates
@@ -199,20 +252,22 @@ CLI flags:
 - **No Race Conditions**: Works regardless of network latency or event timing
 - **Syncing State Tracking**: `syncing_files` HashSet tracks actively syncing files between ItemStarted/ItemFinished events
 
-## Current Limitations & Future Goals
+## Current State & Test Coverage
+
+**Architecture Quality:**
+- ✅ Clean separation: Model (pure state) vs Runtime (services)
+- ✅ Pure business logic extracted (15 functions, 67 tests)
+- ✅ 124 total tests passing (67 logic + 34 model + 17 state + 6 misc)
+- ✅ Zero warnings, production-ready code
+- ✅ Comprehensive refactoring complete (see ELM_REWRITE_PREP.md)
 
 ### Known Limitations
-- Pause/resume folder not yet implemented
 - No async loading spinners (planned)
 - No filtering by file type or name (planned)
 - No batch operations for multi-select
-- Config file location hardcoded to `./config.yaml` (needs `~/.config/synctui/` support)
 - Error handling and timeout management needs improvement
-- Code needs refactoring for better modularity and readability
-- No comprehensive test suite yet
 
 ### Planned Features
-- Pause / Resume folder toggle hotkey + status (with confirmation)
 - Change Folder Type toggle hotkey + status (with confirmation)
 - File type filtering and ignored-only view
 - Event history viewer with persistent logging
@@ -227,10 +282,51 @@ CLI flags:
 
 ## Development Guidelines
 
+### Safety & Best Practices
 - **Safety First**: All destructive operations require confirmation (except `I` which is intentionally immediate)
 - **Path Mapping**: Always translate container paths to host paths before file operations
-- **Error Handling**: Graceful degradation, show errors in status bar
+- **Error Handling**: Graceful degradation, show errors in status bar or toast messages
 - **Non-Blocking**: Keep UI responsive during all API calls
 - **Cache Coherency**: Use sequence numbers to validate cached data
 - **Testing**: Test with real Syncthing Docker instances with large datasets
-- **Debug Mode**: Set `DEBUG_MODE` environment variable for verbose logging to `/tmp/synctui-debug.log`
+- **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
+
+### Adding New Features - Common Patterns
+
+**Adding a new API endpoint:**
+1. Add method to `SyncthingClient` in `src/api.rs` (follow existing patterns)
+2. Add request type to `ApiRequest` enum in `src/services/api.rs` if using async service
+3. Add response type to `ApiResponse` enum in `src/services/api.rs`
+4. Add handler in `src/handlers/api.rs` to process response
+
+**Adding a new keybinding:**
+1. Add state to `Model` (usually `model.ui` for dialogs/popups)
+2. Add keybinding handler in `src/handlers/keyboard.rs`
+   - Confirmation dialogs go at top of match statement (processed first)
+   - Regular keys go in main match block with conditional guards (e.g., `focus_level == 0`)
+3. Add dialog rendering in `src/ui/dialogs.rs` (if confirmation needed)
+4. Add rendering call in `src/ui/render.rs`
+5. Update hotkey legend in `src/ui/legend.rs` with context guards
+
+**Example: Pause/Resume Feature (complete implementation reference)**
+- API: `src/api.rs` - `set_folder_paused()` using PATCH `/rest/config/folders/{id}`
+- State: `model.ui.confirm_pause_resume: Option<(folder_id, label, is_paused)>`
+- Keybinding: `KeyCode::Char('p') if focus_level == 0` opens confirmation
+- Confirmation: Handles 'y' (execute), 'n'/Esc (cancel)
+- Execution: Call API, reload folders via `client.get_folders()`, update `model.syncthing.folders`
+- Dialog: `render_pause_resume_confirmation()` with color-coded borders
+- Legend: Shows "p:Pause/Resume" only in folder view
+- Visual: Pause icon (⏸ emoji /  nerdfont) via `FolderState::Paused`
+
+**State management patterns:**
+- **Model fields**: All application state lives in `Model` struct (pure, cloneable)
+- **Runtime fields**: Services, channels, caches in `App` struct (not cloneable)
+- **State updates**: Mutate `app.model.*` directly, reload from API when needed
+- **Toast messages**: `app.model.ui.show_toast()` for user feedback
+- **Modal dialogs**: Set `model.ui.confirm_*` field, handled at top of keyboard handler
+
+**UI rendering patterns:**
+- **Icon rendering**: Use `IconRenderer` with `FolderState` or `SyncState` enums
+- **Scrollbars**: Automatically rendered by breadcrumb panels using Ratatui's `Scrollbar` widget
+- **Context-aware display**: Check `focus_level` to show/hide keys in legend
+- **Color coding**: Use `Color::Cyan` (focused), `Color::Blue` (parent), `Color::Gray` (inactive)

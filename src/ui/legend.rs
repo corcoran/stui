@@ -47,6 +47,14 @@ pub fn render_legend(
         Span::raw(":Copy path  "),
     ]);
 
+    // Pause/Resume - only in folder view (focus_level == 0)
+    if focus_level == 0 {
+        hotkey_spans.extend(vec![
+            Span::styled("p", Style::default().fg(Color::Yellow)),
+            Span::raw(":Pause/Resume  "),
+        ]);
+    }
+
     // Actions that only apply to breadcrumbs (focus_level > 0), not folders
     if focus_level > 0 {
         hotkey_spans.extend(vec![

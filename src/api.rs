@@ -538,6 +538,39 @@ impl SyncthingClient {
 
         Ok(stats)
     }
+
+    /// Pause or resume a folder
+    ///
+    /// Uses PATCH /rest/config/folders/{id} to set the paused state
+    pub async fn set_folder_paused(&self, folder_id: &str, paused: bool) -> Result<()> {
+        let url = format!("{}/rest/config/folders/{}", self.base_url, urlencoding::encode(folder_id));
+
+        let payload = serde_json::json!({
+            "paused": paused
+        });
+
+        let response = self
+            .client
+            .patch(&url)
+            .header("X-API-Key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to set folder paused state")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to {} folder: {} - {}",
+                if paused { "pause" } else { "resume" },
+                status,
+                text
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl FileDetails {

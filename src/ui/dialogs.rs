@@ -104,6 +104,46 @@ pub fn render_delete_confirmation(f: &mut Frame, display_name: &str, is_dir: boo
     f.render_widget(prompt, prompt_area);
 }
 
+/// Render pause/resume folder confirmation dialog
+pub fn render_pause_resume_confirmation(f: &mut Frame, folder_label: &str, is_paused: bool) {
+    let action = if is_paused { "Resume" } else { "Pause" };
+    let action_lower = if is_paused { "resume" } else { "pause" };
+
+    let prompt_text = format!(
+        "{} folder?\n\n\
+        Folder: {}\n\n\
+        This will {} syncing for this folder.\n\n\
+        Continue? (y/n)",
+        action, folder_label, action_lower
+    );
+
+    // Center the prompt
+    let area = f.area();
+    let prompt_width = 50;
+    let prompt_height = 10;
+    let prompt_area = Rect {
+        x: (area.width.saturating_sub(prompt_width)) / 2,
+        y: (area.height.saturating_sub(prompt_height)) / 2,
+        width: prompt_width,
+        height: prompt_height,
+    };
+
+    let border_color = if is_paused { Color::Green } else { Color::Yellow };
+
+    let prompt = Paragraph::new(prompt_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Confirm {}", action))
+                .border_style(Style::default().fg(border_color)),
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+
+    f.render_widget(ratatui::widgets::Clear, prompt_area);
+    f.render_widget(prompt, prompt_area);
+}
+
 /// Render the pattern selection menu (for removing ignore patterns)
 pub fn render_pattern_selection(f: &mut Frame, patterns: &[String], state: &mut ListState) {
     let menu_items: Vec<ListItem> = patterns

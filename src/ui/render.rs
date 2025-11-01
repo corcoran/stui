@@ -199,6 +199,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
         dialogs::render_delete_confirmation(f, display_name, *is_dir);
     }
 
+    if let Some((_folder_id, folder_label, is_paused)) = &app.model.ui.confirm_pause_resume {
+        dialogs::render_pause_resume_confirmation(f, folder_label, *is_paused);
+    }
+
     if let Some(pattern_state) = &mut app.model.ui.pattern_selection {
         // Create temporary ListState for rendering
         let mut temp_state = ratatui::widgets::ListState::default();

@@ -146,6 +146,51 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
 
+        // Handle pause/resume confirmation prompt
+        if let Some((folder_id, _folder_label, is_paused)) = &app.model.ui.confirm_pause_resume {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // User confirmed - pause/resume the folder
+                    let folder_id = folder_id.clone();
+                    let is_paused = *is_paused;
+                    app.model.ui.confirm_pause_resume = None;
+
+                    // Toggle pause state
+                    let new_paused_state = !is_paused;
+                    match app.client.set_folder_paused(&folder_id, new_paused_state).await {
+                        Ok(_) => {
+                            let action = if new_paused_state { "paused" } else { "resumed" };
+                            app.model.ui.show_toast(format!("Folder {}", action));
+
+                            // Immediately reload folder list to update paused state
+                            match app.client.get_folders().await {
+                                Ok(folders) => {
+                                    app.model.syncthing.folders = folders;
+                                }
+                                Err(e) => {
+                                    crate::log_debug(&format!("Failed to reload folders after pause/resume: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            app.model.ui.show_toast(format!("Failed to pause/resume folder: {}", e));
+                        }
+                    }
+
+                    return Ok(());
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    // User cancelled
+                    app.model.ui.confirm_pause_resume = None;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while prompt is showing
+                    return Ok(());
+                }
+            }
+        }
+
         // Handle pattern selection menu
         if let Some(pattern_state) = &mut app.model.ui.pattern_selection {
             match key.code {
@@ -406,6 +451,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Char('c') => {
                 // Copy folder ID (folders) or file/directory path (breadcrumbs)
                 let _ = app.copy_to_clipboard();
+            }
+            KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {
+                // Pause/resume folder (only in folder view)
+                if let Some(folder) = app.model.selected_folder() {
+                    let label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
+                    app.model.ui.confirm_pause_resume = Some((
+                        folder.id.clone(),
+                        label,
+                        folder.paused,
+                    ));
+                }
             }
             KeyCode::Char('s') => {
                 // Cycle through sort modes

@@ -41,6 +41,9 @@ pub struct UiModel {
     /// Confirmation dialog for ignore+delete operation
     pub confirm_ignore_delete: Option<(String, String, bool)>, // (host_path, display_name, is_dir)
 
+    /// Confirmation dialog for pause/resume folder
+    pub confirm_pause_resume: Option<(String, String, bool)>, // (folder_id, folder_label, is_paused)
+
     /// Pattern selection menu for un-ignore
     pub pattern_selection: Option<PatternSelectionState>,
 
@@ -75,6 +78,7 @@ impl UiModel {
             confirm_revert: None,
             confirm_delete: None,
             confirm_ignore_delete: None,
+            confirm_pause_resume: None,
             pattern_selection: None,
             file_info_popup: None,
             toast_message: None,
@@ -89,6 +93,7 @@ impl UiModel {
         self.confirm_revert.is_some()
             || self.confirm_delete.is_some()
             || self.confirm_ignore_delete.is_some()
+            || self.confirm_pause_resume.is_some()
             || self.pattern_selection.is_some()
             || self.file_info_popup.is_some()
     }
@@ -98,6 +103,7 @@ impl UiModel {
         self.confirm_revert = None;
         self.confirm_delete = None;
         self.confirm_ignore_delete = None;
+        self.confirm_pause_resume = None;
         self.pattern_selection = None;
         self.file_info_popup = None;
     }
