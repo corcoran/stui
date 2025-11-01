@@ -3000,7 +3000,7 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         // Auto-dismiss toast after 1.5 seconds
         if let Some((_, timestamp)) = app.model.ui.toast_message {
-            if timestamp.elapsed().as_millis() >= 1500 {
+            if crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis()) {
                 app.model.ui.toast_message = None;
             }
         }

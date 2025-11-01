@@ -107,10 +107,10 @@ impl UiModel {
         self.toast_message = Some((message, Instant::now()));
     }
 
-    /// Check if toast should be dismissed (older than 3 seconds)
+    /// Check if toast should be dismissed (older than 1.5 seconds)
     pub fn should_dismiss_toast(&self) -> bool {
         if let Some((_, timestamp)) = &self.toast_message {
-            timestamp.elapsed().as_secs() >= 3
+            crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis())
         } else {
             false
         }

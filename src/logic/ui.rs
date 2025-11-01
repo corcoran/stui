@@ -164,6 +164,30 @@ pub fn next_vim_command_state(
     }
 }
 
+/// Check if a toast notification should be dismissed based on elapsed time
+///
+/// Toasts are automatically dismissed after 1.5 seconds to avoid cluttering the UI.
+/// This timeout balances between giving users time to read messages and maintaining
+/// a clean interface.
+///
+/// # Arguments
+/// * `elapsed_millis` - Milliseconds since the toast was created
+///
+/// # Returns
+/// `true` if the toast should be dismissed, `false` otherwise
+///
+/// # Examples
+/// ```
+/// use synctui::logic::ui::should_dismiss_toast;
+///
+/// assert_eq!(should_dismiss_toast(1000), false);  // 1 second - still showing
+/// assert_eq!(should_dismiss_toast(1500), true);   // 1.5 seconds - dismiss
+/// assert_eq!(should_dismiss_toast(2000), true);   // 2 seconds - dismiss
+/// ```
+pub fn should_dismiss_toast(elapsed_millis: u128) -> bool {
+    elapsed_millis >= 1500
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +289,28 @@ mod tests {
         (state, should_jump) = next_vim_command_state(state, true);
         assert_eq!(state, VimCommandState::None);
         assert!(should_jump);
+    }
+
+    #[test]
+    fn test_should_dismiss_toast_before_timeout() {
+        // Toast shown for less than 1.5 seconds - should NOT dismiss
+        assert!(!should_dismiss_toast(0));
+        assert!(!should_dismiss_toast(500));
+        assert!(!should_dismiss_toast(1000));
+        assert!(!should_dismiss_toast(1499));
+    }
+
+    #[test]
+    fn test_should_dismiss_toast_at_timeout() {
+        // Exactly at timeout threshold - should dismiss
+        assert!(should_dismiss_toast(1500));
+    }
+
+    #[test]
+    fn test_should_dismiss_toast_after_timeout() {
+        // Toast shown for more than 1.5 seconds - should dismiss
+        assert!(should_dismiss_toast(1501));
+        assert!(should_dismiss_toast(2000));
+        assert!(should_dismiss_toast(5000));
     }
 }
