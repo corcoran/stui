@@ -3,6 +3,7 @@
 //! This module contains pure business logic functions that can be unit tested:
 //! - file: File type detection and utilities
 //! - folder: Folder validation and business logic
+//! - formatting: Data formatting for human-readable display
 //! - ignore: Pattern matching for .stignore rules
 //! - layout: UI layout calculations and constraints
 //! - navigation: Navigation selection calculations
@@ -13,6 +14,7 @@
 
 pub mod file;
 pub mod folder;
+pub mod formatting;
 pub mod ignore;
 pub mod layout;
 pub mod navigation;

@@ -9,17 +9,7 @@ use ratatui::{
 
 /// Format uptime seconds into human-readable string (e.g., "3d 15h", "15h 44m", "44m 30s")
 fn format_uptime(seconds: u64) -> String {
-    let days = seconds / 86400;
-    let hours = (seconds % 86400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-
-    if days > 0 {
-        format!("{}d {}h", days, hours)
-    } else if hours > 0 {
-        format!("{}h {}m", hours, minutes)
-    } else {
-        format!("{}m", minutes)
-    }
+    crate::logic::formatting::format_uptime(seconds)
 }
 
 /// Format human-readable size (4-character alignment, e.g., "1.2K", "5.3M", " 128G")
