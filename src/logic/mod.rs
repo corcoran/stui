@@ -6,6 +6,7 @@
 //! - ignore: Pattern matching for .stignore rules
 //! - navigation: Navigation selection calculations
 //! - path: Path mapping and translation utilities
+//! - performance: Batching and performance optimizations
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
@@ -14,5 +15,6 @@ pub mod folder;
 pub mod ignore;
 pub mod navigation;
 pub mod path;
+pub mod performance;
 pub mod sync_states;
 pub mod ui;

@@ -351,15 +351,10 @@ impl App {
 
     /// Check if we should flush pending writes based on batch size or time
     fn should_flush_db(&self) -> bool {
-        const MAX_BATCH_SIZE: usize = 50;
-        const MAX_BATCH_AGE_MS: u64 = 100;
-
-        if self.pending_sync_state_writes.is_empty() {
-            return false;
-        }
-
-        self.pending_sync_state_writes.len() >= MAX_BATCH_SIZE
-            || self.last_db_flush.elapsed() > Duration::from_millis(MAX_BATCH_AGE_MS)
+        logic::performance::should_flush_batch(
+            self.pending_sync_state_writes.len(),
+            self.last_db_flush.elapsed(),
+        )
     }
 
 
