@@ -14,6 +14,54 @@ The file management, image preview, and ANSI art rendering features are core dif
 
 ## claude instructions
 
+### CRITICAL: Test-Driven Development is MANDATORY
+
+**YOU MUST WRITE TESTS FIRST. NO EXCEPTIONS.**
+
+Every code change requires this exact workflow:
+
+1. **STOP and think**: "What tests do I need?"
+2. **Write tests FIRST** that expose the bug or define the feature
+3. **Verify tests fail** (proving they test the right thing)
+4. **Implement** minimal code to pass tests
+5. **Verify tests pass**
+6. **Only then** commit
+
+**Why this matters:**
+- Without tests, you waste user's time and money debugging blind
+- Tests document expected behavior and catch regressions
+- TDD prevents over-engineering and scope creep
+- Example: Commit fcf4362 (reconnection fix) - 10 tests written first, exposed exact bug, guided perfect solution
+
+**Red flags that you're doing it wrong:**
+- ❌ "Let me try this change and see if it works"
+- ❌ "I'll add some debug logging to investigate"
+- ❌ Making multiple attempts without tests
+- ❌ Saying "I think this should work"
+
+**What you should do instead:**
+- ✅ "Let me write a test that reproduces this bug"
+- ✅ "I'll write tests for these 3 scenarios first"
+- ✅ "Here's a failing test - now I'll implement the fix"
+- ✅ "All 10 tests pass, ready to commit"
+
+**When to write tests:**
+- Adding new features → Write feature tests first
+- Fixing bugs → Write test that reproduces bug first
+- Refactoring → Ensure existing tests pass, add coverage if missing
+- Changing state logic → Write state transition tests first
+- User reports "X doesn't work" → Write test showing X failing
+
+**If you catch yourself coding before testing:**
+1. STOP immediately
+2. Delete/revert the code
+3. Write tests first
+4. Start over with proper TDD
+
+This is not optional. This is not a suggestion. **This is how professional software is built.**
+
+### Other Instructions
+
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
 - Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
 - Make logging comprehensive but concise - debug logs should be informative without overwhelming
@@ -417,6 +465,7 @@ CLI flags:
 - **Non-Blocking**: Keep UI responsive during all API calls
 - **Cache Coherency**: Use sequence numbers to validate cached data
 - **Testing - CRITICAL REQUIREMENT**:
+  - **Test-Driven Development is MANDATORY** (see top of file for detailed TDD workflow)
   - **ALWAYS write tests when:**
     1. Adding new features (especially state management)
     2. Fixing bugs or edge cases
@@ -436,8 +485,15 @@ CLI flags:
   - **Test Coverage Requirements:**
     - Model state changes → tests in `src/model/*/tests`
     - Business logic → tests in `src/logic/*/tests`
-    - Integration behavior → document in commit message
+    - Integration tests → `tests/*.rs` files (see `tests/reconnection_test.rs`)
     - Aim for 100% coverage of new code paths
+  - **Real-World Success Story - Commit fcf4362:**
+    - Problem: Folders not populating after reconnection (cost $20 debugging blind)
+    - TDD Approach: Wrote 10 tests first exposing exact bug
+    - Test `test_state_already_connected_before_system_status` revealed root cause
+    - Solution: Simple 1-line fix guided by tests
+    - Result: All 184 tests pass, bug fixed perfectly on first try
+    - **Lesson: TDD saves time and money**
   - **When Claude forgets to write tests:**
     - User should immediately call it out
     - Claude should apologize and write tests before proceeding
@@ -446,7 +502,7 @@ CLI flags:
     - Test with real Syncthing Docker instances with large datasets
     - Pure business logic in `src/logic/` should have comprehensive test coverage
     - Model state transitions should have tests in corresponding test modules
-    - Run `cargo test` before committing to ensure all 157+ tests pass
+    - Run `cargo test` before committing to ensure all 184+ tests pass
     - Aim for zero compiler warnings (`cargo build` should be clean)
 - **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
 
