@@ -14,44 +14,7 @@ fn format_uptime(seconds: u64) -> String {
 
 /// Format human-readable size (4-character alignment, e.g., "1.2K", "5.3M", " 128G")
 fn format_human_size(size: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if size == 0 {
-        return "   0".to_string();
-    } else if size < KB {
-        return format!("{:>4}", size);
-    } else if size < MB {
-        let kb = size as f64 / KB as f64;
-        if kb < 10.0 {
-            return format!("{:.1}K", kb);
-        } else {
-            return format!("{:>3}K", (size / KB));
-        }
-    } else if size < GB {
-        let mb = size as f64 / MB as f64;
-        if mb < 10.0 {
-            return format!("{:.1}M", mb);
-        } else {
-            return format!("{:>3}M", (size / MB));
-        }
-    } else if size < TB {
-        let gb = size as f64 / GB as f64;
-        if gb < 10.0 {
-            return format!("{:.1}G", gb);
-        } else {
-            return format!("{:>3}G", (size / GB));
-        }
-    } else {
-        let tb = size as f64 / TB as f64;
-        if tb < 10.0 {
-            return format!("{:.1}T", tb);
-        } else {
-            return format!("{:>3}T", (size / TB));
-        }
-    }
+    crate::logic::formatting::format_human_size(size)
 }
 
 /// Format transfer rate (bytes/sec) into human-readable string
