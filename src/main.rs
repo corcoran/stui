@@ -102,16 +102,6 @@ pub enum DisplayMode {
     TimestampAndSize, // Show both size and timestamp
 }
 
-impl DisplayMode {
-    fn next(&self) -> Self {
-        match self {
-            DisplayMode::Off => DisplayMode::TimestampOnly,
-            DisplayMode::TimestampOnly => DisplayMode::TimestampAndSize,
-            DisplayMode::TimestampAndSize => DisplayMode::Off,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     VisualIndicator, // Sort by sync state icon (directories first, then by state priority)

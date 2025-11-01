@@ -5,8 +5,10 @@
 //! - ignore: Pattern matching for .stignore rules
 //! - path: Path mapping and translation utilities
 //! - sync_states: Sync state priority and transitions
+//! - ui: UI state transitions and cycling
 
 pub mod folder;
 pub mod ignore;
 pub mod path;
 pub mod sync_states;
+pub mod ui;

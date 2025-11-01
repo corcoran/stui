@@ -417,7 +417,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('t') => {
                 // Cycle through display modes: Off -> TimestampOnly -> TimestampAndSize -> Off
-                app.model.ui.display_mode = app.model.ui.display_mode.next();
+                app.model.ui.display_mode = crate::logic::ui::cycle_display_mode(app.model.ui.display_mode);
             }
             KeyCode::Char('?') if app.model.navigation.focus_level > 0 => {
                 // Toggle file information popup
