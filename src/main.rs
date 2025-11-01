@@ -190,6 +190,8 @@ pub struct App {
     last_connection_stats_fetch: Instant,
     last_directory_update: Instant,
     last_db_flush: Instant,
+    last_reconnect_attempt: Instant,
+    reconnect_delay: Duration,
 
     // 📊 Performance Optimizations (Runtime)
     pending_sync_state_writes: Vec<(String, String, SyncState, u64)>,
@@ -358,10 +360,55 @@ impl App {
     }
 
 
-    async fn new(config: Config) -> Result<Self> {
+    async fn new(config: Config, config_path: String) -> Result<Self> {
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
         let cache = CacheDb::new()?;
-        let folders = client.get_folders().await?;
+
+        // Try to fetch folders from API, fall back to cache on error
+        let (folders, initial_connection_state) = match client.get_folders().await {
+            Ok(folders) => {
+                // Success! Cache them for next time
+                log_debug(&format!("Successfully fetched {} folders from API", folders.len()));
+                if let Err(e) = cache.save_folders(&folders) {
+                    log_debug(&format!("Failed to cache folders: {}", e));
+                } else {
+                    log_debug("Successfully cached folders");
+                }
+                (folders, model::syncthing::ConnectionState::Connected)
+            }
+            Err(e) => {
+                // Failed to fetch - try cache
+                log_debug(&format!("Failed to fetch folders from API: {}", e));
+                let cached_folders = cache.get_all_folders().unwrap_or_else(|cache_err| {
+                    log_debug(&format!("Failed to load folders from cache: {}", cache_err));
+                    vec![]
+                });
+
+                if cached_folders.is_empty() {
+                    // No cache - need to show setup help
+                    log_debug("No cached folders available - will show setup help dialog");
+                    (
+                        vec![],
+                        model::syncthing::ConnectionState::Disconnected {
+                            error_type: logic::errors::classify_error(&e),
+                            message: logic::errors::format_error_message(&e),
+                        },
+                    )
+                } else {
+                    // Use cache, will auto-retry in background
+                    log_debug(&format!("Using {} cached folders, will auto-retry connection", cached_folders.len()));
+                    (
+                        cached_folders,
+                        model::syncthing::ConnectionState::Connecting {
+                            attempt: 1,
+                            last_error: Some(e.to_string()),
+                            next_retry_secs: 5,
+                        },
+                    )
+                }
+            }
+        };
+
         let devices = client.get_devices().await.unwrap_or_default();
 
         // Spawn API service worker
@@ -450,9 +497,16 @@ impl App {
         let mut model = model::Model::new(config.vim_mode);
         model.ui.display_mode = DisplayMode::TimestampAndSize; // Start with most info
         model.ui.sort_mode = SortMode::Alphabetical;
-        model.syncthing.folders = folders;
+        model.syncthing.folders = folders.clone();
         model.syncthing.devices = devices;
+        model.syncthing.connection_state = initial_connection_state.clone();
+        model.ui.config_path = config_path;
         model.ui.image_font_size = image_font_size;
+
+        // Show setup help if no folders and disconnected
+        if folders.is_empty() && matches!(initial_connection_state, model::syncthing::ConnectionState::Disconnected { .. }) {
+            model.ui.show_setup_help = true;
+        }
 
         let mut app = App {
             model,
@@ -474,6 +528,8 @@ impl App {
             last_connection_stats_fetch: Instant::now(),
             last_directory_update: Instant::now(),
             last_db_flush: Instant::now(),
+            last_reconnect_attempt: Instant::now(),
+            reconnect_delay: Duration::from_secs(5), // Start with 5s
             pending_sync_state_writes: Vec::new(),
             image_state_map: HashMap::new(),
         };
@@ -562,10 +618,15 @@ impl App {
     fn refresh_folder_statuses_nonblocking(&mut self) {
         // Non-blocking version for background polling
         // Sends status requests via API service
-        for folder in &self.model.syncthing.folders {
-            let _ = self.api_tx.send(services::api::ApiRequest::GetFolderStatus {
-                folder_id: folder.id.clone(),
-            });
+        if self.model.syncthing.folders.is_empty() {
+            // No folders - send SystemStatus as a connection probe
+            let _ = self.api_tx.send(services::api::ApiRequest::GetSystemStatus);
+        } else {
+            for folder in &self.model.syncthing.folders {
+                let _ = self.api_tx.send(services::api::ApiRequest::GetFolderStatus {
+                    folder_id: folder.id.clone(),
+                });
+            }
         }
     }
 
@@ -1243,24 +1304,32 @@ impl App {
 
                     // Cache miss - fetch from API
                     self.model.performance.cache_hit = Some(false);
-                    let mut items = self.client.browse_folder(&folder.id, None).await?;
+                    match self.client.browse_folder(&folder.id, None).await {
+                        Ok(mut items) => {
+                            // Merge local-only files from receive-only folders
+                            let local_items = self
+                                .merge_local_only_files(&folder.id, &mut items, None)
+                                .await;
 
-                    // Merge local-only files from receive-only folders
-                    let local_items = self
-                        .merge_local_only_files(&folder.id, &mut items, None)
-                        .await;
+                            if let Err(e) =
+                                self.cache
+                                    .save_browse_items(&folder.id, None, &items, folder_sequence)
+                            {
+                                log_debug(&format!("ERROR saving root cache: {}", e));
+                            }
 
-                    if let Err(e) =
-                        self.cache
-                            .save_browse_items(&folder.id, None, &items, folder_sequence)
-                    {
-                        log_debug(&format!("ERROR saving root cache: {}", e));
+                            // Done loading
+                            self.model.performance.loading_browse.remove(&browse_key);
+
+                            (items, local_items)
+                        }
+                        Err(e) => {
+                            self.model.performance.loading_browse.remove(&browse_key);
+                            log_debug(&format!("Failed to browse folder root: {}",
+                                crate::logic::errors::format_error_message(&e)));
+                            return Ok(());
+                        }
                     }
-
-                    // Done loading
-                    self.model.performance.loading_browse.remove(&browse_key);
-
-                    (items, local_items)
                 };
 
                 // Record load time
@@ -1381,27 +1450,36 @@ impl App {
                     self.model.performance.cache_hit = Some(false);
 
                     // Cache miss - fetch from API (BLOCKING)
-                    let mut items = self
+                    match self
                         .client
                         .browse_folder(&folder_id, Some(&new_prefix))
-                        .await?;
+                        .await
+                    {
+                        Ok(mut items) => {
+                            // Merge local-only files from receive-only folders
+                            let local_items = self
+                                .merge_local_only_files(&folder_id, &mut items, Some(&new_prefix))
+                                .await;
 
-                    // Merge local-only files from receive-only folders
-                    let local_items = self
-                        .merge_local_only_files(&folder_id, &mut items, Some(&new_prefix))
-                        .await;
+                            let _ = self.cache.save_browse_items(
+                                &folder_id,
+                                Some(&new_prefix),
+                                &items,
+                                folder_sequence,
+                            );
 
-                    let _ = self.cache.save_browse_items(
-                        &folder_id,
-                        Some(&new_prefix),
-                        &items,
-                        folder_sequence,
-                    );
+                            // Done loading
+                            self.model.performance.loading_browse.remove(&browse_key);
 
-                    // Done loading
-                    self.model.performance.loading_browse.remove(&browse_key);
-
-                    (items, local_items)
+                            (items, local_items)
+                        }
+                        Err(e) => {
+                            self.model.ui.show_toast(format!("Unable to browse: {}",
+                                crate::logic::errors::format_error_message(&e)));
+                            self.model.performance.loading_browse.remove(&browse_key);
+                            return Ok(());
+                        }
+                    }
                 };
 
                 // Record load time
@@ -3298,6 +3376,7 @@ async fn main() -> Result<()> {
 
     // Determine config file path
     let config_path = get_config_path(args.config)?;
+    let config_path_str = config_path.display().to_string();
 
     if args.debug {
         log_debug(&format!("Loading config from: {:?}", config_path));
@@ -3313,7 +3392,7 @@ async fn main() -> Result<()> {
     }
 
     // Initialize app
-    let mut app = App::new(config).await?;
+    let mut app = App::new(config, config_path_str).await?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -3428,6 +3507,89 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Status updates now only happen:
         // 1. On app startup (initial load)
         // 2. After user-initiated rescan (to get updated sequence)
+
+        // Background reconnection: Attempt to reconnect when disconnected or connecting
+        // Uses exponential backoff: 5s -> 10s -> 20s -> 40s -> 60s (capped)
+        if matches!(
+            app.model.syncthing.connection_state,
+            model::syncthing::ConnectionState::Disconnected { .. }
+                | model::syncthing::ConnectionState::Connecting { .. }
+        ) {
+            if app.last_reconnect_attempt.elapsed() >= app.reconnect_delay {
+                crate::log_debug(&format!(
+                    "DEBUG [Background Reconnection]: Attempting to reconnect (delay: {:?})...",
+                    app.reconnect_delay
+                ));
+
+                // Calculate next delay BEFORE updating state (so UI shows correct next retry time)
+                let next_delay = std::cmp::min(
+                    app.reconnect_delay * 2,
+                    Duration::from_secs(60)
+                );
+
+                // Update state to show we're attempting
+                if let model::syncthing::ConnectionState::Disconnected { message, .. } =
+                    &app.model.syncthing.connection_state
+                {
+                    app.model.syncthing.connection_state = model::syncthing::ConnectionState::Connecting {
+                        attempt: 1,
+                        last_error: Some(message.clone()),
+                        next_retry_secs: next_delay.as_secs(),
+                    };
+                } else if let model::syncthing::ConnectionState::Connecting { attempt, last_error, .. } =
+                    &app.model.syncthing.connection_state
+                {
+                    let new_attempt = attempt + 1;
+                    app.model.syncthing.connection_state = model::syncthing::ConnectionState::Connecting {
+                        attempt: new_attempt,
+                        last_error: last_error.clone(),
+                        next_retry_secs: next_delay.as_secs(),
+                    };
+                }
+
+                // Try to refresh folder statuses to test connection
+                app.refresh_folder_statuses_nonblocking();
+                app.last_reconnect_attempt = Instant::now();
+
+                // Update reconnect delay for next attempt
+                app.reconnect_delay = next_delay;
+            }
+        } else {
+            // Connected - reset reconnect delay for next disconnection
+            app.reconnect_delay = Duration::from_secs(5);
+        }
+
+        // Check if we need to fetch folders after reconnection
+        if app.model.ui.needs_folder_refresh {
+            crate::log_debug(&format!(
+                "DEBUG [Main Loop]: needs_folder_refresh flag set, fetching folders (show_setup_help={})",
+                app.model.ui.show_setup_help
+            ));
+            app.model.ui.needs_folder_refresh = false;
+            match app.client.get_folders().await {
+                Ok(folders) => {
+                    crate::log_debug(&format!("DEBUG [Main Loop]: Successfully fetched {} folders", folders.len()));
+                    let _ = app.cache.save_folders(&folders);
+                    app.model.syncthing.folders = folders;
+
+                    // If we now have folders, load their statuses and select first one
+                    if !app.model.syncthing.folders.is_empty() {
+                        crate::log_debug("DEBUG [Main Loop]: Loading folder statuses and selecting first folder");
+                        app.model.navigation.folders_state_selection = Some(0);
+                        app.load_folder_statuses().await;
+                        let _ = app.load_root_level(true).await;
+                        // Dismiss setup help dialog since we now have folders
+                        app.model.ui.show_setup_help = false;
+                        crate::log_debug("DEBUG [Main Loop]: Folders loaded and setup help dismissed");
+                    } else {
+                        crate::log_debug("DEBUG [Main Loop]: WARNING - fetched 0 folders!");
+                    }
+                }
+                Err(e) => {
+                    crate::log_debug(&format!("DEBUG [Main Loop]: Failed to fetch folders: {}", e));
+                }
+            }
+        }
 
         // Refresh device/system status periodically (less frequently than folder stats)
         // System status every 30 seconds, connection stats every 2-3 seconds

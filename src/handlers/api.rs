@@ -378,6 +378,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             app.model.syncthing.connection_state = ConnectionState::Connected;
 
             // If we just reconnected, immediately fetch system status for responsive UI
+            // SystemStatus will handle setting needs_folder_refresh if folders are empty
             if was_disconnected {
                 let start = std::time::Instant::now();
                 crate::log_debug("DEBUG [FolderStatusResult]: Just reconnected, requesting immediate system status");
@@ -522,10 +523,23 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     let _ = app.api_tx.send(ApiRequest::GetDevices);
                 }
 
-                // If we just reconnected and have no folders, set a flag to fetch them
-                if was_disconnected && app.model.syncthing.folders.is_empty() {
-                    crate::log_debug("DEBUG [SystemStatusResult]: Just reconnected with no folders, setting fetch flag");
+                // If we're connected but have no folders, fetch them
+                // Note: We don't check was_disconnected because FolderStatus might have set
+                // connection state to Connected before SystemStatus arrives
+                // We also don't check show_setup_help because user might have dismissed it
+                if app.model.syncthing.folders.is_empty() {
+                    crate::log_debug(&format!(
+                        "DEBUG [SystemStatusResult]: Connected with no folders, setting fetch flag (was_disconnected={} show_setup_help={})",
+                        was_disconnected,
+                        app.model.ui.show_setup_help
+                    ));
                     app.model.ui.needs_folder_refresh = true;
+                } else {
+                    crate::log_debug(&format!(
+                        "DEBUG [SystemStatusResult]: NOT setting flag - folders.len()={} (was_disconnected={})",
+                        app.model.syncthing.folders.len(),
+                        was_disconnected
+                    ));
                 }
 
                 // Successful API call - mark as connected
