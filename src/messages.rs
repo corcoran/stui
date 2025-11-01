@@ -9,38 +9,95 @@
 //! - Event stream (cache invalidation from Syncthing events)
 //! - Background tasks (image loading)
 //! - Timers (periodic updates)
-//!
-//! Note: Currently unused - will be integrated in Phase 1.3 (Extract Handlers)
-
-#![allow(dead_code)]
 
 use crossterm::event::KeyEvent;
 
+use crate::api::{BrowseItem, ConnectionStats, FileDetails, FolderStatus, SystemStatus};
 use crate::services::api::ApiResponse;
 use crate::services::events::CacheInvalidation;
 use crate::ImagePreviewState;
 
 /// Unified message type for all application events
+///
+/// In Elm Architecture, all state changes flow through messages.
+/// This enum captures every event that can occur in the application.
 #[derive(Debug)]
-pub enum AppMessage {
-    /// User pressed a key
+pub enum Msg {
+    // ============================================
+    // USER INPUT
+    // ============================================
+    /// User pressed a key (triggers navigation, actions, etc.)
     KeyPress(KeyEvent),
 
-    /// API response received from background service
+    // ============================================
+    // SYNCTHING API (updates SyncthingModel)
+    // ============================================
+    /// Generic API response wrapper (for backward compatibility during migration)
+    /// TODO: Phase out in favor of specific variants below
     ApiResponse(ApiResponse),
 
+    /// Browse results loaded from API
+    BrowseResult {
+        folder_id: String,
+        prefix: Option<String>,
+        items: Result<Vec<BrowseItem>, String>,
+    },
+
+    /// File details loaded from API
+    FileInfoResult {
+        folder_id: String,
+        file_path: String,
+        details: Result<FileDetails, String>,
+    },
+
+    /// Folder status loaded from API
+    FolderStatusResult {
+        folder_id: String,
+        status: Result<FolderStatus, String>,
+    },
+
+    /// Folder rescan completed
+    RescanResult {
+        folder_id: String,
+        success: bool,
+        error: Option<String>,
+    },
+
+    /// System status loaded from API
+    SystemStatusResult {
+        status: Result<SystemStatus, String>,
+    },
+
+    /// Connection statistics loaded from API
+    ConnectionStatsResult {
+        stats: Result<ConnectionStats, String>,
+    },
+
+    // ============================================
+    // CACHE INVALIDATION (triggers background updates)
+    // ============================================
     /// Cache invalidation event from Syncthing event stream
+    /// Triggers background data refresh when Syncthing state changes
     CacheInvalidation(CacheInvalidation),
 
-    /// Event ID update for persistence
+    // ============================================
+    // PERFORMANCE TRACKING (updates PerformanceModel)
+    // ============================================
+    /// Event ID update for persistence across restarts
     EventIdUpdate(u64),
 
-    /// Background image loading completed
+    // ============================================
+    // UI UPDATES (updates UiModel)
+    // ============================================
+    /// Background image loading completed (for file info popup)
     ImageUpdate {
         file_path: String,
         state: ImagePreviewState,
     },
 
+    // ============================================
+    // PERIODIC UPDATES (all models)
+    // ============================================
     /// Periodic tick for time-based updates
     /// (system status refresh, connection stats, UI refresh for live data)
     Tick(TickType),
@@ -62,35 +119,85 @@ pub enum TickType {
     CleanupCheck,
 }
 
-impl AppMessage {
+impl Msg {
     /// Create a key press message
     pub fn key_press(key: KeyEvent) -> Self {
-        AppMessage::KeyPress(key)
+        Msg::KeyPress(key)
     }
 
     /// Create an API response message
     pub fn api_response(response: ApiResponse) -> Self {
-        AppMessage::ApiResponse(response)
+        Msg::ApiResponse(response)
     }
 
     /// Create a cache invalidation message
     pub fn cache_invalidation(invalidation: CacheInvalidation) -> Self {
-        AppMessage::CacheInvalidation(invalidation)
+        Msg::CacheInvalidation(invalidation)
     }
 
     /// Create an event ID update message
     pub fn event_id_update(event_id: u64) -> Self {
-        AppMessage::EventIdUpdate(event_id)
+        Msg::EventIdUpdate(event_id)
     }
 
     /// Create an image update message
     pub fn image_update(file_path: String, state: ImagePreviewState) -> Self {
-        AppMessage::ImageUpdate { file_path, state }
+        Msg::ImageUpdate { file_path, state }
     }
 
     /// Create a tick message
     pub fn tick(tick_type: TickType) -> Self {
-        AppMessage::Tick(tick_type)
+        Msg::Tick(tick_type)
+    }
+
+    /// Create a browse result message
+    pub fn browse_result(
+        folder_id: String,
+        prefix: Option<String>,
+        items: Result<Vec<BrowseItem>, String>,
+    ) -> Self {
+        Msg::BrowseResult {
+            folder_id,
+            prefix,
+            items,
+        }
+    }
+
+    /// Create a file info result message
+    pub fn file_info_result(
+        folder_id: String,
+        file_path: String,
+        details: Result<FileDetails, String>,
+    ) -> Self {
+        Msg::FileInfoResult {
+            folder_id,
+            file_path,
+            details,
+        }
+    }
+
+    /// Create a folder status result message
+    pub fn folder_status_result(folder_id: String, status: Result<FolderStatus, String>) -> Self {
+        Msg::FolderStatusResult { folder_id, status }
+    }
+
+    /// Create a rescan result message
+    pub fn rescan_result(folder_id: String, success: bool, error: Option<String>) -> Self {
+        Msg::RescanResult {
+            folder_id,
+            success,
+            error,
+        }
+    }
+
+    /// Create a system status result message
+    pub fn system_status_result(status: Result<SystemStatus, String>) -> Self {
+        Msg::SystemStatusResult { status }
+    }
+
+    /// Create a connection stats result message
+    pub fn connection_stats_result(stats: Result<ConnectionStats, String>) -> Self {
+        Msg::ConnectionStatsResult { stats }
     }
 }
 
@@ -101,11 +208,11 @@ mod tests {
     #[test]
     fn test_message_creation() {
         // Test helper functions work correctly
-        let msg = AppMessage::tick(TickType::UiRefresh);
-        assert!(matches!(msg, AppMessage::Tick(TickType::UiRefresh)));
+        let msg = Msg::tick(TickType::UiRefresh);
+        assert!(matches!(msg, Msg::Tick(TickType::UiRefresh)));
 
-        let event_msg = AppMessage::event_id_update(42);
-        assert!(matches!(event_msg, AppMessage::EventIdUpdate(42)));
+        let event_msg = Msg::event_id_update(42);
+        assert!(matches!(event_msg, Msg::EventIdUpdate(42)));
     }
 
     #[test]
