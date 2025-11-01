@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::api::{BrowseItem, FileDetails, SyncState};
 
 /// Vim command state for tracking double-key commands like 'gg'
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VimCommandState {
     None,
     WaitingForSecondG, // First 'g' pressed, waiting for second 'g'

@@ -2,7 +2,7 @@
 //!
 //! Pure functions for UI state cycling and transitions.
 
-use crate::{DisplayMode, SortMode};
+use crate::{model::VimCommandState, DisplayMode, SortMode};
 
 /// Cycle to the next display mode: Off → TimestampOnly → TimestampAndSize → Off
 ///
@@ -109,6 +109,61 @@ pub fn toggle_sort_reverse(current: bool, focus_level: usize) -> Option<bool> {
     Some(!current)
 }
 
+/// Calculate next vim command state when 'g' key is pressed
+///
+/// Vim mode uses a two-key sequence 'gg' to jump to the first item.
+/// This function handles the state machine for that sequence:
+/// - First 'g' press: transition to WaitingForSecondG
+/// - Second 'g' press (while waiting): return to None and signal completion
+///
+/// # Arguments
+/// * `current` - Current vim command state
+/// * `g_key_pressed` - Whether the 'g' key was just pressed
+///
+/// # Returns
+/// * `(new_state, should_jump_to_first)` - New state and whether to execute jump
+///
+/// # Examples
+/// ```
+/// use synctui::model::VimCommandState;
+/// use synctui::logic::ui::next_vim_command_state;
+///
+/// // First 'g' press - start sequence
+/// let (state, jump) = next_vim_command_state(VimCommandState::None, true);
+/// assert_eq!(state, VimCommandState::WaitingForSecondG);
+/// assert_eq!(jump, false);
+///
+/// // Second 'g' press - complete sequence
+/// let (state, jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, true);
+/// assert_eq!(state, VimCommandState::None);
+/// assert_eq!(jump, true);
+///
+/// // Other key press - reset
+/// let (state, jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, false);
+/// assert_eq!(state, VimCommandState::None);
+/// assert_eq!(jump, false);
+/// ```
+pub fn next_vim_command_state(
+    current: VimCommandState,
+    g_key_pressed: bool,
+) -> (VimCommandState, bool) {
+    if !g_key_pressed {
+        // Any non-g key resets the state
+        return (VimCommandState::None, false);
+    }
+
+    match current {
+        VimCommandState::None => {
+            // First 'g' press - start waiting for second
+            (VimCommandState::WaitingForSecondG, false)
+        }
+        VimCommandState::WaitingForSecondG => {
+            // Second 'g' press - complete the 'gg' sequence
+            (VimCommandState::None, true)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +219,51 @@ mod tests {
         // No toggling in folder list (focus_level == 0)
         assert_eq!(toggle_sort_reverse(false, 0), None);
         assert_eq!(toggle_sort_reverse(true, 0), None);
+    }
+
+    #[test]
+    fn test_next_vim_command_state_first_g_press() {
+        // First 'g' press - transition to waiting state
+        let (state, should_jump) = next_vim_command_state(VimCommandState::None, true);
+        assert_eq!(state, VimCommandState::WaitingForSecondG);
+        assert_eq!(should_jump, false);
+    }
+
+    #[test]
+    fn test_next_vim_command_state_second_g_press() {
+        // Second 'g' press - complete sequence and signal jump
+        let (state, should_jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, true);
+        assert_eq!(state, VimCommandState::None);
+        assert_eq!(should_jump, true);
+    }
+
+    #[test]
+    fn test_next_vim_command_state_reset_on_other_key() {
+        // Any non-g key resets state from waiting
+        let (state, should_jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, false);
+        assert_eq!(state, VimCommandState::None);
+        assert_eq!(should_jump, false);
+
+        // Non-g key in None state stays None
+        let (state, should_jump) = next_vim_command_state(VimCommandState::None, false);
+        assert_eq!(state, VimCommandState::None);
+        assert_eq!(should_jump, false);
+    }
+
+    #[test]
+    fn test_next_vim_command_state_full_sequence() {
+        // Simulate full 'gg' sequence
+        let mut state = VimCommandState::None;
+        let mut should_jump;
+
+        // First 'g'
+        (state, should_jump) = next_vim_command_state(state, true);
+        assert_eq!(state, VimCommandState::WaitingForSecondG);
+        assert!(!should_jump);
+
+        // Second 'g'
+        (state, should_jump) = next_vim_command_state(state, true);
+        assert_eq!(state, VimCommandState::None);
+        assert!(should_jump);
     }
 }

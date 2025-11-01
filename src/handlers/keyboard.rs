@@ -473,13 +473,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
             }
             KeyCode::Char('g') if app.model.ui.vim_mode => {
-                if app.model.ui.vim_command_state == model::VimCommandState::WaitingForSecondG {
-                    // gg - jump to first
+                let (new_state, should_jump) = crate::logic::ui::next_vim_command_state(
+                    app.model.ui.vim_command_state,
+                    true, // 'g' key pressed
+                );
+                app.model.ui.vim_command_state = new_state;
+                if should_jump {
                     app.jump_to_first().await;
-                    app.model.ui.vim_command_state = model::VimCommandState::None;
-                } else {
-                    // First 'g' press
-                    app.model.ui.vim_command_state = model::VimCommandState::WaitingForSecondG;
                 }
             }
             KeyCode::Char('G') if app.model.ui.vim_mode => {

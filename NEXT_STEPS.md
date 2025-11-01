@@ -1,7 +1,7 @@
 # Next Steps - Incremental Functional Migration
 
 **Last Updated:** 2025-10-31
-**Current Phase:** Step 3 - Extract Pure Business Logic (8/15 functions complete)
+**Current Phase:** Step 3 - Extract Pure Business Logic (9/15 functions complete)
 
 ---
 
@@ -20,19 +20,20 @@
 - Always-render approach (no dirty flags)
 - Image preview regression fixed
 
-**Phase 3: Pure Business Logic** (8/15 complete)
+**Phase 3: Pure Business Logic** (9/15 complete)
 - ✅ `logic::folder::has_local_changes()` - 3 tests
 - ✅ `logic::folder::can_delete_file()` - 4 tests
 - ✅ `logic::folder::should_show_restore_button()` - 4 tests
 - ✅ `logic::ui::cycle_display_mode()` - 3 tests
 - ✅ `logic::ui::cycle_sort_mode()` - 2 tests
 - ✅ `logic::ui::toggle_sort_reverse()` - 2 tests
+- ✅ `logic::ui::next_vim_command_state()` - 4 tests
 - ✅ `logic::ignore::validate_pattern()` - 6 tests
 - ✅ `logic::navigation::next_selection()` + `prev_selection()` - 10 tests
 
 ### 📊 Test Coverage
 
-- **82 tests passing** (65 logic + model, 17 state)
+- **86 tests passing** (69 logic + model, 17 state)
 - **Zero compilation errors**
 - **4 warnings** (unused imports/variables + unused function for future use - harmless)
 
@@ -350,7 +351,7 @@ fn test_prev_selection() {
 - [x] `validate_ignore_pattern()` - 25 min ✅ DONE
 - [x] `calculate_next_selection()` / `prev_selection()` - 30 min ✅ DONE
 - [x] `toggle_sort_reverse()` - 15 min ✅ DONE
-- [ ] `next_vim_command_state()` - 20 min
+- [x] `next_vim_command_state()` - 20 min ✅ DONE
 - [ ] `should_dismiss_toast()` - 15 min
 
 ### Phase C: Advanced (3-4 hours total)
