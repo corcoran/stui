@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::types::{FileInfoPopupState, PatternSelectionState, VimCommandState};
+use super::types::{FileInfoPopupState, FolderTypeSelectionState, PatternSelectionState, VimCommandState};
 use crate::{DisplayMode, SortMode};
 
 /// UI preferences and popups
@@ -47,6 +47,9 @@ pub struct UiModel {
     /// Pattern selection menu for un-ignore
     pub pattern_selection: Option<PatternSelectionState>,
 
+    /// Folder type selection menu
+    pub folder_type_selection: Option<FolderTypeSelectionState>,
+
     /// File info popup (metadata + preview)
     pub file_info_popup: Option<FileInfoPopupState>,
 
@@ -80,6 +83,7 @@ impl UiModel {
             confirm_ignore_delete: None,
             confirm_pause_resume: None,
             pattern_selection: None,
+            folder_type_selection: None,
             file_info_popup: None,
             toast_message: None,
             sixel_cleanup_frames: 0,
@@ -95,6 +99,7 @@ impl UiModel {
             || self.confirm_ignore_delete.is_some()
             || self.confirm_pause_resume.is_some()
             || self.pattern_selection.is_some()
+            || self.folder_type_selection.is_some()
             || self.file_info_popup.is_some()
     }
 
@@ -105,6 +110,7 @@ impl UiModel {
         self.confirm_ignore_delete = None;
         self.confirm_pause_resume = None;
         self.pattern_selection = None;
+        self.folder_type_selection = None;
         self.file_info_popup = None;
     }
 

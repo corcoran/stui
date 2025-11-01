@@ -212,6 +212,22 @@ pub fn render(f: &mut Frame, app: &mut App) {
         pattern_state.selected_index = temp_state.selected();
     }
 
+    if let Some(type_state) = &mut app.model.ui.folder_type_selection {
+        // Create temporary ListState for rendering
+        let mut temp_state = ratatui::widgets::ListState::default();
+        temp_state.select(Some(type_state.selected_index));
+        dialogs::render_folder_type_selection(
+            f,
+            &type_state.folder_label,
+            &type_state.current_type,
+            &mut temp_state,
+        );
+        // Sync back the selection (though it's managed by our own index)
+        if let Some(selected) = temp_state.selected() {
+            type_state.selected_index = selected;
+        }
+    }
+
     // Render file info popup if active
     if let Some(state) = &mut app.model.ui.file_info_popup {
         let my_device_id = app.model.syncthing.system_status.as_ref().map(|s| s.my_id.as_str());

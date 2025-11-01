@@ -314,6 +314,75 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
 
+        // Handle folder type selection menu
+        if let Some(type_state) = &mut app.model.ui.folder_type_selection {
+            match key.code {
+                KeyCode::Up => {
+                    if type_state.selected_index > 0 {
+                        type_state.selected_index -= 1;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    if type_state.selected_index < 2 {
+                        // 3 options: 0, 1, 2
+                        type_state.selected_index += 1;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    // Apply the selected folder type
+                    let selected_idx = type_state.selected_index;
+                    let folder_id = type_state.folder_id.clone();
+                    app.model.ui.folder_type_selection = None;
+
+                    let new_type = match selected_idx {
+                        0 => "sendonly",
+                        1 => "sendreceive",
+                        2 => "receiveonly",
+                        _ => "sendreceive", // Fallback
+                    };
+
+                    // Call API to change folder type
+                    match app.client.set_folder_type(&folder_id, new_type).await {
+                        Ok(_) => {
+                            let type_display = match new_type {
+                                "sendonly" => "Send Only",
+                                "sendreceive" => "Send & Receive",
+                                "receiveonly" => "Receive Only",
+                                _ => new_type,
+                            };
+                            app.model.ui.show_toast(format!("Folder type changed to {}", type_display));
+
+                            // Immediately reload folder list to update folder type
+                            match app.client.get_folders().await {
+                                Ok(folders) => {
+                                    app.model.syncthing.folders = folders;
+                                }
+                                Err(e) => {
+                                    crate::log_debug(&format!("Failed to reload folders after type change: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            app.model.ui.show_toast(format!("Failed to change folder type: {}", e));
+                        }
+                    }
+
+                    return Ok(());
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    // Cancel
+                    app.model.ui.folder_type_selection = None;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while menu is showing
+                    return Ok(());
+                }
+            }
+        }
+
         // Handle file info popup
         if let Some(popup_state) = &mut app.model.ui.file_info_popup {
             match key.code {
@@ -448,8 +517,27 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 // Open file/directory with configured command
                 let _ = app.open_selected_item();
             }
-            KeyCode::Char('c') => {
-                // Copy folder ID (folders) or file/directory path (breadcrumbs)
+            KeyCode::Char('c') if app.model.navigation.focus_level == 0 => {
+                // Change folder type (only in folder view)
+                if let Some(folder) = app.model.selected_folder() {
+                    let label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
+                    // Determine initial selection index based on current type
+                    let selected_index = match folder.folder_type.as_str() {
+                        "sendonly" => 0,
+                        "sendreceive" => 1,
+                        "receiveonly" => 2,
+                        _ => 1, // Default to Send & Receive
+                    };
+                    app.model.ui.folder_type_selection = Some(crate::model::types::FolderTypeSelectionState {
+                        folder_id: folder.id.clone(),
+                        folder_label: label,
+                        current_type: folder.folder_type.clone(),
+                        selected_index,
+                    });
+                }
+            }
+            KeyCode::Char('c') if app.model.navigation.focus_level > 0 => {
+                // Copy file/directory path (breadcrumbs only)
                 let _ = app.copy_to_clipboard();
             }
             KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {

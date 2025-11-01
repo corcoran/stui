@@ -9,6 +9,8 @@ pub struct Folder {
     #[allow(dead_code)]
     pub path: String,
     pub paused: bool,
+    #[serde(rename = "type")]
+    pub folder_type: String, // "sendonly", "sendreceive", "receiveonly"
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -567,6 +569,36 @@ impl SyncthingClient {
                 status,
                 text
             );
+        }
+
+        Ok(())
+    }
+
+    /// Change folder type
+    ///
+    /// Uses PATCH /rest/config/folders/{id} to set the folder type
+    /// Valid types: "sendonly", "sendreceive", "receiveonly"
+    pub async fn set_folder_type(&self, folder_id: &str, folder_type: &str) -> Result<()> {
+        let url = format!("{}/rest/config/folders/{}", self.base_url, urlencoding::encode(folder_id));
+
+        let payload = serde_json::json!({
+            "type": folder_type
+        });
+
+        let response = self
+            .client
+            .patch(&url)
+            .header("X-API-Key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to set folder type")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to set folder type: {} - {}", status, text);
         }
 
         Ok(())

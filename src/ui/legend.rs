@@ -41,15 +41,11 @@ pub fn render_legend(
         ]);
     }
 
-    // Copy - available in both folders and breadcrumbs
-    hotkey_spans.extend(vec![
-        Span::styled("c", Style::default().fg(Color::Yellow)),
-        Span::raw(":Copy path  "),
-    ]);
-
-    // Pause/Resume - only in folder view (focus_level == 0)
+    // Folder-specific actions - only in folder view (focus_level == 0)
     if focus_level == 0 {
         hotkey_spans.extend(vec![
+            Span::styled("c", Style::default().fg(Color::Yellow)),
+            Span::raw(":Change Type  "),
             Span::styled("p", Style::default().fg(Color::Yellow)),
             Span::raw(":Pause/Resume  "),
         ]);
@@ -57,6 +53,10 @@ pub fn render_legend(
 
     // Actions that only apply to breadcrumbs (focus_level > 0), not folders
     if focus_level > 0 {
+        hotkey_spans.extend(vec![
+            Span::styled("c", Style::default().fg(Color::Yellow)),
+            Span::raw(":Copy path  "),
+        ]);
         hotkey_spans.extend(vec![
             Span::styled("s", Style::default().fg(Color::Yellow)),
             Span::raw(":Sort  "),

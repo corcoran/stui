@@ -25,6 +25,15 @@ pub struct PatternSelectionState {
     pub selected_index: Option<usize>,
 }
 
+/// Folder type selection menu state
+#[derive(Clone, Debug)]
+pub struct FolderTypeSelectionState {
+    pub folder_id: String,
+    pub folder_label: String,
+    pub current_type: String, // "sendonly", "sendreceive", "receiveonly"
+    pub selected_index: usize, // 0=Send Only, 1=Send & Receive, 2=Receive Only
+}
+
 /// A single level in the breadcrumb trail
 #[derive(Clone, Debug)]
 pub struct BreadcrumbLevel {

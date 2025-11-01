@@ -34,10 +34,20 @@ pub fn render_status_bar(
         if let Some(selected) = folders_state_selected {
             if let Some(folder) = folders.get(selected) {
                 let folder_name = folder.label.as_ref().unwrap_or(&folder.id);
+
+                // Convert folder type to user-friendly display
+                let type_display = match folder.folder_type.as_str() {
+                    "sendonly" => "Send Only",
+                    "sendreceive" => "Send & Receive",
+                    "receiveonly" => "Receive Only",
+                    _ => &folder.folder_type,
+                };
+
                 if folder.paused {
                     format!(
-                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
+                        type_display,
                         "Paused",
                         "-",
                         "-",
@@ -87,8 +97,9 @@ pub fn render_status_bar(
                     };
 
                     format!(
-                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
+                        type_display,
                         state_display,
                         utils::format_bytes(status.global_bytes),
                         items_display,
@@ -96,8 +107,9 @@ pub fn render_status_bar(
                     )
                 } else {
                     format!(
-                        "{:<25} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
+                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
                         format!("Folder: {}", folder_name),
+                        type_display,
                         "Loading...",
                         "-",
                         "-",

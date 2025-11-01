@@ -182,6 +182,62 @@ pub fn render_pattern_selection(f: &mut Frame, patterns: &[String], state: &mut 
     f.render_stateful_widget(menu, menu_area, state);
 }
 
+/// Render the folder type selection menu
+pub fn render_folder_type_selection(
+    f: &mut Frame,
+    folder_label: &str,
+    current_type: &str,
+    state: &mut ListState,
+) {
+    let types = vec![
+        ("Send Only", "sendonly"),
+        ("Send & Receive", "sendreceive"),
+        ("Receive Only", "receiveonly"),
+    ];
+
+    let menu_items: Vec<ListItem> = types
+        .iter()
+        .map(|(display_name, api_name)| {
+            let mut style = Style::default().fg(Color::White);
+            // Highlight current type
+            if *api_name == current_type {
+                style = style.add_modifier(Modifier::ITALIC).fg(Color::Cyan);
+            }
+            ListItem::new(Span::styled(*display_name, style))
+        })
+        .collect();
+
+    // Center the menu
+    let area = f.area();
+    let menu_width = 50;
+    let menu_height = 11; // 3 items + borders + title + instructions
+    let menu_area = Rect {
+        x: (area.width.saturating_sub(menu_width)) / 2,
+        y: (area.height.saturating_sub(menu_height)) / 2,
+        width: menu_width,
+        height: menu_height,
+    };
+
+    let title = format!("Change Folder Type: {}", folder_label);
+    let menu = List::new(menu_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_bottom("↑↓ to navigate, Enter to select, Esc to cancel")
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("► ");
+
+    f.render_widget(ratatui::widgets::Clear, menu_area);
+    f.render_stateful_widget(menu, menu_area, state);
+}
+
 /// Render the file information popup with metadata and preview
 pub fn render_file_info(
     f: &mut Frame,
