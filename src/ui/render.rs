@@ -26,6 +26,62 @@ pub fn render(f: &mut Frame, app: &mut App) {
         false
     };
 
+    // Calculate status bar data (needed for status height calculation)
+    // Clone strings to avoid borrowing issues
+    let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) =
+        if app.model.navigation.focus_level > 0 {
+            let level_idx = app.model.navigation.focus_level - 1;
+            if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
+                let folder_label = Some(level.folder_label.clone());
+                let item_count = Some(level.items.len());
+                let selected_item = level.selected_index.and_then(|sel| {
+                    level.items.get(sel).map(|item| {
+                        let sync_state = level.file_sync_states.get(&item.name).copied();
+                        let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
+                        let exists = if is_ignored {
+                            level.ignored_exists.get(&item.name).copied()
+                        } else {
+                            None
+                        };
+                        (
+                            item.name.clone(),
+                            item.item_type.clone(),
+                            sync_state,
+                            exists,
+                        )
+                    })
+                });
+                (folder_label, item_count, selected_item)
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
+    let pending_operations_count: usize = app
+        .model.performance.pending_ignore_deletes
+        .values()
+        .map(|info| info.paths.len())
+        .sum();
+
+    // Calculate dynamic status bar height
+    let status_height = status_bar::calculate_status_height(
+        size.width,
+        app.model.navigation.focus_level,
+        &app.model.syncthing.folders,
+        &app.model.syncthing.folder_statuses,
+        app.model.navigation.folders_state_selection,
+        breadcrumb_folder_label.clone(),
+        breadcrumb_item_count,
+        breadcrumb_selected_item.clone(),
+        app.model.ui.sort_mode.as_str(),
+        app.model.ui.sort_reverse,
+        app.model.performance.last_load_time_ms,
+        app.model.performance.cache_hit,
+        pending_operations_count,
+    );
+
     let layout_info = layout::calculate_layout(
         size,
         app.model.navigation.breadcrumb_trail.len(),
@@ -34,6 +90,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.navigation.focus_level,
         can_restore,
         app.open_command.is_some(),
+        status_height,
     );
 
     // Render system info bar at the top
@@ -143,45 +200,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         );
     }
 
-    // Render status bar at the bottom
-    let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) =
-        if app.model.navigation.focus_level > 0 {
-            let level_idx = app.model.navigation.focus_level - 1;
-            if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                let folder_label = Some(level.folder_label.as_str());
-                let item_count = Some(level.items.len());
-                let selected_item = level.selected_index.and_then(|sel| {
-                    level.items.get(sel).map(|item| {
-                        let sync_state = level.file_sync_states.get(&item.name).copied();
-                        let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
-                        let exists = if is_ignored {
-                            level.ignored_exists.get(&item.name).copied()
-                        } else {
-                            None
-                        };
-                        (
-                            item.name.as_str(),
-                            item.item_type.as_str(),
-                            sync_state,
-                            exists,
-                        )
-                    })
-                });
-                (folder_label, item_count, selected_item)
-            } else {
-                (None, None, None)
-            }
-        } else {
-            (None, None, None)
-        };
-
-    // Calculate pending operations count (total paths across all folders)
-    let pending_operations_count: usize = app
-        .model.performance.pending_ignore_deletes
-        .values()
-        .map(|info| info.paths.len())
-        .sum();
-
+    // Render status bar at the bottom (using data calculated earlier for height)
     status_bar::render_status_bar(
         f,
         layout_info.status_area,

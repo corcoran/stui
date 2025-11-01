@@ -27,6 +27,7 @@ pub fn calculate_layout(
     focus_level: usize,
     can_restore: bool,
     has_open_command: bool,
+    status_height: u16,
 ) -> LayoutInfo {
     // Calculate dynamic legend height based on terminal width and content
     let legend_height = super::legend::calculate_legend_height(
@@ -44,7 +45,7 @@ pub fn calculate_layout(
             Constraint::Length(3),            // System info bar (3 lines: top border, text, bottom border)
             Constraint::Min(3),               // Content area (folders + breadcrumbs)
             Constraint::Length(legend_height), // Legend area (dynamic height, exact fit for wrapped content)
-            Constraint::Length(3),            // Status bar (3 lines: top border, text, bottom border)
+            Constraint::Length(status_height), // Status bar (dynamic height, exact fit for wrapped content)
         ])
         .split(terminal_size);
 

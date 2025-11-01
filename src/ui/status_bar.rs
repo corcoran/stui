@@ -4,32 +4,99 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 use std::collections::HashMap;
 
-/// Render the bottom status bar
-/// - When focus_level == 0: Shows folder status (state, size, sync progress)
-/// - When focus_level > 0: Shows directory metrics (items, sort mode, load time, cache hit)
-pub fn render_status_bar(
-    f: &mut Frame,
-    area: Rect,
+/// Build the status bar paragraph (reusable for both rendering and height calculation)
+pub fn build_status_paragraph(
     focus_level: usize,
     folders: &[Folder],
     folder_statuses: &HashMap<String, FolderStatus>,
     folders_state_selected: Option<usize>,
-    // For breadcrumb level display
-    breadcrumb_folder_label: Option<&str>,
+    breadcrumb_folder_label: Option<String>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(&str, &str, Option<SyncState>, Option<bool>)>, // (name, type, sync_state, exists)
+    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
     pending_operations_count: usize,
-) {
-    let status_line = if focus_level == 0 {
+) -> Paragraph<'static> {
+    let status_line = build_status_line(
+        focus_level,
+        folders,
+        folder_statuses,
+        folders_state_selected,
+        breadcrumb_folder_label,
+        breadcrumb_item_count,
+        breadcrumb_selected_item,
+        sort_mode,
+        sort_reverse,
+        last_load_time_ms,
+        cache_hit,
+        pending_operations_count,
+    );
+
+    // Parse status_line and color the labels (before colons)
+    let status_spans: Vec<Span> = if status_line.is_empty() {
+        vec![Span::raw("")]
+    } else {
+        let mut spans = vec![];
+        // Split on " | " separator (now used by both folder and breadcrumb views)
+        let parts: Vec<&str> = status_line.split(" | ").collect();
+
+        for (idx, part) in parts.iter().enumerate() {
+            if idx > 0 {
+                spans.push(Span::raw(" | "));
+            }
+
+            // Check if this part is an ignored status (red text)
+            let part_trimmed = part.trim();
+            if part_trimmed == "Ignored" || part_trimmed == "Ignored, not deleted!" {
+                spans.push(Span::styled(
+                    part.to_string(),
+                    Style::default().fg(Color::Red),
+                ));
+            } else if let Some(colon_pos) = part.find(':') {
+                // Split on first colon to separate label from value
+                let label = &part[..=colon_pos];
+                let value = &part[colon_pos + 1..];
+                spans.push(Span::styled(
+                    label.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ));
+                spans.push(Span::raw(value.to_string()));
+            } else {
+                spans.push(Span::raw(part.to_string()));
+            }
+        }
+        spans
+    };
+
+    Paragraph::new(vec![Line::from(status_spans)])
+        .block(Block::default().borders(Borders::ALL).title("Status"))
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: false })
+}
+
+/// Build the status line string (extracted for reuse)
+fn build_status_line(
+    focus_level: usize,
+    folders: &[Folder],
+    folder_statuses: &HashMap<String, FolderStatus>,
+    folders_state_selected: Option<usize>,
+    breadcrumb_folder_label: Option<String>,
+    breadcrumb_item_count: Option<usize>,
+    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    sort_mode: &str,
+    sort_reverse: bool,
+    last_load_time_ms: Option<u64>,
+    cache_hit: Option<bool>,
+    pending_operations_count: usize,
+) -> String {
+    if focus_level == 0 {
         // Show selected folder status
         if let Some(selected) = folders_state_selected {
             if let Some(folder) = folders.get(selected) {
@@ -150,7 +217,7 @@ pub fn render_status_bar(
         // Show selected item info if available
         if let Some((item_name, item_type, sync_state, exists)) = breadcrumb_selected_item {
             // Format name based on type: "dirname/" for directories, "filename" for files
-            let formatted_name = match item_type {
+            let formatted_name = match item_type.as_str() {
                 "FILE_INFO_TYPE_DIRECTORY" => format!("{}/", item_name),
                 _ => item_name.to_string(),
             };
@@ -170,14 +237,82 @@ pub fn render_status_bar(
         }
 
         metrics.join(" | ")
-    };
+    }
+}
 
-    // Parse status_line and color the labels (before colons)
+/// Render the bottom status bar
+/// - When focus_level == 0: Shows folder status (state, size, sync progress)
+/// - When focus_level > 0: Shows directory metrics (items, sort mode, load time, cache hit)
+pub fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    focus_level: usize,
+    folders: &[Folder],
+    folder_statuses: &HashMap<String, FolderStatus>,
+    folders_state_selected: Option<usize>,
+    breadcrumb_folder_label: Option<String>,
+    breadcrumb_item_count: Option<usize>,
+    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    sort_mode: &str,
+    sort_reverse: bool,
+    last_load_time_ms: Option<u64>,
+    cache_hit: Option<bool>,
+    pending_operations_count: usize,
+) {
+    let status_bar = build_status_paragraph(
+        focus_level,
+        folders,
+        folder_statuses,
+        folders_state_selected,
+        breadcrumb_folder_label,
+        breadcrumb_item_count,
+        breadcrumb_selected_item,
+        sort_mode,
+        sort_reverse,
+        last_load_time_ms,
+        cache_hit,
+        pending_operations_count,
+    );
+    f.render_widget(status_bar, area);
+}
+
+/// Calculate required height for status bar based on terminal width and content
+pub fn calculate_status_height(
+    terminal_width: u16,
+    focus_level: usize,
+    folders: &[Folder],
+    folder_statuses: &HashMap<String, FolderStatus>,
+    folders_state_selected: Option<usize>,
+    breadcrumb_folder_label: Option<String>,
+    breadcrumb_item_count: Option<usize>,
+    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    sort_mode: &str,
+    sort_reverse: bool,
+    last_load_time_ms: Option<u64>,
+    cache_hit: Option<bool>,
+    pending_operations_count: usize,
+) -> u16 {
+    // Build status line WITHOUT block borders for accurate line counting
+    let status_line = build_status_line(
+        focus_level,
+        folders,
+        folder_statuses,
+        folders_state_selected,
+        breadcrumb_folder_label,
+        breadcrumb_item_count,
+        breadcrumb_selected_item,
+        sort_mode,
+        sort_reverse,
+        last_load_time_ms,
+        cache_hit,
+        pending_operations_count,
+    );
+
+    // Parse status_line and color the labels (same as in build_status_paragraph)
     let status_spans: Vec<Span> = if status_line.is_empty() {
         vec![Span::raw("")]
     } else {
         let mut spans = vec![];
-        // Split on " | " separator (now used by both folder and breadcrumb views)
         let parts: Vec<&str> = status_line.split(" | ").collect();
 
         for (idx, part) in parts.iter().enumerate() {
@@ -185,26 +320,37 @@ pub fn render_status_bar(
                 spans.push(Span::raw(" | "));
             }
 
-            // Check if this part is an ignored status (red text)
             let part_trimmed = part.trim();
             if part_trimmed == "Ignored" || part_trimmed == "Ignored, not deleted!" {
-                spans.push(Span::styled(*part, Style::default().fg(Color::Red)));
+                spans.push(Span::styled(
+                    part.to_string(),
+                    Style::default().fg(Color::Red),
+                ));
             } else if let Some(colon_pos) = part.find(':') {
-                // Split on first colon to separate label from value
                 let label = &part[..=colon_pos];
                 let value = &part[colon_pos + 1..];
-                spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
-                spans.push(Span::raw(value));
+                spans.push(Span::styled(
+                    label.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ));
+                spans.push(Span::raw(value.to_string()));
             } else {
-                spans.push(Span::raw(*part));
+                spans.push(Span::raw(part.to_string()));
             }
         }
         spans
     };
 
-    let status_bar = Paragraph::new(Line::from(status_spans))
-        .block(Block::default().borders(Borders::ALL).title("Status"))
-        .style(Style::default().fg(Color::Gray));
+    // Create paragraph WITHOUT block for accurate line counting
+    let paragraph_for_counting = Paragraph::new(vec![Line::from(status_spans)])
+        .wrap(Wrap { trim: false });
 
-    f.render_widget(status_bar, area);
+    // Calculate available width (subtract left + right borders)
+    let available_width = terminal_width.saturating_sub(2);
+
+    // Get exact line count for wrapped text
+    let line_count = paragraph_for_counting.line_count(available_width);
+
+    // Add top + bottom borders, ensure minimum of 3
+    (line_count as u16).saturating_add(2).max(3)
 }
