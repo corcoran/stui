@@ -11,9 +11,30 @@ use super::{
 pub fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
-    // Calculate layout
+    // Calculate layout (with legend parameters for dynamic height)
     let has_breadcrumbs = !app.model.navigation.breadcrumb_trail.is_empty();
-    let layout_info = layout::calculate_layout(size, app.model.navigation.breadcrumb_trail.len(), has_breadcrumbs);
+
+    // Check if restore is available (needed for legend height calculation)
+    let can_restore = if !app.model.navigation.breadcrumb_trail.is_empty() {
+        let folder_id = &app.model.navigation.breadcrumb_trail[0].folder_id;
+        let folder_status = app.model.syncthing.folder_statuses.get(folder_id);
+        crate::logic::folder::should_show_restore_button(
+            app.model.navigation.focus_level,
+            folder_status,
+        )
+    } else {
+        false
+    };
+
+    let layout_info = layout::calculate_layout(
+        size,
+        app.model.navigation.breadcrumb_trail.len(),
+        has_breadcrumbs,
+        app.model.ui.vim_mode,
+        app.model.navigation.focus_level,
+        can_restore,
+        app.open_command.is_some(),
+    );
 
     // Render system info bar at the top
     let (total_files, total_dirs, total_bytes) = app.get_local_state_summary();
@@ -112,18 +133,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render hotkey legend if there's space
     if let Some(legend_area) = layout_info.legend_area {
-        // Check if restore is available (only in breadcrumbs with local changes)
-        let can_restore = if !app.model.navigation.breadcrumb_trail.is_empty() {
-            let folder_id = &app.model.navigation.breadcrumb_trail[0].folder_id;
-            let folder_status = app.model.syncthing.folder_statuses.get(folder_id);
-            crate::logic::folder::should_show_restore_button(
-                app.model.navigation.focus_level,
-                folder_status,
-            )
-        } else {
-            false
-        };
-
         legend::render_legend(
             f,
             legend_area,

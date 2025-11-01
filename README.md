@@ -42,8 +42,9 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 - **Arrow Key Navigation** (default) or **Vim Keybindings** (optional)
 - **Multi-Mode Sorting**: `s` to cycle modes, `S` to reverse order
 - **Info Toggle**: `t` cycles through Off → Timestamp → Size+Timestamp
-- **Quick Actions**: Single-key commands for ignore, delete, rescan, restore
-- **Smart Hotkey Legend**: Context-aware display - hides irrelevant keys, shows Restore only when applicable
+- **Quick Actions**: Single-key commands for ignore, delete, rescan, restore, pause/resume, change folder type
+- **Smart Hotkey Legend**: Context-aware display with text wrapping - hides irrelevant keys, shows Restore only when applicable
+- **Folder Type Management**: Change folder types (Send Only, Send & Receive, Receive Only) with interactive selection menu
 
 ### 🎯 Smart Features
 - **Responsive Navigation**: Instant keyboard input with idle-aware background caching
@@ -174,7 +175,8 @@ synctui --debug
 | Key | Action | Confirmation |
 |-----|--------|--------------|
 | `?` | Show detailed file info popup (metadata, sync state, preview) | No |
-| `c` | Copy folder ID (folders) or file/directory path (files/folders) to clipboard | No |
+| `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
+| `p` | Pause/resume folder (folder view only) | Yes |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |
 | `I` | Ignore AND delete from disk | No (immediate) |
 | `o` | Open file/directory with configured command | No |
@@ -224,14 +226,16 @@ Full-width bar showing:
 
 ### Hotkey Legend (Above Status)
 Full-width bar with context-aware key display:
-- **Folder View**: Shows navigation, Rescan, Quit
-- **Breadcrumb View**: Shows all keys including Sort, Info, Ignore, Delete
+- **Folder View**: Shows navigation, Change Type, Pause/Resume, Rescan, Quit
+- **Breadcrumb View**: Shows all keys including Copy, Sort, Info, Ignore, Delete
 - **Dynamic Restore**: Only appears when folder has local changes to restore
+- **Text Wrapping**: Wraps text within fixed height on narrow terminals
 
 ### Status Bar (Bottom)
 Full-width bar showing:
 - **Folder Name**: Currently selected folder/directory
-- **Sync State**: Folder status (Idle, Syncing, etc.)
+- **Folder Type**: Send Only, Send & Receive, or Receive Only
+- **Sync State**: Folder status (Idle, Syncing, Paused, etc.)
 - **Data Sizes**: Local/Global bytes, sync progress
 - **Items**: In-sync count vs. total items (e.g., `125/125`)
 - **Sort Mode**: Current sorting mode and direction
@@ -287,7 +291,6 @@ rm ~/.cache/synctui/cache.db
 
 - No async loading spinners (planned)
 - No file type filtering or batch operations yet (planned)
-- No pause/resume folder toggle (planned)
 
 ## Contributing
 

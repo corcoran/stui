@@ -16,7 +16,7 @@ The file management and image preview features are core differentiators and shou
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
 - Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
 - Make logging comprehensive but concise - debug logs should be informative without overwhelming
-- Always clean up `bug` logs for one-off issues but keep helpful logs (convert into debug) that may be used later
+- When adding new features or fixes, git commit once user has confirmed working and tests are written
 
 
 ## Architecture Context
@@ -81,7 +81,9 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
     - Smart centering and aspect ratio preservation
     - Shows resolution in metadata column
   - **Binary files**: Shows extracted text or metadata
-- `c`: Copy folder ID (folders) or file/directory path (files/folders, uses mapped host paths) to clipboard
+- `c`: **Context-aware action**:
+  - **Folder view** (focus_level == 0): Change folder type (Send Only, Send & Receive, Receive Only) with selection menu
+  - **Breadcrumb view** (focus_level > 0): Copy file/directory path to clipboard (uses mapped host paths)
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
 - `o`: Open file/directory with configured command (e.g., `xdg-open`, `code`, `vim`)
@@ -99,8 +101,8 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 **UI Layout (top to bottom):**
 - **System Bar** (full width): Device name, uptime, local state summary, transfer rates
 - **Main Content**: Folders pane + Breadcrumb panels (horizontal split with smart sizing)
-- **Hotkey Legend** (full width): Context-aware key display
-- **Status Bar** (full width): Folder state, data sizes, sync progress, sort mode
+- **Hotkey Legend** (full width): Context-aware key display with text wrapping
+- **Status Bar** (full width): Folder state, folder type, data sizes, sync progress, sort mode
 
 **Breadcrumb Layout:**
 - Current folder gets 50-60% of screen width for better visibility
@@ -115,10 +117,12 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - TimestampOnly: Shows modification time (e.g., `2025-10-26 20:58`)
   - TimestampAndSize: Shows size + timestamp for files (e.g., `1.2M 2025-10-26 20:58`), timestamp only for directories
 - **Smart Hotkey Legend**: Context-aware display
-  - Folder view: Shows navigation, Pause/Resume, Rescan, Quit
-  - Breadcrumb view: Shows all keys including file operations (Sort, Info, Ignore, Delete)
+  - Folder view: Shows navigation, Change Type, Pause/Resume, Rescan, Quit
+  - Breadcrumb view: Shows all keys including file operations (Copy, Sort, Info, Ignore, Delete)
   - Restore only appears when folder has local changes (receive_only_total_items > 0)
+  - Text wrapping enabled (wraps within fixed 3-line height on narrow terminals)
   - Scrollbar indicators: Automatically appear on breadcrumb panels when content exceeds viewport height
+- **Folder Type Display**: Status bar shows folder type (Send Only, Send & Receive, Receive Only) before state field
 - **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
 - **Sorting**: Multi-mode sorting (Icon/A-Z/DateTime/Size) with visual indicators in status bar, directories always sorted first
 
@@ -209,6 +213,9 @@ CLI flags:
 - `src/cache.rs` - SQLite cache for browse results and sync states
 - `src/state.rs` - Legacy state types (being phased out)
 
+**Additional Documentation:**
+- See [RATATUI_NOTES.md](RATATUI_NOTES.md) for comprehensive Ratatui UI implementation patterns, constraint system behavior, dynamic height calculations, and best practices
+
 **Key Application Patterns:**
 - **App initialization** (`main.rs:361-480`): `App::new()` loads folders via `client.get_folders()`, spawns API service and event listener
 - **Main event loop** (`main.rs:2973-3150`): Always-render pattern, processes API responses, keyboard input, cache events, image updates
@@ -268,17 +275,12 @@ CLI flags:
 - Error handling and timeout management needs improvement
 
 ### Planned Features
-- Change Folder Type toggle hotkey + status (with confirmation)
 - File type filtering and ignored-only view
 - Event history viewer with persistent logging
-- ~~Image preview in file info popup (CLI rendering)~~ ✅ **Implemented** (see User Actions section)
 - Optional filesystem diff view
 - Batch operations (multi-select for ignore/delete/rescan)
-- Configurable keybindings via YAML/TOML
 - Cross-platform packaging (Linux, macOS, Windows)
-- Comprehensive test suite
 - Better error states, handling, and timeout management
-- Code refactoring for improved modularity
 
 ## Development Guidelines
 
@@ -288,7 +290,13 @@ CLI flags:
 - **Error Handling**: Graceful degradation, show errors in status bar or toast messages
 - **Non-Blocking**: Keep UI responsive during all API calls
 - **Cache Coherency**: Use sequence numbers to validate cached data
-- **Testing**: Test with real Syncthing Docker instances with large datasets
+- **Testing**:
+  - Test with real Syncthing Docker instances with large datasets
+  - **IMPORTANT**: Always add unit tests when refactoring code or adding new features
+  - Pure business logic in `src/logic/` should have comprehensive test coverage
+  - Model state transitions should have tests in corresponding test modules
+  - Run `cargo test` before committing to ensure all 124+ tests pass
+  - Aim for zero compiler warnings (`cargo build` should be clean)
 - **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
 
 ### Adding New Features - Common Patterns
@@ -308,7 +316,7 @@ CLI flags:
 4. Add rendering call in `src/ui/render.rs`
 5. Update hotkey legend in `src/ui/legend.rs` with context guards
 
-**Example: Pause/Resume Feature (complete implementation reference)**
+**Example 1: Pause/Resume Feature (confirmation dialog pattern)**
 - API: `src/api.rs` - `set_folder_paused()` using PATCH `/rest/config/folders/{id}`
 - State: `model.ui.confirm_pause_resume: Option<(folder_id, label, is_paused)>`
 - Keybinding: `KeyCode::Char('p') if focus_level == 0` opens confirmation
@@ -317,6 +325,20 @@ CLI flags:
 - Dialog: `render_pause_resume_confirmation()` with color-coded borders
 - Legend: Shows "p:Pause/Resume" only in folder view
 - Visual: Pause icon (⏸ emoji /  nerdfont) via `FolderState::Paused`
+
+**Example 2: Change Folder Type (selection menu pattern)**
+- API: `src/api.rs` - `set_folder_type()` using PATCH `/rest/config/folders/{id}` with `{"type": "sendonly|sendreceive|receiveonly"}`
+- Data: `Folder` struct has `folder_type: String` field (serde renamed from "type")
+- State: `model.ui.folder_type_selection: Option<FolderTypeSelectionState>` with `folder_id`, `folder_label`, `current_type`, `selected_index`
+- Keybinding: `KeyCode::Char('c') if focus_level == 0` opens selection menu (context-aware - 'c' copies path in breadcrumbs)
+- Selection Menu:
+  - Uses `List` widget with ↑↓ navigation, Enter to select, Esc to cancel
+  - Current type highlighted in cyan/italic
+  - Handler at top of keyboard.rs (lines 317-384)
+- Execution: Call API, reload folders, update `model.syncthing.folders`, show toast
+- Dialog: `render_folder_type_selection()` shows 3 options with user-friendly names
+- Legend: Shows "c:Change Type" only in folder view
+- Status Bar: Displays folder type (Send Only, Send & Receive, Receive Only) before state field
 
 **State management patterns:**
 - **Model fields**: All application state lives in `Model` struct (pure, cloneable)
@@ -330,3 +352,8 @@ CLI flags:
 - **Scrollbars**: Automatically rendered by breadcrumb panels using Ratatui's `Scrollbar` widget
 - **Context-aware display**: Check `focus_level` to show/hide keys in legend
 - **Color coding**: Use `Color::Cyan` (focused), `Color::Blue` (parent), `Color::Gray` (inactive)
+- **Text wrapping**:
+  - Legend uses `.wrap(ratatui::widgets::Wrap { trim: false })` for text wrapping
+  - Fixed height of 3 lines (`Constraint::Length(3)`) - wraps content within available space
+  - System bar and status bar also use `Constraint::Length(3)` (fixed height)
+  - Note: On very narrow terminals, some hotkeys may be clipped if content exceeds 3 lines
