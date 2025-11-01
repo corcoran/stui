@@ -1631,37 +1631,20 @@ impl App {
     async fn next_item(&mut self) {
         if self.model.navigation.focus_level == 0 {
             // Navigate folders
-            let i = match self.model.navigation.folders_state_selection {
-                Some(i) => {
-                    if i >= self.model.syncthing.folders.len() - 1 {
-                        0
-                    } else {
-                        i + 1
-                    }
-                }
-                None => 0,
-            };
-            self.model.navigation.folders_state_selection = Some(i);
+            self.model.navigation.folders_state_selection = logic::navigation::next_selection(
+                self.model.navigation.folders_state_selection,
+                self.model.syncthing.folders.len(),
+            );
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if level.items.is_empty() {
-                    return;
-                }
-                let i = match level.selected_index {
-                    Some(i) => {
-                        if i >= level.items.len() - 1 {
-                            0
-                        } else {
-                            i + 1
-                        }
-                    }
-                    None => 0,
-                };
-                level.selected_index = Some(i);
+                level.selected_index = logic::navigation::next_selection(
+                    level.selected_index,
+                    level.items.len(),
+                );
             }
         }
     }
@@ -1669,37 +1652,20 @@ impl App {
     async fn previous_item(&mut self) {
         if self.model.navigation.focus_level == 0 {
             // Navigate folders
-            let i = match self.model.navigation.folders_state_selection {
-                Some(i) => {
-                    if i == 0 {
-                        self.model.syncthing.folders.len() - 1
-                    } else {
-                        i - 1
-                    }
-                }
-                None => 0,
-            };
-            self.model.navigation.folders_state_selection = Some(i);
+            self.model.navigation.folders_state_selection = logic::navigation::prev_selection(
+                self.model.navigation.folders_state_selection,
+                self.model.syncthing.folders.len(),
+            );
             // Auto-load the selected folder's root directory as preview (don't change focus)
             let _ = self.load_root_level(true).await;
         } else {
             // Navigate current breadcrumb level
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if level.items.is_empty() {
-                    return;
-                }
-                let i = match level.selected_index {
-                    Some(i) => {
-                        if i == 0 {
-                            level.items.len() - 1
-                        } else {
-                            i - 1
-                        }
-                    }
-                    None => 0,
-                };
-                level.selected_index = Some(i);
+                level.selected_index = logic::navigation::prev_selection(
+                    level.selected_index,
+                    level.items.len(),
+                );
             }
         }
     }
