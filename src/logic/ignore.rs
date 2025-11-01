@@ -1,6 +1,8 @@
-//! Ignore Pattern Matching Logic
+//! Ignore Pattern Matching and Validation Logic
 //!
-//! This module contains pure functions for matching files against Syncthing .stignore patterns.
+//! This module contains pure functions for matching files against Syncthing .stignore patterns
+//! and validating pattern syntax.
+//!
 //! Patterns follow similar rules to .gitignore:
 //! - Patterns starting with `/` are relative to folder root
 //! - Patterns without `/` match anywhere in the path
@@ -91,6 +93,66 @@ pub fn find_matching_patterns(patterns: &[String], file_path: &str) -> Vec<Strin
         .collect()
 }
 
+/// Validate an ignore pattern for common syntax errors
+///
+/// Checks for common pattern syntax errors before sending to the Syncthing API.
+/// This helps provide immediate feedback to users about invalid patterns.
+///
+/// # Validation Rules
+/// - Pattern cannot be empty or whitespace-only
+/// - Pattern cannot contain newlines (each pattern should be on its own line)
+/// - Brackets must be properly balanced (e.g., `[ab]` is valid, `[ab` is not)
+///
+/// # Arguments
+/// * `pattern` - The pattern string to validate
+///
+/// # Returns
+/// * `Ok(())` if the pattern is valid
+/// * `Err(message)` with a helpful error message if invalid
+///
+/// # Examples
+/// ```
+/// use synctui::logic::ignore::validate_pattern;
+///
+/// // Valid patterns
+/// assert!(validate_pattern("*.jpg").is_ok());
+/// assert!(validate_pattern("temp/[ab].txt").is_ok());
+/// assert!(validate_pattern("/cache/**/*.tmp").is_ok());
+///
+/// // Invalid patterns
+/// assert!(validate_pattern("").is_err());
+/// assert!(validate_pattern("  ").is_err());
+/// assert!(validate_pattern("test[.txt").is_err());
+/// assert!(validate_pattern("line1\nline2").is_err());
+/// ```
+pub fn validate_pattern(pattern: &str) -> Result<(), String> {
+    // Check for empty pattern
+    if pattern.trim().is_empty() {
+        return Err("Pattern cannot be empty".to_string());
+    }
+
+    // Check for newlines (patterns should be single-line)
+    if pattern.contains('\n') {
+        return Err("Pattern cannot contain newlines".to_string());
+    }
+
+    // Check for balanced brackets (common glob syntax error)
+    let open_brackets = pattern.matches('[').count();
+    let close_brackets = pattern.matches(']').count();
+    if open_brackets != close_brackets {
+        return Err("Unclosed bracket in pattern".to_string());
+    }
+
+    // Check for balanced braces (used in glob patterns like {a,b})
+    let open_braces = pattern.matches('{').count();
+    let close_braces = pattern.matches('}').count();
+    if open_braces != close_braces {
+        return Err("Unclosed brace in pattern".to_string());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +226,87 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert!(matches.contains(&"*.tmp".to_string()));
         assert!(matches.contains(&"/foo/bar.tmp".to_string()));
+    }
+
+    #[test]
+    fn test_validate_pattern_valid() {
+        // Valid simple patterns
+        assert!(validate_pattern("*.jpg").is_ok());
+        assert!(validate_pattern("*.tmp").is_ok());
+        assert!(validate_pattern("cache").is_ok());
+
+        // Valid patterns with path separators
+        assert!(validate_pattern("/cache/data").is_ok());
+        assert!(validate_pattern("temp/data/*.log").is_ok());
+
+        // Valid patterns with brackets
+        assert!(validate_pattern("temp/[ab].txt").is_ok());
+        assert!(validate_pattern("file[0-9].dat").is_ok());
+
+        // Valid patterns with braces
+        assert!(validate_pattern("*.{jpg,png,gif}").is_ok());
+        assert!(validate_pattern("{cache,temp}/**").is_ok());
+
+        // Valid patterns with wildcards
+        assert!(validate_pattern("/cache/**/*.tmp").is_ok());
+        assert!(validate_pattern("**/node_modules/**").is_ok());
+    }
+
+    #[test]
+    fn test_validate_pattern_empty() {
+        assert!(validate_pattern("").is_err());
+        assert!(validate_pattern("  ").is_err());
+        assert!(validate_pattern("\t").is_err());
+        assert!(validate_pattern("   \t  ").is_err());
+
+        if let Err(msg) = validate_pattern("") {
+            assert!(msg.contains("empty"));
+        }
+    }
+
+    #[test]
+    fn test_validate_pattern_newlines() {
+        assert!(validate_pattern("line1\nline2").is_err());
+        assert!(validate_pattern("pattern\n").is_err());
+        assert!(validate_pattern("\npattern").is_err());
+
+        if let Err(msg) = validate_pattern("test\npattern") {
+            assert!(msg.contains("newline"));
+        }
+    }
+
+    #[test]
+    fn test_validate_pattern_unbalanced_brackets() {
+        assert!(validate_pattern("test[.txt").is_err());
+        assert!(validate_pattern("test].txt").is_err());
+        assert!(validate_pattern("test[ab][cd.txt").is_err());
+
+        if let Err(msg) = validate_pattern("test[.txt") {
+            assert!(msg.contains("bracket"));
+        }
+    }
+
+    #[test]
+    fn test_validate_pattern_unbalanced_braces() {
+        assert!(validate_pattern("test{.txt").is_err());
+        assert!(validate_pattern("test}.txt").is_err());
+        assert!(validate_pattern("*.{jpg,png").is_err());
+
+        if let Err(msg) = validate_pattern("*.{jpg,png") {
+            assert!(msg.contains("brace"));
+        }
+    }
+
+    #[test]
+    fn test_validate_pattern_edge_cases() {
+        // Single character patterns are valid
+        assert!(validate_pattern("*").is_ok());
+        assert!(validate_pattern("?").is_ok());
+        assert!(validate_pattern("/").is_ok());
+
+        // Patterns with special characters
+        assert!(validate_pattern("file-name.txt").is_ok());
+        assert!(validate_pattern("file_name.txt").is_ok());
+        assert!(validate_pattern("file.name.txt").is_ok());
     }
 }
