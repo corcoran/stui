@@ -40,22 +40,14 @@ pub fn calculate_layout(
     let legend_area = main_chunks[2];
     let status_area = main_chunks[3];
 
-    // Calculate how many panes we need (folders + breadcrumb levels)
-    let num_panes = 1 + num_breadcrumb_levels;
-
-    // Determine visible panes based on terminal width
-    let min_pane_width = 20;
-    let max_visible_panes = (content_area.width / min_pane_width).max(2) as usize;
-
-    // Calculate which panes to show (prioritize right side)
-    let start_pane = if num_panes > max_visible_panes {
-        num_panes - max_visible_panes
-    } else {
-        0
-    };
-
-    let visible_panes = num_panes.min(max_visible_panes);
-    let folders_visible = start_pane == 0;
+    // Calculate which panes should be visible based on available width
+    let pane_range = crate::logic::layout::calculate_visible_pane_range(
+        content_area.width,
+        num_breadcrumb_levels,
+    );
+    let start_pane = pane_range.start_pane;
+    let visible_panes = pane_range.visible_panes;
+    let folders_visible = pane_range.folders_visible;
 
     // Create horizontal split for all panes
     // Give more space to the rightmost (current) pane
