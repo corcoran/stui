@@ -76,6 +76,39 @@ pub fn cycle_sort_mode(current: SortMode, focus_level: usize) -> Option<SortMode
     })
 }
 
+/// Toggle the sort reverse flag
+///
+/// Sort reversal only applies to breadcrumb views (focus_level > 0), not the folder list.
+/// Returns None if sorting is not available for the current view.
+///
+/// # Arguments
+/// * `current` - Current sort reverse state
+/// * `focus_level` - Current navigation focus level (0 = folder list, >0 = breadcrumb)
+///
+/// # Returns
+/// `Some(toggled_value)` if sorting is available, `None` if in folder list view
+///
+/// # Examples
+/// ```
+/// use synctui::logic::ui::toggle_sort_reverse;
+///
+/// // Toggling in breadcrumb view
+/// assert_eq!(toggle_sort_reverse(false, 1), Some(true));
+/// assert_eq!(toggle_sort_reverse(true, 1), Some(false));
+///
+/// // No sorting in folder list
+/// assert_eq!(toggle_sort_reverse(false, 0), None);
+/// assert_eq!(toggle_sort_reverse(true, 0), None);
+/// ```
+pub fn toggle_sort_reverse(current: bool, focus_level: usize) -> Option<bool> {
+    // No sorting for folder list
+    if focus_level == 0 {
+        return None;
+    }
+
+    Some(!current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +148,21 @@ mod tests {
         assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 0), None);
         assert_eq!(cycle_sort_mode(SortMode::LastModified, 0), None);
         assert_eq!(cycle_sort_mode(SortMode::FileSize, 0), None);
+    }
+
+    #[test]
+    fn test_toggle_sort_reverse_in_breadcrumb_view() {
+        // Toggle in breadcrumb view (focus_level > 0)
+        assert_eq!(toggle_sort_reverse(false, 1), Some(true));
+        assert_eq!(toggle_sort_reverse(true, 1), Some(false));
+        assert_eq!(toggle_sort_reverse(false, 2), Some(true));
+        assert_eq!(toggle_sort_reverse(true, 5), Some(false));
+    }
+
+    #[test]
+    fn test_toggle_sort_reverse_in_folder_list() {
+        // No toggling in folder list (focus_level == 0)
+        assert_eq!(toggle_sort_reverse(false, 0), None);
+        assert_eq!(toggle_sort_reverse(true, 0), None);
     }
 }

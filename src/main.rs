@@ -1620,12 +1620,13 @@ impl App {
     }
 
     fn toggle_sort_reverse(&mut self) {
-        if self.model.navigation.focus_level == 0 {
-            return; // No sorting for folders list
+        if let Some(new_reverse) = logic::ui::toggle_sort_reverse(
+            self.model.ui.sort_reverse,
+            self.model.navigation.focus_level,
+        ) {
+            self.model.ui.sort_reverse = new_reverse;
+            self.sort_all_levels(); // Apply to all levels
         }
-
-        self.model.ui.sort_reverse = !self.model.ui.sort_reverse;
-        self.sort_all_levels(); // Apply to all levels
     }
 
     async fn next_item(&mut self) {
