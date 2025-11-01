@@ -2117,6 +2117,9 @@ impl App {
         // Check if file is an image
         let is_image = Self::is_image_file(&file_path);
 
+        // Clear any old image state for this path to prevent rendering artifacts
+        self.image_state_map.remove(&file_path);
+
         // Initialize popup state with loading message first
         self.model.ui.file_info_popup = Some(model::FileInfoPopupState {
             folder_id: folder_id.clone(),
