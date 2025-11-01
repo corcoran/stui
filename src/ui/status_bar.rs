@@ -45,13 +45,9 @@ pub fn render_status_bar(
 
                 if folder.paused {
                     format!(
-                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                        format!("Folder: {}", folder_name),
-                        type_display,
-                        "Paused",
-                        "-",
-                        "-",
-                        "-"
+                        "Folder: {} | {} | Paused",
+                        folder_name,
+                        type_display
                     )
                 } else if let Some(status) = folder_statuses.get(&folder.id) {
                     let state_display = if status.state.is_empty() {
@@ -97,8 +93,8 @@ pub fn render_status_bar(
                     };
 
                     format!(
-                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                        format!("Folder: {}", folder_name),
+                        "Folder: {} | {} | {} | {} | {} | {}",
+                        folder_name,
                         type_display,
                         state_display,
                         utils::format_bytes(status.global_bytes),
@@ -107,13 +103,9 @@ pub fn render_status_bar(
                     )
                 } else {
                     format!(
-                        "{:<25} │ {:>16} │ {:>15} │ {:>15} │ {:>15} │ {:>20}",
-                        format!("Folder: {}", folder_name),
-                        type_display,
-                        "Loading...",
-                        "-",
-                        "-",
-                        "-"
+                        "Folder: {} | {} | Loading...",
+                        folder_name,
+                        type_display
                     )
                 }
             } else {
@@ -185,21 +177,12 @@ pub fn render_status_bar(
         vec![Span::raw("")]
     } else {
         let mut spans = vec![];
-        // Check for both separators: " │ " (focus_level 0) and " | " (focus_level > 0)
-        let parts: Vec<&str> = if status_line.contains(" │ ") {
-            status_line.split(" │ ").collect()
-        } else {
-            status_line.split(" | ").collect()
-        };
+        // Split on " | " separator (now used by both folder and breadcrumb views)
+        let parts: Vec<&str> = status_line.split(" | ").collect();
 
         for (idx, part) in parts.iter().enumerate() {
             if idx > 0 {
-                // Use the appropriate separator
-                if status_line.contains(" │ ") {
-                    spans.push(Span::raw(" │ "));
-                } else {
-                    spans.push(Span::raw(" | "));
-                }
+                spans.push(Span::raw(" | "));
             }
 
             // Check if this part is an ignored status (red text)
