@@ -111,15 +111,6 @@ pub enum SortMode {
 }
 
 impl SortMode {
-    fn next(&self) -> Self {
-        match self {
-            SortMode::VisualIndicator => SortMode::Alphabetical,
-            SortMode::Alphabetical => SortMode::LastModified,
-            SortMode::LastModified => SortMode::FileSize,
-            SortMode::FileSize => SortMode::VisualIndicator,
-        }
-    }
-
     pub fn as_str(&self) -> &str {
         match self {
             SortMode::VisualIndicator => "Icon",
@@ -1618,13 +1609,14 @@ impl App {
     }
 
     fn cycle_sort_mode(&mut self) {
-        if self.model.navigation.focus_level == 0 {
-            return; // No sorting for folders list
+        if let Some(new_mode) = logic::ui::cycle_sort_mode(
+            self.model.ui.sort_mode,
+            self.model.navigation.focus_level,
+        ) {
+            self.model.ui.sort_mode = new_mode;
+            self.model.ui.sort_reverse = false; // Reset reverse when changing mode
+            self.sort_all_levels(); // Apply to all levels
         }
-
-        self.model.ui.sort_mode = self.model.ui.sort_mode.next();
-        self.model.ui.sort_reverse = false; // Reset reverse when changing mode
-        self.sort_all_levels(); // Apply to all levels
     }
 
     fn toggle_sort_reverse(&mut self) {

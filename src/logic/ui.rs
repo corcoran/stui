@@ -2,7 +2,7 @@
 //!
 //! Pure functions for UI state cycling and transitions.
 
-use crate::DisplayMode;
+use crate::{DisplayMode, SortMode};
 
 /// Cycle to the next display mode: Off → TimestampOnly → TimestampAndSize → Off
 ///
@@ -34,6 +34,48 @@ pub fn cycle_display_mode(current: DisplayMode) -> DisplayMode {
     }
 }
 
+/// Cycle to the next sort mode in sequence
+///
+/// Sort modes only apply to breadcrumb views (focus_level > 0), not the folder list.
+/// Returns None if sorting is not available for the current view.
+///
+/// Sort cycle: VisualIndicator → Alphabetical → LastModified → FileSize → VisualIndicator
+///
+/// # Arguments
+/// * `current` - The current sort mode
+/// * `focus_level` - Current navigation focus level (0 = folder list, >0 = breadcrumb)
+///
+/// # Returns
+/// `Some(next_mode)` if sorting is available, `None` if in folder list view
+///
+/// # Examples
+/// ```
+/// use synctui::SortMode;
+/// use synctui::logic::ui::cycle_sort_mode;
+///
+/// // Cycling in breadcrumb view
+/// assert_eq!(cycle_sort_mode(SortMode::VisualIndicator, 1), Some(SortMode::Alphabetical));
+/// assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 1), Some(SortMode::LastModified));
+/// assert_eq!(cycle_sort_mode(SortMode::LastModified, 1), Some(SortMode::FileSize));
+/// assert_eq!(cycle_sort_mode(SortMode::FileSize, 1), Some(SortMode::VisualIndicator));
+///
+/// // No sorting in folder list
+/// assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 0), None);
+/// ```
+pub fn cycle_sort_mode(current: SortMode, focus_level: usize) -> Option<SortMode> {
+    // No sorting for folder list
+    if focus_level == 0 {
+        return None;
+    }
+
+    Some(match current {
+        SortMode::VisualIndicator => SortMode::Alphabetical,
+        SortMode::Alphabetical => SortMode::LastModified,
+        SortMode::LastModified => SortMode::FileSize,
+        SortMode::FileSize => SortMode::VisualIndicator,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +93,27 @@ mod tests {
     #[test]
     fn test_cycle_display_mode_from_timestamp_and_size() {
         assert_eq!(cycle_display_mode(DisplayMode::TimestampAndSize), DisplayMode::Off);
+    }
+
+    #[test]
+    fn test_cycle_sort_mode_in_breadcrumb_view() {
+        // Normal cycling in breadcrumb view (focus_level > 0)
+        assert_eq!(cycle_sort_mode(SortMode::VisualIndicator, 1), Some(SortMode::Alphabetical));
+        assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 1), Some(SortMode::LastModified));
+        assert_eq!(cycle_sort_mode(SortMode::LastModified, 1), Some(SortMode::FileSize));
+        assert_eq!(cycle_sort_mode(SortMode::FileSize, 1), Some(SortMode::VisualIndicator));
+
+        // Works at any breadcrumb level
+        assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 2), Some(SortMode::LastModified));
+        assert_eq!(cycle_sort_mode(SortMode::FileSize, 5), Some(SortMode::VisualIndicator));
+    }
+
+    #[test]
+    fn test_cycle_sort_mode_in_folder_list() {
+        // No cycling in folder list (focus_level == 0)
+        assert_eq!(cycle_sort_mode(SortMode::VisualIndicator, 0), None);
+        assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 0), None);
+        assert_eq!(cycle_sort_mode(SortMode::LastModified, 0), None);
+        assert_eq!(cycle_sort_mode(SortMode::FileSize, 0), None);
     }
 }

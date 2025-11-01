@@ -1,7 +1,7 @@
 # Next Steps - Incremental Functional Migration
 
 **Last Updated:** 2025-10-31
-**Current Phase:** Step 3 - Extract Pure Business Logic (4/15 functions complete)
+**Current Phase:** Step 3 - Extract Pure Business Logic (5/15 functions complete)
 
 ---
 
@@ -20,15 +20,16 @@
 - Always-render approach (no dirty flags)
 - Image preview regression fixed
 
-**Phase 3: Pure Business Logic** (4/15 complete)
+**Phase 3: Pure Business Logic** (5/15 complete)
 - ✅ `logic::folder::has_local_changes()` - 3 tests
 - ✅ `logic::folder::can_delete_file()` - 4 tests
 - ✅ `logic::folder::should_show_restore_button()` - 4 tests
 - ✅ `logic::ui::cycle_display_mode()` - 3 tests
+- ✅ `logic::ui::cycle_sort_mode()` - 2 tests
 
 ### 📊 Test Coverage
 
-- **62 tests passing** (45 logic + model, 17 state)
+- **64 tests passing** (47 logic + model, 17 state)
 - **Zero compilation errors**
 - **3 warnings** (unused imports/variables - harmless)
 
@@ -335,12 +336,12 @@ fn test_prev_selection() {
 
 ## 📋 Complete Extraction Roadmap
 
-### Phase A: Quick Wins (2-3 hours total)
+### Phase A: Quick Wins (2-3 hours total) ✅ COMPLETE
 - [x] `has_local_changes()` - 15 min ✅ DONE
 - [x] `can_delete_file()` - 15 min ✅ DONE
 - [x] `should_show_restore_button()` - 20 min ✅ DONE
 - [x] `cycle_display_mode()` - 10 min ✅ DONE
-- [ ] `cycle_sort_mode()` - 20 min
+- [x] `cycle_sort_mode()` - 20 min ✅ DONE
 
 ### Phase B: Moderate Complexity (2-3 hours total)
 - [ ] `validate_ignore_pattern()` - 25 min
