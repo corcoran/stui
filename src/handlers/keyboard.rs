@@ -18,6 +18,59 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Update last user action timestamp for idle detection
         app.model.performance.last_user_action = Instant::now();
 
+        // Handle setup help dialog first (shown when no cache and connection fails)
+        if app.model.ui.show_setup_help {
+            match key.code {
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    // Close dialog and let automatic background retry continue
+                    app.model.ui.show_setup_help = false;
+                    return Ok(());
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    // Copy config path to clipboard
+                    if let Some(clipboard_cmd) = &app.clipboard_command {
+                        let path = app.model.ui.config_path.clone();
+                        // Execute clipboard command via stdin
+                        use std::io::Write;
+                        use std::process::{Command, Stdio};
+
+                        let result = Command::new("sh")
+                            .arg("-c")
+                            .arg(clipboard_cmd)
+                            .stdin(Stdio::piped())
+                            .spawn()
+                            .and_then(|mut child| {
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    stdin.write_all(path.as_bytes())?;
+                                }
+                                child.wait()
+                            });
+
+                        match result {
+                            Ok(_) => {
+                                app.model.ui.show_toast("Config path copied to clipboard".to_string());
+                            }
+                            Err(e) => {
+                                app.model.ui.show_toast(format!("Failed to copy: {}", e));
+                            }
+                        }
+                    } else {
+                        app.model.ui.show_toast("No clipboard command configured".to_string());
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                    // Quit app
+                    app.model.ui.should_quit = true;
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while setup help is showing
+                    return Ok(());
+                }
+            }
+        }
+
         // Handle confirmation prompts first
         if let Some((folder_id, _)) = &app.model.ui.confirm_revert {
             match key.code {

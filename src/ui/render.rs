@@ -102,6 +102,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     system_bar::render_system_bar(
         f,
         layout_info.system_area,
+        &app.model.syncthing.connection_state,
         app.model.syncthing.system_status.as_ref(),
         app.model.syncthing.device_name.as_deref(),
         (total_files, total_dirs, total_bytes),
@@ -254,6 +255,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     if let Some((_host_path, display_name, is_dir)) = &app.model.ui.confirm_delete {
         dialogs::render_delete_confirmation(f, display_name, *is_dir);
+    }
+
+    // Render setup help dialog if active
+    if app.model.ui.show_setup_help {
+        // Get error message from connection state
+        let error_message = match &app.model.syncthing.connection_state {
+            crate::model::syncthing::ConnectionState::Disconnected { message, .. } => message.as_str(),
+            _ => "Unknown error",
+        };
+        dialogs::render_setup_help(f, error_message, &app.model.ui.config_path);
     }
 
     if let Some((_folder_id, folder_label, is_paused)) = &app.model.ui.confirm_pause_resume {

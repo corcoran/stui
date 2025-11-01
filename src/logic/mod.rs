@@ -1,6 +1,7 @@
 //! Business Logic
 //!
 //! This module contains pure business logic functions that can be unit tested:
+//! - errors: Error classification and formatting
 //! - file: File type detection and utilities
 //! - folder: Folder validation and business logic
 //! - formatting: Data formatting for human-readable display
@@ -9,10 +10,12 @@
 //! - navigation: Navigation selection calculations
 //! - path: Path mapping and translation utilities
 //! - performance: Batching and performance optimizations
+//! - platform: Cross-platform path helpers
 //! - search: Search query matching and filtering
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
+pub mod errors;
 pub mod file;
 pub mod folder;
 pub mod formatting;
@@ -21,6 +24,7 @@ pub mod layout;
 pub mod navigation;
 pub mod path;
 pub mod performance;
+pub mod platform;
 pub mod search;
 pub mod sync_states;
 pub mod ui;

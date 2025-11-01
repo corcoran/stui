@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 use crate::api::{
-    BrowseItem, ConnectionStats, FileDetails, FolderStatus, SyncthingClient, SystemStatus,
+    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, SyncthingClient, SystemStatus,
 };
 
 fn log_debug(msg: &str) {
@@ -49,6 +49,7 @@ pub(crate) enum RequestKey {
     },
     SystemStatus,
     ConnectionStats,
+    Devices,
 }
 
 /// API request types
@@ -79,6 +80,9 @@ pub enum ApiRequest {
 
     /// Get global connection/transfer statistics
     GetConnectionStats,
+
+    /// Get list of all devices
+    GetDevices,
 }
 
 impl ApiRequest {
@@ -87,7 +91,9 @@ impl ApiRequest {
         match self {
             ApiRequest::BrowseFolder { priority, .. } => *priority,
             ApiRequest::GetFileInfo { priority, .. } => *priority,
-            // All other operations are high priority
+            // Folder status polling is medium priority (background refresh)
+            ApiRequest::GetFolderStatus { .. } => Priority::Medium,
+            // All other operations (SystemStatus, Devices, Rescan, etc) are high priority
             _ => Priority::High,
         }
     }
@@ -119,42 +125,47 @@ impl ApiRequest {
             },
             ApiRequest::GetSystemStatus => RequestKey::SystemStatus,
             ApiRequest::GetConnectionStats => RequestKey::ConnectionStats,
+            ApiRequest::GetDevices => RequestKey::Devices,
         }
     }
 }
 
 /// API response types
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ApiResponse {
     BrowseResult {
         folder_id: String,
         prefix: Option<String>,
-        items: Result<Vec<BrowseItem>, String>,
+        items: Result<Vec<BrowseItem>, anyhow::Error>,
     },
 
     FileInfoResult {
         folder_id: String,
         file_path: String,
-        details: Result<FileDetails, String>,
+        details: Result<FileDetails, anyhow::Error>,
     },
 
     FolderStatusResult {
         folder_id: String,
-        status: Result<FolderStatus, String>,
+        status: Result<FolderStatus, anyhow::Error>,
     },
 
     RescanResult {
         folder_id: String,
         success: bool,
-        error: Option<String>,
+        error: Option<anyhow::Error>,
     },
 
     SystemStatusResult {
-        status: Result<SystemStatus, String>,
+        status: Result<SystemStatus, anyhow::Error>,
     },
 
     ConnectionStatsResult {
-        stats: Result<ConnectionStats, String>,
+        stats: Result<ConnectionStats, anyhow::Error>,
+    },
+
+    DevicesResult {
+        devices: Result<Vec<Device>, anyhow::Error>,
     },
 }
 
@@ -229,6 +240,7 @@ impl ApiService {
         let completion_key = key.clone();
 
         // Spawn task to handle this request
+        // Note: No per-request retries - background reconnection handles that
         tokio::spawn(async move {
             let response = Self::execute_request(&client, request).await;
 
@@ -262,8 +274,7 @@ impl ApiService {
             } => {
                 let items = client
                     .browse_folder(&folder_id, prefix.as_deref())
-                    .await
-                    .map_err(|e| e.to_string());
+                    .await;
 
                 ApiResponse::BrowseResult {
                     folder_id,
@@ -289,7 +300,7 @@ impl ApiService {
                             "DEBUG [API Service GetFileInfo]: ERROR folder={} path={} error={}",
                             folder_id, file_path, e
                         ));
-                        e.to_string()
+                        e
                     });
 
                 log_debug(&format!(
@@ -309,8 +320,7 @@ impl ApiService {
             ApiRequest::GetFolderStatus { folder_id } => {
                 let status = client
                     .get_folder_status(&folder_id)
-                    .await
-                    .map_err(|e| e.to_string());
+                    .await;
 
                 ApiResponse::FolderStatusResult { folder_id, status }
             }
@@ -325,13 +335,13 @@ impl ApiService {
                     Err(e) => ApiResponse::RescanResult {
                         folder_id,
                         success: false,
-                        error: Some(e.to_string()),
+                        error: Some(e),
                     },
                 }
             }
 
             ApiRequest::GetSystemStatus => {
-                let status = client.get_system_status().await.map_err(|e| e.to_string());
+                let status = client.get_system_status().await;
 
                 ApiResponse::SystemStatusResult { status }
             }
@@ -339,10 +349,15 @@ impl ApiService {
             ApiRequest::GetConnectionStats => {
                 let stats = client
                     .get_connection_stats()
-                    .await
-                    .map_err(|e| e.to_string());
+                    .await;
 
                 ApiResponse::ConnectionStatsResult { stats }
+            }
+
+            ApiRequest::GetDevices => {
+                let devices = client.get_devices().await;
+
+                ApiResponse::DevicesResult { devices }
             }
         }
     }

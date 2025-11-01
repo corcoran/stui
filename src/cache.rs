@@ -94,7 +94,13 @@ impl CacheDb {
 
             CREATE TABLE IF NOT EXISTS event_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                last_event_id INTEGER NOT NULL DEFAULT 0
+                last_event_id INTEGER NOT NULL DEFAULT 0,
+                device_name TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS cached_folders (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                data TEXT NOT NULL
             );
 
             -- Insert default row if it doesn't exist
@@ -115,8 +121,16 @@ impl CacheDb {
         )?;
 
         let result = stmt.query_row(params![folder_id], |row| {
+            let cached_state: String = row.get(0)?;
+            // Don't restore transient states like "scanning" from cache - default to "idle"
+            let state = if cached_state == "scanning" || cached_state == "syncing" {
+                "idle".to_string()
+            } else {
+                cached_state
+            };
+
             Ok(FolderStatus {
-                state: row.get(0)?,
+                state,
                 sequence: 0, // We don't return sequence from cache, will be checked separately
                 need_total_items: row.get(1)?,
                 receive_only_total_items: row.get(2)?,
@@ -221,11 +235,20 @@ impl CacheDb {
             folder_id, prefix, folder_sequence, cached_seq
         ));
 
-        if cached_seq.map_or(false, |seq| seq as u64 != folder_sequence) || cached_seq.is_none() {
+        // If folder_sequence is 0, skip validation and use whatever is cached (offline mode)
+        if folder_sequence != 0 && (cached_seq.map_or(false, |seq| seq as u64 != folder_sequence) || cached_seq.is_none()) {
             log_debug(&format!(
                 "DEBUG [get_browse_items]: Cache MISS - returning None"
             ));
             return Ok(None); // Cache is stale or doesn't exist
+        }
+
+        // If we have no cached data at all, return None
+        if cached_seq.is_none() {
+            log_debug(&format!(
+                "DEBUG [get_browse_items]: No cache exists - returning None"
+            ));
+            return Ok(None);
         }
 
         log_debug(&format!(
@@ -590,6 +613,41 @@ impl CacheDb {
         Ok(())
     }
 
+    // Folder caching for graceful degradation
+    /// Save folders to cache (for graceful degradation on startup)
+    pub fn save_folders(&self, folders: &[crate::api::Folder]) -> Result<()> {
+        let json = serde_json::to_string(folders)?;
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cached_folders (id, data) VALUES (1, ?1)",
+            params![json],
+        )?;
+
+        log_debug(&format!(
+            "DEBUG [save_folders]: Cached {} folders",
+            folders.len()
+        ));
+
+        Ok(())
+    }
+
+    /// Get all cached folders
+    pub fn get_all_folders(&self) -> Result<Vec<crate::api::Folder>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM cached_folders WHERE id = 1")?;
+
+        let json: String = stmt.query_row([], |row| row.get(0))?;
+        let folders: Vec<crate::api::Folder> = serde_json::from_str(&json)?;
+
+        log_debug(&format!(
+            "DEBUG [get_all_folders]: Loaded {} folders from cache",
+            folders.len()
+        ));
+
+        Ok(folders)
+    }
+
     // Event ID persistence
     pub fn get_last_event_id(&self) -> Result<u64> {
         let mut stmt = self
@@ -603,6 +661,22 @@ impl CacheDb {
         self.conn.execute(
             "UPDATE event_state SET last_event_id = ?1 WHERE id = 1",
             params![event_id as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_device_name(&self) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT device_name FROM event_state WHERE id = 1")?;
+        let device_name: Option<String> = stmt.query_row([], |row| row.get(0))?;
+        Ok(device_name)
+    }
+
+    pub fn save_device_name(&self, device_name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE event_state SET device_name = ?1 WHERE id = 1",
+            params![device_name],
         )?;
         Ok(())
     }

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Folder {
     pub id: String,
     pub label: Option<String>,
@@ -226,13 +226,9 @@ impl SyncthingClient {
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
-            .await
-            .context("Failed to fetch system config")?;
+            .await?;
 
-        let config: ConfigResponse = response
-            .json()
-            .await
-            .context("Failed to parse system config")?;
+        let config: ConfigResponse = response.json().await?;
 
         Ok(config)
     }

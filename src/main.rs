@@ -481,9 +481,16 @@ impl App {
         // Load folder statuses first (needed for cache validation)
         app.load_folder_statuses().await;
 
+        // Load cached device name (if available) to avoid "Unknown" flash
+        if let Ok(Some(cached_name)) = app.cache.get_device_name() {
+            app.model.syncthing.device_name = Some(cached_name);
+        }
+
         // Initialize system status and connection stats
         if let Ok(device_name) = app.client.get_device_name().await {
-            app.model.syncthing.device_name = Some(device_name);
+            app.model.syncthing.device_name = Some(device_name.clone());
+            // Cache device name for next startup
+            let _ = app.cache.save_device_name(&device_name);
         }
 
         if let Ok(sys_status) = app.client.get_system_status().await {
@@ -497,7 +504,8 @@ impl App {
 
         if !app.model.syncthing.folders.is_empty() {
             app.model.navigation.folders_state_selection = Some(0);
-            app.load_root_level(true).await?; // Preview mode - focus stays on folders
+            // Try to load root level, but don't fail initialization if it errors (e.g., Syncthing down)
+            let _ = app.load_root_level(true).await; // Preview mode - focus stays on folders
         }
 
         Ok(app)

@@ -776,3 +776,63 @@ fn render_image_metadata(f: &mut Frame, area: Rect, metadata: &crate::ImageMetad
 
     f.render_widget(paragraph, area);
 }
+
+/// Render the setup help dialog (shown when no cache and connection fails)
+pub fn render_setup_help(f: &mut Frame, error_message: &str, config_path: &str) {
+    let lines = vec![
+        Line::from(Span::styled(
+            "Cannot connect to Syncthing API",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Error: {}", error_message),
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(""),
+        Line::from("Please check:"),
+        Line::from("  • Is Syncthing running?"),
+        Line::from("  • Is the API URL correct?"),
+        Line::from("  • Is the API key valid?"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Config: ", Style::default().fg(Color::Cyan)),
+            Span::raw(config_path),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[r] ", Style::default().fg(Color::Green)),
+            Span::raw("Retry    "),
+            Span::styled("[c] ", Style::default().fg(Color::Green)),
+            Span::raw("Copy config path    "),
+            Span::styled("[q] ", Style::default().fg(Color::Green)),
+            Span::raw("Quit"),
+        ]),
+    ];
+
+    // Center the dialog
+    let area = f.area();
+    let prompt_width = 70;
+    let prompt_height = 18;
+    let prompt_area = Rect {
+        x: (area.width.saturating_sub(prompt_width)) / 2,
+        y: (area.height.saturating_sub(prompt_height)) / 2,
+        width: prompt_width,
+        height: prompt_height,
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Connection Failed - Setup Help")
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(ratatui::widgets::Clear, prompt_area);
+    f.render_widget(paragraph, prompt_area);
+}

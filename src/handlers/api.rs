@@ -6,6 +6,7 @@
 use std::time::Instant;
 
 use crate::api::SyncState;
+use crate::model::syncthing::ConnectionState;
 use crate::services::api::{ApiRequest, ApiResponse, Priority};
 use crate::App;
 
@@ -32,8 +33,19 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             app.model.performance.loading_browse.remove(&browse_key);
 
             let Ok(mut items) = items else {
-                return; // Silently ignore errors
+                // API call failed - only update state if we're not already in Connecting mode
+                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                    let error = items.unwrap_err();
+                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                        error_type: crate::logic::errors::classify_error(&error),
+                        message: crate::logic::errors::format_error_message(&error),
+                    };
+                }
+                return;
             };
+
+            // Successful API call - mark as connected
+            app.model.syncthing.connection_state = ConnectionState::Connected;
 
             // Check if this response is still relevant to current navigation
             // We allow caching for subdirectories of the current folder (prefetch),
@@ -229,12 +241,23 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             app.model.performance.loading_sync_states.remove(&sync_key);
 
             let Ok(file_details) = details else {
-                crate::log_debug(&format!(
-                    "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
-                    folder_id, file_path, details.err()
-                ));
-                return; // Silently ignore errors
+                // API call failed - only update state if we're not already in Connecting mode
+                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                    let error = details.unwrap_err();
+                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                        error_type: crate::logic::errors::classify_error(&error),
+                        message: crate::logic::errors::format_error_message(&error),
+                    };
+                    crate::log_debug(&format!(
+                        "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
+                        folder_id, file_path, error
+                    ));
+                }
+                return;
             };
+
+            // Successful API call - mark as connected
+            app.model.syncthing.connection_state = ConnectionState::Connected;
 
             // Check if this response is still relevant to current navigation
             let is_relevant = if app.model.navigation.focus_level == 0 {
@@ -327,8 +350,40 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
         ApiResponse::FolderStatusResult { folder_id, status } => {
             let Ok(status) = status else {
-                return; // Silently ignore errors
+                // API call failed - only update state if we're not already in Connecting mode
+                // (Background reconnection manages the Connecting state)
+                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                    let error = status.unwrap_err();
+                    let error_type = crate::logic::errors::classify_error(&error);
+                    let message = crate::logic::errors::format_error_message(&error);
+
+                    crate::log_debug(&format!(
+                        "DEBUG [FolderStatusResult]: Error='{}' Type={:?} Message='{}'",
+                        error, error_type, message
+                    ));
+
+                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                        error_type,
+                        message,
+                    };
+                }
+                return;
             };
+
+            // Successful API call - mark as connected
+            let was_disconnected = !matches!(
+                app.model.syncthing.connection_state,
+                ConnectionState::Connected
+            );
+            app.model.syncthing.connection_state = ConnectionState::Connected;
+
+            // If we just reconnected, immediately fetch system status for responsive UI
+            if was_disconnected {
+                let start = std::time::Instant::now();
+                crate::log_debug("DEBUG [FolderStatusResult]: Just reconnected, requesting immediate system status");
+                let _ = app.api_tx.send(ApiRequest::GetSystemStatus);
+                crate::log_debug(&format!("DEBUG [FolderStatusResult]: GetSystemStatus sent in {:?}", start.elapsed()));
+            }
 
             let sequence = status.sequence;
             let receive_only_count = status.receive_only_total_items;
@@ -449,10 +504,56 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     "DEBUG [SystemStatusResult]: Received system status, uptime={}",
                     sys_status.uptime
                 ));
+
+                // Store system status first (needed for DevicesResult handler)
                 app.model.syncthing.system_status = Some(sys_status);
+
+                // Check if we just reconnected
+                let was_disconnected = !matches!(
+                    app.model.syncthing.connection_state,
+                    ConnectionState::Connected
+                );
+
+                // Always fetch devices list on successful system status (first poll after reconnection)
+                // This ensures we have fresh device list and update device name (in case it changed in GUI)
+                // Only fetch if we don't already have devices, to avoid unnecessary API calls
+                if app.model.syncthing.devices.is_empty() || app.model.syncthing.device_name.is_none() {
+                    crate::log_debug("DEBUG [SystemStatusResult]: Requesting devices list to update device name");
+                    let _ = app.api_tx.send(ApiRequest::GetDevices);
+                }
+
+                // If we just reconnected and have no folders, set a flag to fetch them
+                if was_disconnected && app.model.syncthing.folders.is_empty() {
+                    crate::log_debug("DEBUG [SystemStatusResult]: Just reconnected with no folders, setting fetch flag");
+                    app.model.ui.needs_folder_refresh = true;
+                }
+
+                // Successful API call - mark as connected
+                app.model.syncthing.connection_state = ConnectionState::Connected;
             }
             Err(e) => {
-                crate::log_debug(&format!("DEBUG [SystemStatusResult ERROR]: {}", e));
+                // SystemStatus is semi-critical: if we're idle and it fails, this likely indicates disconnection
+                // However, if we're already in Connecting state (reconnection active), don't override it
+                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                    let error_type = crate::logic::errors::classify_error(&e);
+                    let message = crate::logic::errors::format_error_message(&e);
+
+                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                        error_type,
+                        message: message.clone(),
+                    };
+
+                    crate::log_debug(&format!(
+                        "DEBUG [SystemStatusResult]: Connection lost - {}",
+                        message
+                    ));
+                } else {
+                    // Already reconnecting, don't override
+                    crate::log_debug(&format!(
+                        "DEBUG [SystemStatusResult ERROR]: {} (reconnection active, state unchanged)",
+                        e
+                    ));
+                }
             }
         },
 
@@ -488,9 +589,61 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Initialize rates to zero on first fetch
                     app.model.syncthing.last_transfer_rates = Some((0.0, 0.0));
                 }
+
+                // Successful API call - mark as connected
+                app.model.syncthing.connection_state = ConnectionState::Connected;
             }
             Err(e) => {
-                crate::log_debug(&format!("DEBUG [ConnectionStatsResult ERROR]: {}", e));
+                // NOTE: Connection stats failures don't mark the entire connection as Disconnected
+                // This is a non-critical endpoint - other API calls may still be working
+                // Log the error but don't change connection state
+                crate::log_debug(&format!("DEBUG [ConnectionStatsResult ERROR]: {} (non-critical, connection state unchanged)", e));
+            }
+        },
+
+        ApiResponse::DevicesResult { devices } => match devices {
+            Ok(devices_list) => {
+                crate::log_debug(&format!(
+                    "DEBUG [DevicesResult]: Received {} devices",
+                    devices_list.len()
+                ));
+
+                // Update devices list in model
+                app.model.syncthing.devices = devices_list.clone();
+
+                // Extract and update device name if we don't have it yet
+                if app.model.syncthing.device_name.is_none() {
+                    if let Some(sys_status) = &app.model.syncthing.system_status {
+                        let my_id = &sys_status.my_id;
+                        if let Some(device) = devices_list.iter().find(|d| &d.id == my_id) {
+                            app.model.syncthing.device_name = Some(device.name.clone());
+                            // Cache device name for next startup
+                            let _ = app.cache.save_device_name(&device.name);
+                            crate::log_debug(&format!(
+                                "DEBUG [DevicesResult]: Set device name to '{}'",
+                                device.name
+                            ));
+                        } else {
+                            crate::log_debug(&format!(
+                                "DEBUG [DevicesResult]: Could not find device with my_id={}",
+                                my_id
+                            ));
+                        }
+                    } else {
+                        crate::log_debug("DEBUG [DevicesResult]: No system status available yet, cannot extract device name");
+                    }
+                }
+
+                // Successful API call - mark as connected
+                app.model.syncthing.connection_state = ConnectionState::Connected;
+            }
+            Err(e) => {
+                // Device list fetch failed - log but don't change connection state
+                // This is non-critical for display purposes
+                crate::log_debug(&format!(
+                    "DEBUG [DevicesResult ERROR]: {} (non-critical, connection state unchanged)",
+                    e
+                ));
             }
         },
     }

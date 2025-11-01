@@ -7,6 +7,25 @@ use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
 use crate::api::{ConnectionStats, Device, Folder, FolderStatus, SystemStatus};
+use crate::logic::errors::ErrorType;
+
+/// Connection state for the Syncthing API
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConnectionState {
+    /// Successfully connected to Syncthing API
+    Connected,
+    /// Attempting to connect (with retry attempt number, optional error, and next retry delay in seconds)
+    Connecting {
+        attempt: u32,
+        last_error: Option<String>,
+        next_retry_secs: u64,
+    },
+    /// Failed to connect (with error type and user-friendly message)
+    Disconnected {
+        error_type: ErrorType,
+        message: String,
+    },
+}
 
 /// Syncthing API data (external state from Syncthing REST API)
 #[derive(Clone, Debug)]
@@ -29,6 +48,9 @@ pub struct SyncthingModel {
     // ============================================
     // SYSTEM STATUS
     // ============================================
+    /// Connection state to Syncthing API
+    pub connection_state: ConnectionState,
+
     /// System status (device name, uptime, etc.)
     pub system_status: Option<SystemStatus>,
 
@@ -59,6 +81,11 @@ impl SyncthingModel {
             devices: Vec::new(),
             folder_statuses: HashMap::new(),
             statuses_loaded: false,
+            connection_state: ConnectionState::Connecting {
+                attempt: 0,
+                last_error: None,
+                next_retry_secs: 5,
+            },
             system_status: None,
             connection_stats: None,
             last_connection_stats: None,
@@ -108,5 +135,39 @@ mod tests {
     fn test_syncthing_model_is_cloneable() {
         let model = SyncthingModel::new();
         let _cloned = model.clone();
+    }
+
+    #[test]
+    fn test_connection_state_initial() {
+        let model = SyncthingModel::new();
+        assert!(matches!(
+            model.connection_state,
+            ConnectionState::Connecting { attempt: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn test_connection_state_is_cloneable() {
+        let state = ConnectionState::Connected;
+        let _cloned = state.clone();
+    }
+
+    #[test]
+    fn test_connection_state_equality() {
+        let state1 = ConnectionState::Connected;
+        let state2 = ConnectionState::Connected;
+        assert_eq!(state1, state2);
+
+        let state3 = ConnectionState::Connecting {
+            attempt: 1,
+            last_error: None,
+            next_retry_secs: 5,
+        };
+        let state4 = ConnectionState::Connecting {
+            attempt: 1,
+            last_error: None,
+            next_retry_secs: 5,
+        };
+        assert_eq!(state3, state4);
     }
 }

@@ -53,6 +53,15 @@ pub struct UiModel {
     /// File info popup (metadata + preview)
     pub file_info_popup: Option<FileInfoPopupState>,
 
+    /// Setup help dialog state (shown when no cache and connection fails)
+    pub show_setup_help: bool,
+
+    /// Config file path (for setup help dialog)
+    pub config_path: String,
+
+    /// Flag to trigger folder refresh in main loop (after reconnection)
+    pub needs_folder_refresh: bool,
+
     /// Toast message (text, timestamp)
     pub toast_message: Option<(String, Instant)>,
 
@@ -97,6 +106,9 @@ impl UiModel {
             pattern_selection: None,
             folder_type_selection: None,
             file_info_popup: None,
+            show_setup_help: false,
+            config_path: String::new(),
+            needs_folder_refresh: false,
             toast_message: None,
             search_mode: false,
             search_query: String::new(),
@@ -116,6 +128,7 @@ impl UiModel {
             || self.pattern_selection.is_some()
             || self.folder_type_selection.is_some()
             || self.file_info_popup.is_some()
+            || self.show_setup_help
             || self.search_mode
     }
 
@@ -128,6 +141,7 @@ impl UiModel {
         self.pattern_selection = None;
         self.folder_type_selection = None;
         self.file_info_popup = None;
+        self.show_setup_help = false;
         self.search_mode = false;
         self.search_query.clear();
         self.search_origin_level = None;
