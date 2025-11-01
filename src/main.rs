@@ -3603,6 +3603,27 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.last_connection_stats_fetch = Instant::now();
         }
 
+        // Poll folders in transient states (scanning, syncing, cleaning)
+        // These states don't generate file change events, so we need periodic polling
+        // Check every 2 seconds to catch state transitions
+        if app.last_status_update.elapsed() >= std::time::Duration::from_millis(2000) {
+            for (folder_id, status) in &app.model.syncthing.folder_statuses {
+                if matches!(
+                    status.state.as_str(),
+                    "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
+                ) {
+                    crate::log_debug(&format!(
+                        "DEBUG [Transient State Poll]: Polling folder '{}' in state '{}'",
+                        folder_id, status.state
+                    ));
+                    let _ = app.api_tx.send(services::api::ApiRequest::GetFolderStatus {
+                        folder_id: folder_id.clone(),
+                    });
+                }
+            }
+            app.last_status_update = Instant::now();
+        }
+
         // Update UI periodically for live stats (uptime, transfer rates)
         if last_stats_update.elapsed() >= std::time::Duration::from_secs(1) {
             last_stats_update = Instant::now();
