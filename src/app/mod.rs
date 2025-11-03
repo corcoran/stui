@@ -12,3 +12,5 @@
 //! for better discoverability and maintainability.
 
 pub(crate) mod navigation;
+pub(crate) mod sync_states;
+pub(crate) mod ignore;
