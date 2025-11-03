@@ -208,20 +208,10 @@ impl App {
     /// Returns Some(pending_path) if blocked, None if allowed
     fn is_path_or_parent_pending(&self, folder_id: &str, path: &PathBuf) -> Option<PathBuf> {
         if let Some(pending_info) = self.model.performance.pending_ignore_deletes.get(folder_id) {
-            // First check for exact match
-            if pending_info.paths.contains(path) {
-                return Some(path.clone());
-            }
-
-            // Check if any parent directory is pending
-            // For example, if "/foo/bar" is pending, block "/foo/bar/baz"
-            for pending_path in &pending_info.paths {
-                if path.starts_with(pending_path) {
-                    return Some(pending_path.clone());
-                }
-            }
+            logic::path::is_path_or_parent_in_set(&pending_info.paths, path)
+        } else {
+            None
         }
-        None
     }
 
     /// Add a path to pending deletions for a folder
@@ -306,18 +296,7 @@ impl App {
     }
 
     pub fn get_local_state_summary(&self) -> (u64, u64, u64) {
-        // Calculate aggregate local state across all folders: (files, directories, bytes)
-        let mut total_files = 0u64;
-        let mut total_dirs = 0u64;
-        let mut total_bytes = 0u64;
-
-        for status in self.model.syncthing.folder_statuses.values() {
-            total_files += status.local_files;
-            total_dirs += status.local_directories;
-            total_bytes += status.local_bytes;
-        }
-
-        (total_files, total_dirs, total_bytes)
+        logic::folder::calculate_local_state_summary(&self.model.syncthing.folder_statuses)
     }
 
     /// Flush pending database writes in a single transaction
@@ -2927,34 +2906,7 @@ impl App {
     }
 
     fn extract_text_from_binary(bytes: &[u8]) -> String {
-        // Extract printable ASCII strings (similar to 'strings' command)
-        let mut result = String::new();
-        let mut current_string = String::new();
-        const MIN_STRING_LENGTH: usize = 4;
-
-        for &byte in bytes {
-            if (32..=126).contains(&byte) || byte == b'\n' || byte == b'\t' {
-                current_string.push(byte as char);
-            } else {
-                if current_string.len() >= MIN_STRING_LENGTH {
-                    result.push_str(&current_string);
-                    result.push('\n');
-                }
-                current_string.clear();
-            }
-        }
-
-        if current_string.len() >= MIN_STRING_LENGTH {
-            result.push_str(&current_string);
-        }
-
-        if result.is_empty() {
-            result = "[Binary file - no readable text found]".to_string();
-        } else {
-            result = format!("[Binary file - extracted text]\n\n{}", result);
-        }
-
-        result
+        logic::file::extract_text_from_binary(bytes)
     }
 
     async fn toggle_ignore(&mut self) -> Result<()> {

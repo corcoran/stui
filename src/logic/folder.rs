@@ -3,6 +3,7 @@
 //! Pure functions for folder-related validations and calculations.
 
 use crate::api::FolderStatus;
+use std::collections::HashMap;
 
 /// Check if a folder has local changes that can be reverted
 ///
@@ -84,6 +85,41 @@ pub fn should_show_restore_button(
     folder_status: Option<&FolderStatus>,
 ) -> bool {
     focus_level > 0 && has_local_changes(folder_status)
+}
+
+/// Calculate aggregate local state across all folders
+///
+/// Aggregates file counts, directory counts, and byte sizes from all folder statuses.
+/// This provides a summary view of the total local state managed by Syncthing.
+///
+/// # Arguments
+/// * `folder_statuses` - Map of folder IDs to their current status information
+///
+/// # Returns
+/// Tuple of `(total_files, total_directories, total_bytes)`
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use synctui::logic::folder::calculate_local_state_summary;
+/// use synctui::api::FolderStatus;
+///
+/// let mut statuses = HashMap::new();
+/// // Add folder statuses...
+/// let (files, dirs, bytes) = calculate_local_state_summary(&statuses);
+/// ```
+pub fn calculate_local_state_summary(folder_statuses: &HashMap<String, FolderStatus>) -> (u64, u64, u64) {
+    let mut total_files = 0u64;
+    let mut total_dirs = 0u64;
+    let mut total_bytes = 0u64;
+
+    for status in folder_statuses.values() {
+        total_files += status.local_files;
+        total_dirs += status.local_directories;
+        total_bytes += status.local_bytes;
+    }
+
+    (total_files, total_dirs, total_bytes)
 }
 
 #[cfg(test)]
@@ -195,5 +231,91 @@ mod tests {
         // Don't show: no folder status
         assert!(!should_show_restore_button(0, None));
         assert!(!should_show_restore_button(1, None));
+    }
+
+    // Tests for calculate_local_state_summary (TDD - written before implementation)
+
+    #[test]
+    fn test_calculate_local_state_summary_empty() {
+        use std::collections::HashMap;
+
+        let folder_statuses: HashMap<String, FolderStatus> = HashMap::new();
+        let result = calculate_local_state_summary(&folder_statuses);
+
+        assert_eq!(result, (0, 0, 0),
+            "Empty folder_statuses should return all zeros");
+    }
+
+    #[test]
+    fn test_calculate_local_state_summary_single_folder() {
+        use std::collections::HashMap;
+
+        let mut folder_statuses = HashMap::new();
+        let mut status = create_test_status(0);
+        status.local_files = 100;
+        status.local_directories = 10;
+        status.local_bytes = 1024000;
+        folder_statuses.insert("folder1".to_string(), status);
+
+        let result = calculate_local_state_summary(&folder_statuses);
+
+        assert_eq!(result, (100, 10, 1024000),
+            "Single folder should return its stats");
+    }
+
+    #[test]
+    fn test_calculate_local_state_summary_multiple_folders() {
+        use std::collections::HashMap;
+
+        let mut folder_statuses = HashMap::new();
+
+        // Folder 1
+        let mut status1 = create_test_status(0);
+        status1.local_files = 100;
+        status1.local_directories = 10;
+        status1.local_bytes = 1000;
+        folder_statuses.insert("folder1".to_string(), status1);
+
+        // Folder 2
+        let mut status2 = create_test_status(0);
+        status2.local_files = 200;
+        status2.local_directories = 20;
+        status2.local_bytes = 2000;
+        folder_statuses.insert("folder2".to_string(), status2);
+
+        // Folder 3
+        let mut status3 = create_test_status(0);
+        status3.local_files = 50;
+        status3.local_directories = 5;
+        status3.local_bytes = 500;
+        folder_statuses.insert("folder3".to_string(), status3);
+
+        let result = calculate_local_state_summary(&folder_statuses);
+
+        assert_eq!(result, (350, 35, 3500),
+            "Should aggregate stats from all folders: (100+200+50, 10+20+5, 1000+2000+500)");
+    }
+
+    #[test]
+    fn test_calculate_local_state_summary_with_zeros() {
+        use std::collections::HashMap;
+
+        let mut folder_statuses = HashMap::new();
+
+        // Folder with some data
+        let mut status1 = create_test_status(0);
+        status1.local_files = 50;
+        status1.local_directories = 5;
+        status1.local_bytes = 1000;
+        folder_statuses.insert("folder1".to_string(), status1);
+
+        // Folder with zeros
+        let status2 = create_test_status(0);
+        folder_statuses.insert("folder2".to_string(), status2);
+
+        let result = calculate_local_state_summary(&folder_statuses);
+
+        assert_eq!(result, (50, 5, 1000),
+            "Should handle folders with zero stats correctly");
     }
 }

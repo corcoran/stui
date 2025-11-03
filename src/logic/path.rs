@@ -2,7 +2,8 @@
 //!
 //! Handles translation between container paths (inside Docker) and host paths.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 /// Translate a container path to a host path using the path mapping configuration
 ///
@@ -49,6 +50,54 @@ pub fn translate_path(
 
     // If no mapping found, return container path
     container_path
+}
+
+/// Check if a path or any of its parent directories are in the given set
+///
+/// This is used to validate whether a file operation is blocked by a pending operation
+/// on the path itself or any of its parent directories.
+///
+/// # Arguments
+/// * `pending_paths` - Set of paths that are currently pending (e.g., pending deletion)
+/// * `path` - The path to check
+///
+/// # Returns
+/// * `Some(PathBuf)` - The pending path that blocks this operation (either exact match or parent)
+/// * `None` - No blocking path found
+///
+/// # Example
+/// ```
+/// use std::collections::HashSet;
+/// use std::path::PathBuf;
+/// use synctui::logic::path::is_path_or_parent_in_set;
+///
+/// let mut pending = HashSet::new();
+/// pending.insert(PathBuf::from("/foo/bar"));
+///
+/// // Exact match
+/// assert!(is_path_or_parent_in_set(&pending, &PathBuf::from("/foo/bar")).is_some());
+///
+/// // Child path is blocked by parent
+/// assert!(is_path_or_parent_in_set(&pending, &PathBuf::from("/foo/bar/baz")).is_some());
+///
+/// // Unrelated path
+/// assert!(is_path_or_parent_in_set(&pending, &PathBuf::from("/other")).is_none());
+/// ```
+pub fn is_path_or_parent_in_set(pending_paths: &HashSet<PathBuf>, path: &PathBuf) -> Option<PathBuf> {
+    // First check for exact match
+    if pending_paths.contains(path) {
+        return Some(path.clone());
+    }
+
+    // Check if any parent directory is pending
+    // For example, if "/foo/bar" is pending, block "/foo/bar/baz"
+    for pending_path in pending_paths {
+        if path.starts_with(pending_path) {
+            return Some(pending_path.clone());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -99,5 +148,89 @@ mod tests {
 
         let result = translate_path("/data/media", "", &path_map);
         assert_eq!(result, "/mnt/storage/media/");
+    }
+
+    // Tests for is_path_or_parent_in_set (TDD - written before implementation)
+
+    #[test]
+    fn test_is_path_or_parent_in_set_exact_match() {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+
+        let mut pending_paths = HashSet::new();
+        pending_paths.insert(PathBuf::from("/foo/bar"));
+        pending_paths.insert(PathBuf::from("/baz/qux"));
+
+        let path = PathBuf::from("/foo/bar");
+        let result = is_path_or_parent_in_set(&pending_paths, &path);
+
+        assert_eq!(result, Some(PathBuf::from("/foo/bar")),
+            "Should find exact match in pending set");
+    }
+
+    #[test]
+    fn test_is_path_or_parent_in_set_parent_match() {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+
+        let mut pending_paths = HashSet::new();
+        pending_paths.insert(PathBuf::from("/foo/bar"));
+
+        // Check if child path is blocked by pending parent
+        let child_path = PathBuf::from("/foo/bar/baz/file.txt");
+        let result = is_path_or_parent_in_set(&pending_paths, &child_path);
+
+        assert_eq!(result, Some(PathBuf::from("/foo/bar")),
+            "Should find parent directory in pending set");
+    }
+
+    #[test]
+    fn test_is_path_or_parent_in_set_no_match() {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+
+        let mut pending_paths = HashSet::new();
+        pending_paths.insert(PathBuf::from("/foo/bar"));
+        pending_paths.insert(PathBuf::from("/baz/qux"));
+
+        let unrelated_path = PathBuf::from("/completely/different/path");
+        let result = is_path_or_parent_in_set(&pending_paths, &unrelated_path);
+
+        assert_eq!(result, None,
+            "Should return None when path has no match or parent match");
+    }
+
+    #[test]
+    fn test_is_path_or_parent_in_set_empty_set() {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+
+        let pending_paths: HashSet<PathBuf> = HashSet::new();
+        let path = PathBuf::from("/any/path");
+        let result = is_path_or_parent_in_set(&pending_paths, &path);
+
+        assert_eq!(result, None,
+            "Should return None when pending set is empty");
+    }
+
+    #[test]
+    fn test_is_path_or_parent_in_set_multiple_pending() {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+
+        let mut pending_paths = HashSet::new();
+        pending_paths.insert(PathBuf::from("/foo"));
+        pending_paths.insert(PathBuf::from("/foo/bar"));
+        pending_paths.insert(PathBuf::from("/baz"));
+
+        // Path with multiple ancestors in pending set - should return one of them
+        let deep_path = PathBuf::from("/foo/bar/baz/qux");
+        let result = is_path_or_parent_in_set(&pending_paths, &deep_path);
+
+        assert!(result.is_some(), "Should find at least one matching parent");
+        // Should match either /foo or /foo/bar (both are parents)
+        let matched = result.unwrap();
+        assert!(matched == PathBuf::from("/foo") || matched == PathBuf::from("/foo/bar"),
+            "Should match one of the parent paths");
     }
 }

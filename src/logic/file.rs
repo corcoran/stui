@@ -365,6 +365,65 @@ fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], m
     spans
 }
 
+/// Extract printable ASCII strings from binary data
+///
+/// This function scans binary data and extracts readable text strings,
+/// similar to the Unix `strings` command. Only strings of at least 4
+/// characters are extracted.
+///
+/// # Arguments
+/// * `bytes` - Binary data to scan for text
+///
+/// # Returns
+/// A formatted string containing:
+/// - All extracted text strings (>= 4 chars) separated by newlines
+/// - A header indicating it's a binary file
+/// - If no text found: "[Binary file - no readable text found]"
+///
+/// # Printable Characters
+/// Considers printable ASCII (32-126), newlines (`\n`), and tabs (`\t`) as valid text.
+///
+/// # Example
+/// ```
+/// use synctui::logic::file::extract_text_from_binary;
+///
+/// let binary = b"Hello\x00World\x00\x01\x02Test\x00";
+/// let result = extract_text_from_binary(binary);
+/// assert!(result.contains("Hello"));
+/// assert!(result.contains("World"));
+/// assert!(result.contains("Test"));
+/// ```
+pub fn extract_text_from_binary(bytes: &[u8]) -> String {
+    // Extract printable ASCII strings (similar to 'strings' command)
+    let mut result = String::new();
+    let mut current_string = String::new();
+    const MIN_STRING_LENGTH: usize = 4;
+
+    for &byte in bytes {
+        if (32..=126).contains(&byte) || byte == b'\n' || byte == b'\t' {
+            current_string.push(byte as char);
+        } else {
+            if current_string.len() >= MIN_STRING_LENGTH {
+                result.push_str(&current_string);
+                result.push('\n');
+            }
+            current_string.clear();
+        }
+    }
+
+    if current_string.len() >= MIN_STRING_LENGTH {
+        result.push_str(&current_string);
+    }
+
+    if result.is_empty() {
+        result = "[Binary file - no readable text found]".to_string();
+    } else {
+        result = format!("[Binary file - extracted text]\n\n{}", result);
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,5 +709,70 @@ mod tests {
         assert!(full_text.contains("Here"));
         // The "Here" should be at approximately position 40
         assert!(full_text.len() <= 80);
+    }
+
+    // Tests for extract_text_from_binary (TDD - written before implementation)
+
+    #[test]
+    fn test_extract_text_from_binary_with_readable_strings() {
+        // Binary data with some readable strings (>= 4 chars)
+        let binary = b"Hello\x00World\x00\x01\x02Test String\x00End";
+        let result = extract_text_from_binary(binary);
+
+        assert!(result.contains("Binary file - extracted text"),
+            "Should indicate it's a binary file");
+        assert!(result.contains("Hello"), "Should extract 'Hello' (5 chars)");
+        assert!(result.contains("World"), "Should extract 'World' (5 chars)");
+        assert!(result.contains("Test String"), "Should extract 'Test String' (11 chars)");
+    }
+
+    #[test]
+    fn test_extract_text_from_binary_pure_binary() {
+        // Pure binary with no readable strings >= 4 chars
+        let binary = b"\x00\x01\x02\x03\xFF\xFE\xFD\xFC";
+        let result = extract_text_from_binary(binary);
+
+        assert_eq!(result, "[Binary file - no readable text found]",
+            "Pure binary should show 'no readable text found' message");
+    }
+
+    #[test]
+    fn test_extract_text_from_binary_mixed_content() {
+        // Mix of binary and text with various string lengths
+        let binary = b"\x00\x00Data\x00\x01Short\x00\x02AB\x00LongerString\x00\xFF";
+        let result = extract_text_from_binary(binary);
+
+        assert!(result.contains("Data"), "Should extract 'Data' (4 chars - at threshold)");
+        assert!(result.contains("Short"), "Should extract 'Short' (5 chars)");
+        assert!(!result.contains("AB"), "Should NOT extract 'AB' (2 chars - below threshold)");
+        assert!(result.contains("LongerString"), "Should extract 'LongerString' (12 chars)");
+    }
+
+    #[test]
+    fn test_extract_text_from_binary_min_length_threshold() {
+        // Test the MIN_STRING_LENGTH threshold (4 chars)
+        let binary = b"A\x00AB\x00ABC\x00ABCD\x00ABCDE\x00";
+        let result = extract_text_from_binary(binary);
+
+        assert!(!result.contains("A\n"), "Should NOT extract 1-char strings");
+        assert!(!result.contains("AB\n"), "Should NOT extract 2-char strings");
+        assert!(!result.contains("ABC\n"), "Should NOT extract 3-char strings");
+        assert!(result.contains("ABCD"), "Should extract 4-char strings (at threshold)");
+        assert!(result.contains("ABCDE"), "Should extract 5-char strings");
+    }
+
+    #[test]
+    fn test_extract_text_from_binary_special_chars() {
+        // Test handling of printable ASCII + special characters (newline, tab)
+        let binary = b"Line1\nLine2\x00Tab\tSeparated\x00Normal Text\x00\xFF";
+        let result = extract_text_from_binary(binary);
+
+        // Newlines and tabs should be preserved as part of strings
+        assert!(result.contains("Line1\nLine2"),
+            "Should preserve newlines within strings");
+        assert!(result.contains("Tab\tSeparated"),
+            "Should preserve tabs within strings");
+        assert!(result.contains("Normal Text"),
+            "Should extract normal printable ASCII");
     }
 }
