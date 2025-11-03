@@ -192,7 +192,7 @@ synctui --debug
 | `p` | Pause/resume folder (folder view only) | Yes |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |
 | `I` | Ignore AND delete from disk | No (immediate) |
-| `o` | Open file/directory with configured command | No |
+| `o` | **Context-aware**: Open Syncthing web UI (folder view) OR Open file/directory with configured command (breadcrumb view) | No |
 | `d` | Delete file/directory from disk | Yes |
 | `r` | Rescan folder (refresh from disk) | No |
 | `R` | Restore deleted files (revert receive-only folder) | Yes |

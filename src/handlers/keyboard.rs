@@ -676,7 +676,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 // Ignore file AND delete from disk
                 let _ = app.ignore_and_delete().await;
             }
-            KeyCode::Char('o') => {
+            KeyCode::Char('o') if app.model.navigation.focus_level == 0 => {
+                // Open Syncthing web UI in browser
+                let _ = app.open_syncthing_web_ui();
+            }
+            KeyCode::Char('o') if app.model.navigation.focus_level > 0 => {
                 // Open file/directory with configured command
                 let _ = app.open_selected_item();
             }

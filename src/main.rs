@@ -183,6 +183,7 @@ pub struct App {
     path_map: HashMap<String, String>,
     open_command: Option<String>,
     clipboard_command: Option<String>,
+    base_url: String,
 
     // ⏱️ Timing (Runtime)
     last_status_update: Instant,
@@ -523,6 +524,7 @@ impl App {
             path_map: config.path_map,
             open_command: config.open_command,
             clipboard_command: config.clipboard_command,
+            base_url: config.base_url,
             last_status_update: Instant::now(),
             last_system_status_update: Instant::now(),
             last_connection_stats_fetch: Instant::now(),
@@ -2388,6 +2390,33 @@ impl App {
                 // Show error toast
                 let toast_msg = format!("Error: Failed to open with '{}'", open_cmd);
                 self.model.ui.toast_message = Some((toast_msg, Instant::now()));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn open_syncthing_web_ui(&mut self) -> Result<()> {
+        // Check if open_command is configured
+        let Some(ref open_cmd) = self.open_command else {
+            self.model.ui.show_toast("Error: open_command not configured".to_string());
+            return Ok(());
+        };
+
+        // Spawn command to Open Syncthing Web UI
+        let result = std::process::Command::new(open_cmd)
+            .arg(&self.base_url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match result {
+            Ok(_child) => {
+                self.model.ui.show_toast(format!("Opening Syncthing: {}", self.base_url));
+            }
+            Err(e) => {
+                self.model.ui.show_toast(format!("Failed to open: {}", e));
             }
         }
 
