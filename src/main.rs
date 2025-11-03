@@ -22,10 +22,6 @@ struct Args {
     #[arg(short, long)]
     debug: bool,
 
-    /// Enable targeted bug debugging logs to /tmp/synctui-bug.log
-    #[arg(long)]
-    bug: bool,
-
     /// Enable vim keybindings (hjkl, ^D/U, ^F/B, gg/G)
     #[arg(long)]
     vim: bool,
@@ -37,8 +33,6 @@ struct Args {
 
 // Global flag for debug mode
 static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
-// Global flag for targeted bug debugging
-static BUG_MODE: AtomicBool = AtomicBool::new(false);
 
 mod api;
 mod cache;
@@ -72,23 +66,6 @@ fn log_debug(msg: &str) {
         .create(true)
         .append(true)
         .open("/tmp/synctui-debug.log")
-    {
-        let _ = writeln!(file, "{}", msg);
-    }
-}
-
-fn log_bug(msg: &str) {
-    // Only log if bug mode is enabled
-    if !BUG_MODE.load(Ordering::Relaxed) {
-        return;
-    }
-
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/synctui-bug.log")
     {
         let _ = writeln!(file, "{}", msg);
     }
@@ -2910,7 +2887,6 @@ impl App {
     }
 
     async fn toggle_ignore(&mut self) -> Result<()> {
-        log_bug("toggle_ignore: START");
 
         // Only works when focused on a breadcrumb level (not folder list)
         if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
@@ -2925,11 +2901,6 @@ impl App {
         let level = &self.model.navigation.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
         let prefix = level.prefix.clone();
-        log_bug(&format!(
-            "toggle_ignore: folder={} states={}",
-            folder_id,
-            level.file_sync_states.len()
-        ));
 
         // Get selected item
         let selected = match level.selected_index {
@@ -2948,10 +2919,6 @@ impl App {
             .get(&item.name)
             .copied()
             .unwrap_or(SyncState::Unknown);
-        log_bug(&format!(
-            "toggle_ignore: item={} state={:?}",
-            item_name, sync_state
-        ));
 
         // Build the relative path from folder root
         let relative_path = if let Some(ref prefix) = prefix {
@@ -3004,7 +2971,6 @@ impl App {
                 self.client
                     .set_ignore_patterns(&folder_id, updated_patterns)
                     .await?;
-                log_bug("toggle_ignore: updated .stignore");
 
                 // Don't add optimistic update for unignore - the final state is unpredictable
                 // (could be Synced, RemoteOnly, OutOfSync, LocalOnly, or Syncing)
@@ -3016,11 +2982,6 @@ impl App {
 
                     // Update ignored_exists (file is no longer ignored)
                     self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Unknown);
-
-                    log_bug(&format!(
-                        "toggle_ignore: cleared {} state (un-ignoring), no optimistic update",
-                        item_name
-                    ));
                 }
 
                 // Trigger rescan in background - ItemStarted/ItemFinished events will update state
@@ -3036,30 +2997,14 @@ impl App {
 
                 tokio::spawn(async move {
                     // Wait a moment for Syncthing to process the .stignore change
-                    log_bug(
-                        "toggle_ignore: waiting 200ms for Syncthing to process .stignore change",
-                    );
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
                     // Now trigger rescan
-                    log_bug(&format!(
-                        "toggle_ignore: calling rescan for folder={}",
-                        folder_id_clone
-                    ));
-                    match client.rescan_folder(&folder_id_clone).await {
-                        Ok(_) => log_bug("toggle_ignore: rescan completed successfully"),
-                        Err(e) => log_bug(&format!("toggle_ignore: rescan FAILED: {:?}", e)),
-                    }
+                    let _ = client.rescan_folder(&folder_id_clone).await;
 
                     // Wait longer for ItemStarted event (for files that need syncing)
                     // Syncthing needs time to discover file, calculate hashes, start transfer
-                    log_bug("toggle_ignore: waiting 3 seconds for ItemStarted event");
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-                    log_bug(&format!(
-                        "toggle_ignore: requesting file info for {}",
-                        file_path_for_api
-                    ));
                     // Fetch file info as fallback (for files already synced, no ItemStarted will fire)
                     let _ = api_tx.send(services::api::ApiRequest::GetFileInfo {
                         folder_id: folder_id_clone,
@@ -3108,11 +3053,6 @@ impl App {
                 let exists = std::path::Path::new(&host_path).exists();
                 level.ignored_exists.insert(item_name.clone(), exists);
 
-                log_bug(&format!(
-                    "toggle_ignore: set {} to Ignored",
-                    item_name
-                ));
-
                 // Update cache immediately so browse refresh doesn't overwrite with stale data
                 let _ =
                     self.cache
@@ -3127,15 +3067,6 @@ impl App {
             });
         }
 
-        // Log HashMap size when returning
-        if !self.model.navigation.breadcrumb_trail.is_empty() {
-            log_bug(&format!(
-                "toggle_ignore: END - HashMap now has {} states",
-                self.model.navigation.breadcrumb_trail[0].file_sync_states.len()
-            ));
-        } else {
-            log_bug("toggle_ignore: END");
-        }
         Ok(())
     }
 
@@ -3345,14 +3276,9 @@ async fn main() -> Result<()> {
 
     // Set debug mode
     DEBUG_MODE.store(args.debug, Ordering::Relaxed);
-    BUG_MODE.store(args.bug, Ordering::Relaxed);
 
     if args.debug {
         log_debug("Debug mode enabled");
-    }
-
-    if args.bug {
-        log_bug("Bug mode enabled - logging to /tmp/synctui-bug.log");
     }
 
     // Determine config file path

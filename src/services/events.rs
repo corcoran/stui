@@ -22,21 +22,6 @@ fn log_debug(msg: &str) {
     }
 }
 
-fn log_bug(msg: &str) {
-    // Only log if bug mode is enabled
-    if !crate::BUG_MODE.load(Ordering::Relaxed) {
-        return;
-    }
-
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/synctui-bug.log")
-    {
-        let _ = writeln!(file, "{}", msg);
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct SyncthingEvent {
@@ -102,7 +87,6 @@ async fn event_listener_loop(
 ) -> Result<()> {
     let client = Client::new();
 
-    log_bug("EVENT LISTENER: Starting up");
     log_debug(&format!(
         "DEBUG [EVENT LISTENER]: Starting event listener, base_url={} last_event_id={}",
         base_url, last_event_id
@@ -117,10 +101,6 @@ async fn event_listener_loop(
             "{}/rest/events?since={}&timeout=60",
             base_url, last_event_id
         );
-        log_bug(&format!(
-            "EVENT LISTENER: Polling Syncthing (last_event_id={})",
-            last_event_id
-        ));
         log_debug(&format!("DEBUG [EVENT LISTENER]: Polling {}", url));
 
         match client.get(&url).header("X-API-Key", &api_key).send().await {
@@ -130,11 +110,9 @@ async fn event_listener_loop(
                     "DEBUG [EVENT LISTENER]: Got response, status={}",
                     status
                 ));
-                log_bug(&format!("EVENT LISTENER: Got response, status={}", status));
 
                 match response.json::<Vec<SyncthingEvent>>().await {
                     Ok(events) => {
-                        log_bug(&format!("EVENT LISTENER: Received {} events", events.len()));
                         log_debug(&format!(
                             "DEBUG [EVENT LISTENER]: Received {} events",
                             events.len()
@@ -143,7 +121,6 @@ async fn event_listener_loop(
                         // If we've been getting 0 events and last_event_id is high,
                         // Syncthing might have restarted - try resetting to 0 once
                         if events.is_empty() && last_event_id > 1000 && !tried_reset {
-                            log_bug(&format!("EVENT LISTENER: No events with high event_id={}, trying reset to 0", last_event_id));
                             last_event_id = 0;
                             tried_reset = true;
                             // Persist the reset so next startup uses 0
@@ -157,7 +134,6 @@ async fn event_listener_loop(
                                 "DEBUG [EVENT]: id={} type={} data={}",
                                 event.id, event.event_type, event.data
                             ));
-                            log_bug(&format!("EVENT: id={} type={}", event.id, event.event_type));
 
                             // Check for missed events (gap in IDs)
                             if event.id != last_event_id + 1 && last_event_id > 0 {
@@ -206,10 +182,6 @@ async fn event_listener_loop(
                                                 "DEBUG [EVENT]: ItemStarted: {:?}",
                                                 invalidation
                                             ));
-                                            log_bug(&format!(
-                                                "EVENT: ItemStarted folder={} item={}",
-                                                folder_id, item_path
-                                            ));
                                             let _ = invalidation_tx.send(invalidation);
                                         }
                                     }
@@ -230,10 +202,6 @@ async fn event_listener_loop(
                                             log_debug(&format!(
                                                 "DEBUG [EVENT]: ItemFinished: {:?}",
                                                 finished_invalidation
-                                            ));
-                                            log_bug(&format!(
-                                                "EVENT: ItemFinished folder={} item={}",
-                                                folder_id, item_path
                                             ));
                                             let _ = invalidation_tx.send(finished_invalidation);
 
@@ -318,13 +286,11 @@ async fn event_listener_loop(
                         }
                     }
                     Err(_) => {
-                        log_bug("EVENT LISTENER: Failed to parse events JSON");
                         log_debug("DEBUG [EVENT LISTENER]: Failed to parse events JSON");
                     }
                 }
             }
             Err(e) => {
-                log_bug(&format!("EVENT LISTENER: Connection error: {}", e));
                 log_debug(&format!("DEBUG [EVENT LISTENER]: Connection error: {}", e));
                 // Wait before retrying
                 tokio::time::sleep(Duration::from_secs(5)).await;

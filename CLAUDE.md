@@ -63,7 +63,7 @@ This is not optional. This is not a suggestion. **This is how professional softw
 ### Other Instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
-- Use debug logs for general development and troubleshooting; use --bug logs sparingly for specific issues that need reproduction
+- Use debug logs for general development and troubleshooting
 - Make logging comprehensive but concise - debug logs should be informative without overwhelming
 - When adding new features or fixes, git commit once user has confirmed working and tests are written
 
@@ -263,7 +263,6 @@ YAML config file at platform-specific location (Linux: `~/.config/synctui/config
 
 CLI flags:
 - `--debug`: Enable debug logging to `/tmp/synctui-debug.log` (includes image loading performance metrics)
-- `--bug`: Enable targeted bug debugging to `/tmp/synctui-bug.log`
 - `--vim`: Enable vim keybindings (overrides config file setting)
 - `--config <path>`: Specify custom config file path
 

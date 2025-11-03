@@ -29,7 +29,8 @@
       "Bash(find:*)",
       "Bash({} ;)",
       "Bash(cat:*)",
-      "Bash(iconv:*)"
+      "Bash(iconv:*)",
+      "Bash(1)"
     ],
     "deny": [],
     "ask": []

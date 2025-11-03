@@ -280,7 +280,6 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         app.client
                             .set_ignore_patterns(&folder_id, updated_patterns)
                             .await?;
-                        crate::log_bug("pattern_selection: updated .stignore");
 
                         // Immediately show as Unknown to give user feedback
                         if app.model.navigation.focus_level > 0 && app.model.navigation.focus_level <= app.model.navigation.breadcrumb_trail.len() {
@@ -294,25 +293,15 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 level.ignored_exists.remove(&item_name);
 
                                 // Don't add optimistic update for unignore - final state is unpredictable
-                                crate::log_bug(&format!(
-                                    "pattern_selection: cleared {} state (un-ignoring), no optimistic update",
-                                    item_name
-                                ));
                             }
                         }
 
                         // Wait for Syncthing to process .stignore change before rescanning
-                        crate::log_bug("pattern_selection: waiting 200ms for Syncthing to process .stignore change");
                         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
                         // Trigger rescan - ItemStarted/ItemFinished events will update state
                         // Also fetch file info after delay as fallback (for files that don't need syncing)
-                        crate::log_bug(&format!(
-                            "pattern_selection: calling rescan for folder={}",
-                            folder_id
-                        ));
                         app.client.rescan_folder(&folder_id).await?;
-                        crate::log_bug("pattern_selection: rescan completed");
 
                         let folder_id_clone = folder_id.clone();
                         let api_tx = app.api_tx.clone();
@@ -338,13 +327,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         tokio::spawn(async move {
                             // Wait longer for ItemStarted event to potentially fire
                             // Syncthing needs time to discover file, calculate hashes, start transfer
-                            crate::log_bug("pattern_selection: waiting 3 seconds for ItemStarted event");
                             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-                            crate::log_bug(&format!(
-                                "pattern_selection: requesting file info for {}",
-                                file_path_for_api
-                            ));
                             // Fetch file info as fallback
                             let _ = api_tx.send(crate::services::api::ApiRequest::GetFileInfo {
                                 folder_id: folder_id_clone,

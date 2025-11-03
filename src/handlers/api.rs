@@ -392,45 +392,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Check if sequence changed
             if let Some(&last_seq) = app.model.performance.last_known_sequences.get(&folder_id) {
                 if last_seq != sequence {
-                    // Log HashMap size BEFORE any operations
-                    if !app.model.navigation.breadcrumb_trail.is_empty()
-                        && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
-                    {
-                        crate::log_bug(&format!(
-                            "seq_change: BEFORE operations - HashMap has {} states",
-                            app.model.navigation.breadcrumb_trail[0].file_sync_states.len()
-                        ));
-                    }
-
-                    crate::log_bug(&format!(
-                        "seq_change: {} {}->{}",
-                        folder_id, last_seq, sequence
-                    ));
+                    // Sequence changed - invalidate cache
                     let _ = app.cache.invalidate_folder(&folder_id);
-
-                    // Log HashMap size AFTER cache invalidation
-                    if !app.model.navigation.breadcrumb_trail.is_empty()
-                        && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
-                    {
-                        crate::log_bug(&format!(
-                            "seq_change: after cache.invalidate - HashMap has {} states",
-                            app.model.navigation.breadcrumb_trail[0].file_sync_states.len()
-                        ));
-                    }
 
                     // Clear discovered directories for this folder (so they get re-discovered with new sequence)
                     app.model.performance.discovered_dirs
                         .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
-
-                    // Log HashMap size after discovered_dirs.retain
-                    if !app.model.navigation.breadcrumb_trail.is_empty()
-                        && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
-                    {
-                        crate::log_bug(&format!(
-                            "seq_change: after discovered_dirs.retain - HashMap has {} states",
-                            app.model.navigation.breadcrumb_trail[0].file_sync_states.len()
-                        ));
-                    }
                 }
             }
 
