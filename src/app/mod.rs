@@ -14,3 +14,6 @@
 pub(crate) mod navigation;
 pub(crate) mod sync_states;
 pub(crate) mod ignore;
+pub(crate) mod sorting;
+pub(crate) mod file_ops;
+pub(crate) mod preview;
