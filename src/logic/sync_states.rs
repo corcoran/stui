@@ -133,6 +133,33 @@ pub fn aggregate_directory_state(
     }
 }
 
+/// Categorize a sync state for out-of-sync filtering
+///
+/// Maps sync states to category strings used in the cache breakdown.
+/// Returns None for states that don't represent out-of-sync conditions.
+///
+/// # Categories
+/// - `Syncing` → `"downloading"` (actively syncing)
+/// - `RemoteOnly` → `"remote_only"` (exists remotely but not locally)
+/// - `LocalOnly` → `"local_only"` (exists locally but not remotely)
+/// - `OutOfSync` → `"modified"` (modified/conflicting)
+/// - `Synced`, `Ignored`, `Unknown` → `None` (not out-of-sync)
+///
+/// # Arguments
+/// * `state` - The sync state to categorize
+///
+/// # Returns
+/// Some(category) if out-of-sync, None otherwise
+pub fn categorize_out_of_sync_state(state: SyncState) -> Option<&'static str> {
+    match state {
+        SyncState::Syncing => Some("downloading"),
+        SyncState::RemoteOnly => Some("remote_only"),
+        SyncState::LocalOnly => Some("local_only"),
+        SyncState::OutOfSync => Some("modified"),
+        SyncState::Synced | SyncState::Ignored | SyncState::Unknown => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +340,43 @@ mod aggregate_tests {
 
         let result = aggregate_directory_state(direct_state, &child_states);
         assert_eq!(result, SyncState::Ignored);
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_syncing() {
+        assert_eq!(categorize_out_of_sync_state(SyncState::Syncing), Some("downloading"));
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_remote_only() {
+        assert_eq!(categorize_out_of_sync_state(SyncState::RemoteOnly), Some("remote_only"));
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_local_only() {
+        assert_eq!(categorize_out_of_sync_state(SyncState::LocalOnly), Some("local_only"));
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_out_of_sync() {
+        assert_eq!(categorize_out_of_sync_state(SyncState::OutOfSync), Some("modified"));
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_synced() {
+        // Synced items should not be categorized
+        assert_eq!(categorize_out_of_sync_state(SyncState::Synced), None);
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_ignored() {
+        // Ignored items should not be categorized
+        assert_eq!(categorize_out_of_sync_state(SyncState::Ignored), None);
+    }
+
+    #[test]
+    fn test_categorize_out_of_sync_state_unknown() {
+        // Unknown items should not be categorized
+        assert_eq!(categorize_out_of_sync_state(SyncState::Unknown), None);
     }
 }
