@@ -94,7 +94,7 @@ impl App {
 
             // Restore selection to the same item
             if let Some(name) = selected_name {
-                let new_idx = level.items.iter().position(|item| item.name == name);
+                let new_idx = logic::navigation::find_item_index_by_name(&level.items, &name);
                 level.selected_index = new_idx.or(Some(0)); // Default to first item if not found
             } else if !level.items.is_empty() {
                 // No previous selection, select first item

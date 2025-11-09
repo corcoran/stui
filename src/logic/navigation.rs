@@ -81,6 +81,46 @@ pub fn prev_selection(current: Option<usize>, list_len: usize) -> Option<usize> 
     })
 }
 
+/// Find the index of an item in a list by its name
+///
+/// Searches for an item with the given name and returns its index.
+/// Used for preserving selection after sorting or filtering operations.
+///
+/// # Arguments
+/// * `items` - Slice of browse items to search
+/// * `name` - Name to search for (case-sensitive)
+///
+/// # Returns
+/// * `Some(index)` - Index of the item if found
+/// * `None` - If item not found or list is empty
+///
+/// # Examples
+/// ```
+/// use synctui::logic::navigation::find_item_index_by_name;
+/// use synctui::api::BrowseItem;
+///
+/// let items = vec![
+///     BrowseItem {
+///         name: "a.txt".to_string(),
+///         size: 0,
+///         mod_time: "2023-01-01T00:00:00Z".to_string(),
+///         item_type: "FILE_INFO_TYPE_FILE".to_string(),
+///     },
+///     BrowseItem {
+///         name: "b.txt".to_string(),
+///         size: 0,
+///         mod_time: "2023-01-01T00:00:00Z".to_string(),
+///         item_type: "FILE_INFO_TYPE_FILE".to_string(),
+///     },
+/// ];
+///
+/// assert_eq!(find_item_index_by_name(&items, "b.txt"), Some(1));
+/// assert_eq!(find_item_index_by_name(&items, "z.txt"), None);
+/// ```
+pub fn find_item_index_by_name(items: &[crate::api::BrowseItem], name: &str) -> Option<usize> {
+    items.iter().position(|item| item.name == name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +205,58 @@ mod tests {
         // Should handle out-of-bounds indices gracefully
         assert_eq!(next_selection(Some(10), 3), Some(0)); // Way past end wraps
         assert_eq!(prev_selection(Some(10), 3), Some(9)); // Way past end goes back one
+    }
+}
+
+#[cfg(test)]
+mod find_item_tests {
+    use super::*;
+    use crate::api::BrowseItem;
+
+    fn make_item(name: &str) -> BrowseItem {
+        BrowseItem {
+            name: name.to_string(),
+            size: 0,
+            mod_time: "2023-01-01T00:00:00Z".to_string(),
+            item_type: "FILE_INFO_TYPE_FILE".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_find_item_index_by_name_found() {
+        let items = vec![
+            make_item("a.txt"),
+            make_item("b.txt"),
+            make_item("c.txt"),
+        ];
+
+        assert_eq!(find_item_index_by_name(&items, "a.txt"), Some(0));
+        assert_eq!(find_item_index_by_name(&items, "b.txt"), Some(1));
+        assert_eq!(find_item_index_by_name(&items, "c.txt"), Some(2));
+    }
+
+    #[test]
+    fn test_find_item_index_by_name_not_found() {
+        let items = vec![make_item("a.txt"), make_item("b.txt")];
+
+        assert_eq!(find_item_index_by_name(&items, "z.txt"), None);
+        assert_eq!(find_item_index_by_name(&items, ""), None);
+    }
+
+    #[test]
+    fn test_find_item_index_by_name_empty_list() {
+        let items: Vec<BrowseItem> = vec![];
+
+        assert_eq!(find_item_index_by_name(&items, "any.txt"), None);
+    }
+
+    #[test]
+    fn test_find_item_index_by_name_case_sensitive() {
+        let items = vec![make_item("File.txt"), make_item("file.txt")];
+
+        // Should be case-sensitive
+        assert_eq!(find_item_index_by_name(&items, "File.txt"), Some(0));
+        assert_eq!(find_item_index_by_name(&items, "file.txt"), Some(1));
+        assert_eq!(find_item_index_by_name(&items, "FILE.TXT"), None);
     }
 }
