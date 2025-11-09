@@ -1124,17 +1124,15 @@ impl App {
             .unwrap_or(false);
 
         if filter_is_for_current_level {
+            // Clear out-of-sync filter
             self.model.ui.out_of_sync_filter = None;
-            // Reload current breadcrumb to show all items
-            let level_idx = self.model.navigation.focus_level - 1;
-            if let Some(level) = self.model.navigation.breadcrumb_trail.get(level_idx) {
-                let folder_id = level.folder_id.clone();
-                let prefix = level.prefix.clone();
-                let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
-                    folder_id,
-                    prefix,
-                    priority: services::api::Priority::High,
-                });
+
+            // Clear filtered items to show unfiltered view
+            if self.model.navigation.focus_level > 0 {
+                let level_idx = self.model.navigation.focus_level - 1;
+                if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+                    level.filtered_items = None;
+                }
             }
             return;
         }

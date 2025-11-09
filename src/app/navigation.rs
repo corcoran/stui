@@ -352,6 +352,14 @@ impl App {
 
         if should_clear_filter {
             self.model.ui.out_of_sync_filter = None;
+
+            // Clear filtered items for the level we're backing out from
+            if self.model.navigation.focus_level > 0 {
+                let clearing_level_idx = self.model.navigation.focus_level - 1;
+                if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(clearing_level_idx) {
+                    level.filtered_items = None;
+                }
+            }
         }
 
         if self.model.navigation.focus_level > 1 {
