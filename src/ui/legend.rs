@@ -43,6 +43,8 @@ fn build_hotkey_spans(
     // Folder-specific actions - only in folder view (focus_level == 0)
     if focus_level == 0 {
         hotkey_spans.extend(vec![
+            Span::styled("f", Style::default().fg(Color::Yellow)),
+            Span::raw(":Summary  "),
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Change Type  "),
             Span::styled("p", Style::default().fg(Color::Yellow)),
