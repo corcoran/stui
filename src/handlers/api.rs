@@ -746,9 +746,24 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         },
 
-        ApiResponse::LocalChanged { folder_id: _, file_paths: _ } => {
-            // TODO: Handler will be implemented in Phase 4, Task 6
-            // For now, just accept the response to satisfy the compiler
+        ApiResponse::LocalChanged { folder_id, file_paths } => {
+            // Cache the response
+            if let Err(e) = app.cache.cache_local_changed_files(&folder_id, &file_paths) {
+                crate::log_debug(&format!("Failed to cache local changed files for {}: {}", folder_id, e));
+            }
+
+            // If filter is active for this folder, re-apply it with updated data
+            if let Some(_filter_state) = &app.model.ui.out_of_sync_filter {
+                let current_folder_id = app.model.navigation.breadcrumb_trail
+                    .get(0)
+                    .map(|level| &level.folder_id);
+
+                if current_folder_id == Some(&folder_id) {
+                    // Re-sort and re-filter to pick up new local changed files
+                    app.sort_all_levels();
+                    app.apply_out_of_sync_filter();
+                }
+            }
         }
     }
 }
