@@ -12,6 +12,7 @@
 //! - performance: Batching and performance optimizations
 //! - platform: Cross-platform path helpers
 //! - search: Search query matching and filtering
+//! - sorting: Comparison functions for sorting browse items
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
@@ -26,5 +27,6 @@ pub mod path;
 pub mod performance;
 pub mod platform;
 pub mod search;
+pub mod sorting;
 pub mod sync_states;
 pub mod ui;

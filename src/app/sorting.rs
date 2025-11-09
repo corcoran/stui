@@ -5,7 +5,7 @@
 //! - Reversible sorting
 //! - Selection preservation across sorts
 
-use crate::{App, SortMode, SyncState, logic};
+use crate::{App, logic};
 
 impl App {
     /// Sort a specific breadcrumb level by its index
@@ -33,63 +33,13 @@ impl App {
 
             // Sort items
             level.items.sort_by(|a, b| {
-                use std::cmp::Ordering;
-
-                // Always prioritize directories first
-                let a_is_dir = a.item_type == "FILE_INFO_TYPE_DIRECTORY";
-                let b_is_dir = b.item_type == "FILE_INFO_TYPE_DIRECTORY";
-
-                if a_is_dir != b_is_dir {
-                    return if a_is_dir {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                }
-
-                let result = match sort_mode {
-                    SortMode::VisualIndicator => {
-                        // Sort by sync state priority
-                        let a_state = level
-                            .file_sync_states
-                            .get(&a.name)
-                            .copied()
-                            .unwrap_or(SyncState::Unknown);
-                        let b_state = level
-                            .file_sync_states
-                            .get(&b.name)
-                            .copied()
-                            .unwrap_or(SyncState::Unknown);
-
-                        let a_priority = logic::sync_states::sync_state_priority(a_state);
-                        let b_priority = logic::sync_states::sync_state_priority(b_state);
-
-                        a_priority
-                            .cmp(&b_priority)
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    }
-                    SortMode::Alphabetical => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    SortMode::LastModified => {
-                        // Reverse order for modified time (newest first)
-                        // Use mod_time from BrowseItem directly
-                        b.mod_time
-                            .cmp(&a.mod_time)
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    }
-                    SortMode::FileSize => {
-                        // Reverse order for size (largest first)
-                        // Use size from BrowseItem directly
-                        b.size
-                            .cmp(&a.size)
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    }
-                };
-
-                if reverse {
-                    result.reverse()
-                } else {
-                    result
-                }
+                logic::sorting::compare_browse_items(
+                    a,
+                    b,
+                    sort_mode,
+                    reverse,
+                    &level.file_sync_states,
+                )
             });
 
             // Restore selection to the same item
