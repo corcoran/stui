@@ -123,11 +123,11 @@ impl App {
                     folder_path: folder.path.clone(),
                     prefix: None,
                     items,
-                    filtered_items: None,
                     selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
                     ignored_exists,
+                    filtered_items: None,
                 }];
 
                 // Only change focus if not in preview mode
@@ -304,11 +304,11 @@ impl App {
                     folder_path,
                     prefix: Some(new_prefix),
                     items,
-                    filtered_items: None,
                     selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
                     ignored_exists,
+                    filtered_items: None,
                 });
 
                 self.model.navigation.focus_level += 1;
@@ -340,18 +340,6 @@ impl App {
             self.model.ui.search_query.clear();
             self.model.ui.search_origin_level = None;
             self.model.performance.discovered_dirs.clear();
-        }
-
-        // Only clear out-of-sync filter if backing out past the level where it was initiated
-        let should_clear_filter = if let Some(filter) = &self.model.ui.out_of_sync_filter {
-            // Clear filter if we're backing out of the origin level or below it
-            self.model.navigation.focus_level <= filter.origin_level
-        } else {
-            false
-        };
-
-        if should_clear_filter {
-            self.model.ui.out_of_sync_filter = None;
 
             // Clear filtered items for the level we're backing out from
             if self.model.navigation.focus_level > 0 {
@@ -363,8 +351,8 @@ impl App {
         }
 
         if self.model.navigation.focus_level > 1 {
-            // Backing out to a parent breadcrumb - refresh it if search or filter was cleared
-            if (should_clear_search || should_clear_filter) && self.model.navigation.focus_level >= 2 {
+            // Backing out to a parent breadcrumb - refresh it if search was cleared
+            if should_clear_search && self.model.navigation.focus_level >= 2 {
                 let parent_idx = self.model.navigation.focus_level - 2;
                 if let Some(parent_level) = self.model.navigation.breadcrumb_trail.get(parent_idx) {
                     let folder_id = parent_level.folder_id.clone();
@@ -381,8 +369,8 @@ impl App {
             self.model.navigation.breadcrumb_trail.pop();
             self.model.navigation.focus_level -= 1;
         } else if self.model.navigation.focus_level == 1 {
-            // Going back to folder view - refresh root directory if search or filter was cleared
-            if should_clear_search || should_clear_filter {
+            // Going back to folder view - refresh root directory if search was cleared
+            if should_clear_search {
                 if let Some(root_level) = self.model.navigation.breadcrumb_trail.first() {
                     let folder_id = root_level.folder_id.clone();
                     let prefix = root_level.prefix.clone();

@@ -192,14 +192,20 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Sort and restore selection using the saved name
                     app.sort_level_with_selection(idx, selected_name);
 
-                    // Re-apply search filter if active
-                    if !app.model.ui.search_query.is_empty() {
-                        app.apply_search_filter();
-                    }
+                    // Only re-apply filters if this is the CURRENT breadcrumb level
+                    // This prevents cascading filter re-applications during prefetch
+                    let is_current_level = idx == app.model.navigation.focus_level.saturating_sub(1);
 
-                    // Re-apply out-of-sync filter if active
-                    if app.model.ui.out_of_sync_filter.is_some() {
-                        app.apply_out_of_sync_filter();
+                    if is_current_level {
+                        // Re-apply search filter if active
+                        if !app.model.ui.search_query.is_empty() {
+                            app.apply_search_filter();
+                        }
+
+                        // Re-apply out-of-sync filter if active
+                        if app.model.ui.out_of_sync_filter.is_some() {
+                            app.apply_out_of_sync_filter();
+                        }
                     }
 
                     // Request FileInfo for ALL items (no filtering, let API service deduplicate)
