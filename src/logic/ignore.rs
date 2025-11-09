@@ -49,16 +49,16 @@ pub fn pattern_matches(pattern: &str, file_path: &str) -> bool {
             }
         }
     } else {
-        // Pattern without / - match anywhere
-        // Try matching the full path
+        // Pattern without / - match anywhere (path components or filename)
         if let Ok(pattern_obj) = glob::Pattern::new(pattern) {
+            // Try matching the full path
             if pattern_obj.matches(file_path.trim_start_matches('/')) {
                 return true;
             }
 
-            // Also try matching just the filename
-            if let Some(filename) = file_path.split('/').last() {
-                if pattern_obj.matches(filename) {
+            // Try matching each path component (directories and filename)
+            for component in file_path.split('/') {
+                if !component.is_empty() && pattern_obj.matches(component) {
                     return true;
                 }
             }
