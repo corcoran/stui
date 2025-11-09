@@ -992,6 +992,24 @@ impl App {
                     page: None,
                     perpage: Some(1000),
                 });
+
+                // Also queue GetLocalChanged for receive-only folders
+                let is_receive_only = self
+                    .model
+                    .syncthing
+                    .folders
+                    .iter()
+                    .find(|f| f.id == folder_id)
+                    .map(|f| f.folder_type == "receiveonly")
+                    .unwrap_or(false);
+
+                if is_receive_only {
+                    crate::log_debug("DEBUG [Filter]: Also queuing GetLocalChanged for receive-only folder");
+                    let _ = self.api_tx.send(services::api::ApiRequest::GetLocalChanged {
+                        folder_id: folder_id.clone(),
+                    });
+                }
+
                 // Keep existing filtered_items until fresh data arrives
                 return;
             } else {
@@ -1236,6 +1254,24 @@ impl App {
             .map(|items| !items.is_empty())
             .unwrap_or(false);
 
+        // Check if we have cached local changed data
+        let has_local_cached = self
+            .cache
+            .get_local_changed_items(&folder_id)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
+
+        // Determine if this is a receive-only folder
+        let is_receive_only = self
+            .model
+            .syncthing
+            .folders
+            .iter()
+            .find(|f| f.id == folder_id)
+            .map(|f| f.folder_type == "receiveonly")
+            .unwrap_or(false);
+
+        // Queue requests for missing data
         if !has_cached_data {
             // Queue GetNeededFiles request
             let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
@@ -1243,7 +1279,17 @@ impl App {
                 page: None,
                 perpage: Some(1000), // Get all items
             });
+        }
 
+        // Also check for local changes if folder is receive-only
+        if is_receive_only && !has_local_cached {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetLocalChanged {
+                folder_id: folder_id.clone(),
+            });
+        }
+
+        // If we're missing any required data, show loading toast and return
+        if !has_cached_data || (is_receive_only && !has_local_cached) {
             // Show loading toast and return - filter will activate when data arrives
             self.model
                 .ui
