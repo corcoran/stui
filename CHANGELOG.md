@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🎨 Code Quality & Architecture
 
+**Pure Logic Extraction (Test-Driven Development)**
+- Extracted 4 critical algorithms into testable pure functions using strict TDD methodology
+- Added 22 new tests covering edge cases and business rules (RED → GREEN → REFACTOR cycle)
+- `aggregate_directory_state`: Directory sync state calculation now fully testable with 5 tests
+- `find_item_index_by_name`: Selection preservation logic extracted with 4 tests
+- `compare_browse_items`: Sort comparison extracted from 60-line closure into reusable function (7 tests)
+- `should_cleanup_stale_pending` & `should_verify_pending`: Time-based cleanup rules now testable (6 tests)
+- **Impact**: Better test coverage (216 tests, up from 194), cleaner separation of concerns, algorithms can be understood and verified in isolation
+
 **Major Refactoring: Simplification Cascades (-733 lines)**
 - Cleaned up codebase by removing 733 lines of unused and duplicate code
 - Removed speculative architecture that was never integrated (Elm-style state system, message passing)
@@ -66,9 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **215 tests passing** (up from 193)
-- Added 6 tests for unified confirmation dialogs
+- **216 library tests + 221 binary tests + 16 integration tests = 453 total tests passing**
+- Added 22 new tests for pure logic functions (TDD methodology)
 - Added 10 comprehensive reconnection flow tests
+- Added 6 tests for unified confirmation dialogs
 - All refactoring covered by existing test suite
 - Zero compiler warnings
 
