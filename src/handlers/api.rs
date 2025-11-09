@@ -627,5 +627,13 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 ));
             }
         },
+
+        ApiResponse::NeededFiles { folder_id, response } => {
+            // Stub handler - will be implemented in Task 12
+            crate::log_debug(&format!(
+                "DEBUG [NeededFiles]: folder={} progress={} queued={} rest={}",
+                folder_id, response.progress.len(), response.queued.len(), response.rest.len()
+            ));
+        },
     }
 }

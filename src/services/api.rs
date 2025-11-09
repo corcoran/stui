@@ -7,7 +7,8 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 use crate::api::{
-    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, SyncthingClient, SystemStatus,
+    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, NeedResponse,
+    SyncthingClient, SystemStatus,
 };
 
 fn log_debug(msg: &str) {
@@ -50,6 +51,9 @@ pub(crate) enum RequestKey {
     SystemStatus,
     ConnectionStats,
     Devices,
+    NeededFiles {
+        folder_id: String,
+    },
 }
 
 /// API request types
@@ -83,6 +87,13 @@ pub enum ApiRequest {
 
     /// Get list of all devices
     GetDevices,
+
+    /// Get needed files (out-of-sync items)
+    GetNeededFiles {
+        folder_id: String,
+        page: Option<u32>,
+        perpage: Option<u32>,
+    },
 }
 
 impl ApiRequest {
@@ -126,6 +137,9 @@ impl ApiRequest {
             ApiRequest::GetSystemStatus => RequestKey::SystemStatus,
             ApiRequest::GetConnectionStats => RequestKey::ConnectionStats,
             ApiRequest::GetDevices => RequestKey::Devices,
+            ApiRequest::GetNeededFiles { folder_id, .. } => RequestKey::NeededFiles {
+                folder_id: folder_id.clone(),
+            },
         }
     }
 }
@@ -166,6 +180,11 @@ pub enum ApiResponse {
 
     DevicesResult {
         devices: Result<Vec<Device>, anyhow::Error>,
+    },
+
+    NeededFiles {
+        folder_id: String,
+        response: crate::api::NeedResponse,
     },
 }
 
@@ -358,6 +377,31 @@ impl ApiService {
                 let devices = client.get_devices().await;
 
                 ApiResponse::DevicesResult { devices }
+            }
+
+            ApiRequest::GetNeededFiles { folder_id, page, perpage } => {
+                match client.get_needed_files(&folder_id, page, perpage).await {
+                    Ok(response) => {
+                        ApiResponse::NeededFiles {
+                            folder_id: folder_id.clone(),
+                            response,
+                        }
+                    }
+                    Err(e) => {
+                        log_debug(&format!("Failed to get needed files for {}: {}", folder_id, e));
+                        // Return empty response on error
+                        ApiResponse::NeededFiles {
+                            folder_id,
+                            response: NeedResponse {
+                                progress: vec![],
+                                queued: vec![],
+                                rest: vec![],
+                                page: 0,
+                                perpage: 0,
+                            },
+                        }
+                    }
+                }
             }
         }
     }
