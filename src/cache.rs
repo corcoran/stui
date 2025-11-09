@@ -40,6 +40,7 @@ impl CacheDb {
 
         let mut cache = CacheDb { conn };
         cache.init_schema()?;
+        cache.ensure_out_of_sync_columns()?;
 
         Ok(cache)
     }
@@ -107,6 +108,31 @@ impl CacheDb {
             INSERT OR IGNORE INTO event_state (id, last_event_id) VALUES (1, 0);
             ",
         )?;
+
+        Ok(())
+    }
+
+    fn ensure_out_of_sync_columns(&self) -> Result<()> {
+        // Check if columns exist
+        let has_columns: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sync_states') WHERE name IN ('need_category', 'need_cached_at')",
+            [],
+            |row| {
+                let count: i32 = row.get(0)?;
+                Ok(count == 2)
+            },
+        )?;
+
+        if !has_columns {
+            self.conn.execute(
+                "ALTER TABLE sync_states ADD COLUMN need_category TEXT",
+                [],
+            )?;
+            self.conn.execute(
+                "ALTER TABLE sync_states ADD COLUMN need_cached_at INTEGER",
+                [],
+            )?;
+        }
 
         Ok(())
     }
