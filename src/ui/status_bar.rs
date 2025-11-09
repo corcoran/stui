@@ -1,5 +1,5 @@
 use crate::api::{Folder, FolderStatus, SyncState};
-use crate::ui::icons::FolderState;
+use crate::ui::icons::{FolderState, IconRenderer};
 use crate::utils;
 use ratatui::{
     layout::Rect,
@@ -44,6 +44,7 @@ fn map_folder_state(api_state: &str, receive_only_items: u64) -> (FolderState, &
 
 /// Build the status bar paragraph (reusable for both rendering and height calculation)
 pub fn build_status_paragraph(
+    icon_renderer: &IconRenderer,
     focus_level: usize,
     folders: &[Folder],
     folder_statuses: &HashMap<String, FolderStatus>,
@@ -58,6 +59,7 @@ pub fn build_status_paragraph(
     pending_operations_count: usize,
 ) -> Paragraph<'static> {
     let status_line = build_status_line(
+        icon_renderer,
         focus_level,
         folders,
         folder_statuses,
@@ -116,6 +118,7 @@ pub fn build_status_paragraph(
 
 /// Build the status line string (extracted for reuse)
 fn build_status_line(
+    icon_renderer: &IconRenderer,
     focus_level: usize,
     folders: &[Folder],
     folder_statuses: &HashMap<String, FolderStatus>,
@@ -279,6 +282,7 @@ fn build_status_line(
 pub fn render_status_bar(
     f: &mut Frame,
     area: Rect,
+    icon_renderer: &IconRenderer,
     focus_level: usize,
     folders: &[Folder],
     folder_statuses: &HashMap<String, FolderStatus>,
@@ -293,6 +297,7 @@ pub fn render_status_bar(
     pending_operations_count: usize,
 ) {
     let status_bar = build_status_paragraph(
+        icon_renderer,
         focus_level,
         folders,
         folder_statuses,
@@ -312,6 +317,7 @@ pub fn render_status_bar(
 /// Calculate required height for status bar based on terminal width and content
 pub fn calculate_status_height(
     terminal_width: u16,
+    icon_renderer: &IconRenderer,
     focus_level: usize,
     folders: &[Folder],
     folder_statuses: &HashMap<String, FolderStatus>,
@@ -327,6 +333,7 @@ pub fn calculate_status_height(
 ) -> u16 {
     // Build status line WITHOUT block borders for accurate line counting
     let status_line = build_status_line(
+        icon_renderer,
         focus_level,
         folders,
         folder_statuses,

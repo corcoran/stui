@@ -68,6 +68,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Calculate dynamic status bar height
     let status_height = status_bar::calculate_status_height(
         size.width,
+        &app.icon_renderer,
         app.model.navigation.focus_level,
         &app.model.syncthing.folders,
         &app.model.syncthing.folder_statuses,
@@ -234,6 +235,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     status_bar::render_status_bar(
         f,
         layout_info.status_area,
+        &app.icon_renderer,
         app.model.navigation.focus_level,
         &app.model.syncthing.folders,
         &app.model.syncthing.folder_statuses,
