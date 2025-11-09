@@ -41,7 +41,8 @@ pub struct BreadcrumbLevel {
     pub folder_label: String,
     pub folder_path: String, // Container path for this folder
     pub prefix: Option<String>,
-    pub items: Vec<BrowseItem>,
+    pub items: Vec<BrowseItem>,              // Source of truth (unfiltered)
+    pub filtered_items: Option<Vec<BrowseItem>>, // Filtered view (if filter active)
     pub selected_index: Option<usize>,
     pub file_sync_states: HashMap<String, SyncState>,
     pub ignored_exists: HashMap<String, bool>,
@@ -246,5 +247,49 @@ mod tests {
 
         assert_eq!(action1, action2);
         assert_ne!(action1, action3);
+    }
+
+    #[test]
+    fn test_breadcrumb_level_filtered_items() {
+        let mut level = BreadcrumbLevel {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+            folder_path: "/test".to_string(),
+            prefix: None,
+            items: vec![
+                BrowseItem {
+                    name: "file1.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 1024,
+                },
+                BrowseItem {
+                    name: "file2.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 2048,
+                },
+            ],
+            selected_index: None,
+            file_sync_states: HashMap::new(),
+            ignored_exists: HashMap::new(),
+            translated_base_path: "/test".to_string(),
+            filtered_items: None,
+        };
+
+        // Unfiltered - should show all items
+        assert_eq!(level.items.len(), 2);
+        assert_eq!(level.filtered_items, None);
+
+        // Apply filter - keep only one item
+        level.filtered_items = Some(vec![level.items[0].clone()]);
+
+        // Original items unchanged
+        assert_eq!(level.items.len(), 2);
+        assert_eq!(level.filtered_items.as_ref().unwrap().len(), 1);
+
+        // Clear filter
+        level.filtered_items = None;
+        assert_eq!(level.filtered_items, None);
     }
 }

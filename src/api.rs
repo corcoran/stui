@@ -27,7 +27,7 @@ struct ConfigResponse {
     devices: Vec<Device>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct BrowseItem {
     pub name: String,
     #[serde(rename = "type")]

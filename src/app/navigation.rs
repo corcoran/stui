@@ -123,6 +123,7 @@ impl App {
                     folder_path: folder.path.clone(),
                     prefix: None,
                     items,
+                    filtered_items: None,
                     selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
@@ -303,6 +304,7 @@ impl App {
                     folder_path,
                     prefix: Some(new_prefix),
                     items,
+                    filtered_items: None,
                     selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
