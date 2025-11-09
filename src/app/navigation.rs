@@ -380,6 +380,16 @@ impl App {
                 }
             }
 
+            // Clear out-of-sync filter when backing out to folder list
+            if self.model.ui.out_of_sync_filter.is_some() {
+                self.model.ui.out_of_sync_filter = None;
+
+                // Clear filtered items for ALL levels
+                for level in &mut self.model.navigation.breadcrumb_trail {
+                    level.filtered_items = None;
+                }
+            }
+
             self.model.navigation.focus_level = 0;
         }
     }

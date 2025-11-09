@@ -1200,12 +1200,9 @@ impl App {
             // Clear out-of-sync filter
             self.model.ui.out_of_sync_filter = None;
 
-            // Clear filtered items to show unfiltered view
-            if self.model.navigation.focus_level > 0 {
-                let level_idx = self.model.navigation.focus_level - 1;
-                if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                    level.filtered_items = None;
-                }
+            // Clear filtered items for ALL levels in the breadcrumb trail
+            for level in &mut self.model.navigation.breadcrumb_trail {
+                level.filtered_items = None;
             }
             return;
         }
