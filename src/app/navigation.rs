@@ -157,7 +157,7 @@ impl App {
 
         let current_level = &self.model.navigation.breadcrumb_trail[level_idx];
         if let Some(selected_idx) = current_level.selected_index {
-            if let Some(item) = current_level.items.get(selected_idx) {
+            if let Some(item) = current_level.display_items().get(selected_idx) {
                 // Only enter if it's a directory
                 if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
                     return Ok(());
@@ -341,12 +341,9 @@ impl App {
             self.model.ui.search_origin_level = None;
             self.model.performance.discovered_dirs.clear();
 
-            // Clear filtered items for the level we're backing out from
-            if self.model.navigation.focus_level > 0 {
-                let clearing_level_idx = self.model.navigation.focus_level - 1;
-                if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(clearing_level_idx) {
-                    level.filtered_items = None;
-                }
+            // Clear filtered items for ALL levels in the breadcrumb trail
+            for level in &mut self.model.navigation.breadcrumb_trail {
+                level.filtered_items = None;
             }
         }
 
@@ -402,7 +399,7 @@ impl App {
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
                 level.selected_index = logic::navigation::next_selection(
                     level.selected_index,
-                    level.items.len(),
+                    level.display_items().len(),
                 );
             }
         }
@@ -423,7 +420,7 @@ impl App {
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
                 level.selected_index = logic::navigation::prev_selection(
                     level.selected_index,
-                    level.items.len(),
+                    level.display_items().len(),
                 );
             }
         }
@@ -439,7 +436,7 @@ impl App {
         } else {
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if !level.items.is_empty() {
+                if !level.display_items().is_empty() {
                     level.selected_index = Some(0);
                 }
             }
@@ -456,8 +453,8 @@ impl App {
         } else {
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if !level.items.is_empty() {
-                    level.selected_index = Some(level.items.len() - 1);
+                if !level.display_items().is_empty() {
+                    level.selected_index = Some(level.display_items().len() - 1);
                 }
             }
         }
@@ -478,11 +475,11 @@ impl App {
         } else {
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if level.items.is_empty() {
+                if level.display_items().is_empty() {
                     return;
                 }
                 let i = match level.selected_index {
-                    Some(i) => (i + page_size).min(level.items.len() - 1),
+                    Some(i) => (i + page_size).min(level.display_items().len() - 1),
                     None => 0,
                 };
                 level.selected_index = Some(i);
@@ -505,7 +502,7 @@ impl App {
         } else {
             let level_idx = self.model.navigation.focus_level - 1;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                if level.items.is_empty() {
+                if level.display_items().is_empty() {
                     return;
                 }
                 let i = match level.selected_index {

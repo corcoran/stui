@@ -2,6 +2,17 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 
+fn log_debug(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/synctui-debug.log")
+    {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Folder {
     pub id: String,
@@ -280,6 +291,11 @@ impl SyncthingClient {
             url.push_str(&format!("&prefix={}", prefix));
         }
 
+        log_debug(&format!(
+            "DEBUG [browse_folder API]: Requesting folder={} prefix={:?}",
+            folder_id, prefix
+        ));
+
         let response = self
             .client
             .get(&url)
@@ -307,6 +323,11 @@ impl SyncthingClient {
 
         let items: Vec<BrowseItem> =
             serde_json::from_str(&text).context("Failed to parse browse response")?;
+
+        log_debug(&format!(
+            "DEBUG [browse_folder API]: Received {} items for folder={} prefix={:?}",
+            items.len(), folder_id, prefix
+        ));
 
         Ok(items)
     }

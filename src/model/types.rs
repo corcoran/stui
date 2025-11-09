@@ -50,9 +50,14 @@ pub struct BreadcrumbLevel {
 }
 
 impl BreadcrumbLevel {
-    /// Get currently selected item
+    /// Get the active display list (filtered if filter is active, otherwise all items)
+    pub fn display_items(&self) -> &Vec<BrowseItem> {
+        self.filtered_items.as_ref().unwrap_or(&self.items)
+    }
+
+    /// Get currently selected item (respects filtered items if active)
     pub fn selected_item(&self) -> Option<&BrowseItem> {
-        self.selected_index.and_then(|idx| self.items.get(idx))
+        self.selected_index.and_then(|idx| self.display_items().get(idx))
     }
 
     /// Get sync state for a file/directory
@@ -291,5 +296,46 @@ mod tests {
         // Clear filter
         level.filtered_items = None;
         assert_eq!(level.filtered_items, None);
+    }
+
+    #[test]
+    fn test_selected_item_respects_filtered_items() {
+        // Reproduces bug: dir1 (index 0), dir2 (index 1) in unfiltered list
+        // Filter shows only dir2, making it visually at index 0
+        // User selects index 0 expecting dir2, but gets dir1 instead
+        let dir1 = BrowseItem {
+            name: "dir1".to_string(),
+            item_type: "FILE_INFO_TYPE_DIRECTORY".to_string(),
+            mod_time: "2025-01-09T10:00:00Z".to_string(),
+            size: 0,
+        };
+        let dir2 = BrowseItem {
+            name: "dir2".to_string(),
+            item_type: "FILE_INFO_TYPE_DIRECTORY".to_string(),
+            mod_time: "2025-01-09T10:00:00Z".to_string(),
+            size: 0,
+        };
+
+        let level = BreadcrumbLevel {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+            folder_path: "/test".to_string(),
+            prefix: None,
+            items: vec![dir1.clone(), dir2.clone()], // Unfiltered: [dir1, dir2]
+            filtered_items: Some(vec![dir2.clone()]), // Filtered: [dir2] only
+            selected_index: Some(0), // Select index 0 (should be dir2 from filtered list)
+            file_sync_states: HashMap::new(),
+            ignored_exists: HashMap::new(),
+            translated_base_path: "/test".to_string(),
+        };
+
+        // BUG: selected_item() returns items[0] = dir1 instead of filtered_items[0] = dir2
+        let selected = level.selected_item();
+        assert!(selected.is_some(), "Should have a selected item");
+        assert_eq!(
+            selected.unwrap().name,
+            "dir2",
+            "Should select dir2 from filtered list, not dir1 from unfiltered list"
+        );
     }
 }

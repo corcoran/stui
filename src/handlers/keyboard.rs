@@ -829,7 +829,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     // Check if selected item is a file - if so, show preview instead of navigating
                     if let Some(level) = app.model.navigation.breadcrumb_trail.get(app.model.navigation.focus_level - 1) {
                         if let Some(selected_idx) = level.selected_index {
-                            if let Some(item) = level.items.get(selected_idx) {
+                            if let Some(item) = level.display_items().get(selected_idx) {
                                 if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
                                     // File - show preview (same logic as '?' key)
                                     let file_path = if let Some(prefix) = &level.prefix {

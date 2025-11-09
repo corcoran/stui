@@ -124,8 +124,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
             }
 
-            crate::log_debug(&format!("DEBUG [BrowseResult]: folder={} prefix={:?} focus_level={} breadcrumb_count={}",
-                               folder_id, prefix, app.model.navigation.focus_level, app.model.navigation.breadcrumb_trail.len()));
+            crate::log_debug(&format!(
+                "DEBUG [BrowseResult]: folder={} prefix={:?} items_count={} focus_level={} breadcrumb_count={}",
+                folder_id, prefix, items.len(), app.model.navigation.focus_level, app.model.navigation.breadcrumb_trail.len()
+            ));
 
             // Save merged items to cache
             if let Err(e) = app.cache.save_browse_items(
@@ -168,7 +170,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Save currently selected item name BEFORE replacing items
                     let selected_name = level
                         .selected_index
-                        
+
                         .and_then(|sel_idx| level.items.get(sel_idx))
                         .map(|item| item.name.clone());
 
@@ -179,6 +181,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     for local_item_name in &local_item_names {
                         sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
                     }
+
+                    crate::log_debug(&format!(
+                        "DEBUG [BrowseResult]: Updating level {} with {} items (was {})",
+                        idx, items.len(), level.items.len()
+                    ));
 
                     // Update level
                     level.items = items.clone();  // Update unfiltered source
@@ -406,6 +413,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Check if sequence changed
             if let Some(&last_seq) = app.model.performance.last_known_sequences.get(&folder_id) {
                 if last_seq != sequence {
+                    crate::log_debug(&format!(
+                        "DEBUG [FolderStatusResult]: Sequence changed from {} to {} for folder={}",
+                        last_seq, sequence, folder_id
+                    ));
+
                     // Sequence changed - invalidate cache
                     let _ = app.cache.invalidate_folder(&folder_id);
 
@@ -415,6 +427,48 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Clear discovered directories for this folder (so they get re-discovered with new sequence)
                     app.model.performance.discovered_dirs
                         .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
+
+                    // Trigger refresh for currently viewed directory
+                    // This ensures new files appear immediately after rescan
+                    if !app.model.navigation.breadcrumb_trail.is_empty()
+                        && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
+                    {
+                        crate::log_debug(&format!(
+                            "DEBUG [FolderStatusResult]: Refreshing {} breadcrumb levels for folder={}",
+                            app.model.navigation.breadcrumb_trail.len(),
+                            folder_id
+                        ));
+
+                        for (idx, level) in app.model.navigation.breadcrumb_trail.iter().enumerate() {
+                            if level.folder_id == folder_id {
+                                let browse_key = format!(
+                                    "{}:{}",
+                                    folder_id,
+                                    level.prefix.as_deref().unwrap_or("")
+                                );
+
+                                crate::log_debug(&format!(
+                                    "DEBUG [FolderStatusResult]: Level {}: prefix={:?} loading_browse.contains={}",
+                                    idx, level.prefix, app.model.performance.loading_browse.contains(&browse_key)
+                                ));
+
+                                if !app.model.performance.loading_browse.contains(&browse_key) {
+                                    app.model.performance.loading_browse.insert(browse_key);
+
+                                    let _ = app.api_tx.send(ApiRequest::BrowseFolder {
+                                        folder_id: folder_id.clone(),
+                                        prefix: level.prefix.clone(),
+                                        priority: Priority::High,
+                                    });
+
+                                    crate::log_debug(&format!(
+                                        "DEBUG [FolderStatusResult]: Sent BrowseFolder request for prefix={:?}",
+                                        level.prefix
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

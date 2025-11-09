@@ -154,8 +154,16 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                             })
                         };
 
-                        if level_prefix == normalized_dir {
-                            // This level is showing the changed directory - trigger refresh
+                        // If dir_path is empty (entire folder changed), refresh ALL levels
+                        // Otherwise only refresh the specific directory that changed
+                        let should_refresh = if dir_path.is_empty() {
+                            true // Refresh all levels when entire folder changed
+                        } else {
+                            level_prefix == normalized_dir
+                        };
+
+                        if should_refresh {
+                            // This level needs refresh - trigger browse request
                             let browse_key =
                                 format!("{}:{}", folder_id, level_prefix.unwrap_or(""));
                             if !app.model.performance.loading_browse.contains(&browse_key) {
@@ -168,7 +176,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                                         priority: Priority::High,
                                     });
 
-                                crate::log_debug(&format!("DEBUG [Event]: Triggered refresh for currently viewed directory: {:?}", level_prefix));
+                                crate::log_debug(&format!("DEBUG [Event]: Triggered refresh for directory: {:?} (dir_path={:?})", level_prefix, dir_path));
                             }
                         }
                     }
