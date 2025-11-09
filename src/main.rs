@@ -982,75 +982,94 @@ impl App {
             // Get out-of-sync items from cache
             let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
                 Ok(items) => items,
-                Err(_) => {
-                    // If cache query fails, show nothing
-                    level.items = vec![];
-                    level.selected_index = None;
+                Err(e) => {
+                    // Cache query failed - keep showing unfiltered items
+                    crate::log_debug(&format!(
+                        "DEBUG [Filter]: Cache query failed, keeping unfiltered view: {}",
+                        e
+                    ));
+                    level.filtered_items = None;
                     return;
                 }
             };
 
-            // If no out-of-sync items, show nothing
+            // If no out-of-sync items, clear filter (show all items)
             if out_of_sync_items.is_empty() {
-                level.items = vec![];
-                level.selected_index = None;
+                crate::log_debug("DEBUG [Filter]: No out-of-sync items, clearing filter");
+                level.filtered_items = None;
                 return;
             }
 
-            // Get current directory items from cache (unfiltered)
+            // Get current directory items from cache (unfiltered source)
             let current_items = match self
                 .cache
                 .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
             {
                 Ok(Some(items)) => items,
                 _ => {
-                    // If we can't get current items, nothing to filter
-                    return;
+                    // Can't get current items - use level.items as fallback
+                    crate::log_debug("DEBUG [Filter]: Using level.items as source");
+                    level.items.clone()
                 }
             };
 
             // Build current path for comparison
-            let current_path = prefix.as_deref().unwrap_or("");
+            let current_path = if let Some(ref pfx) = prefix {
+                pfx.clone()
+            } else {
+                String::new()
+            };
 
-            // Filter current level items: show items that are out-of-sync OR have out-of-sync descendants
-            let filtered_items: Vec<api::BrowseItem> = current_items
-                .into_iter()
-                .filter(|item| {
-                    let item_path = if current_path.is_empty() {
-                        item.name.clone()
+            // Filter items: keep only those in out_of_sync_items map
+            let mut filtered: Vec<api::BrowseItem> = Vec::new();
+
+            for item in &current_items {
+                let full_path = if current_path.is_empty() {
+                    item.name.clone()
+                } else {
+                    format!("{}{}", current_path, item.name)
+                };
+
+                // Check if this item (or any child if directory) is out of sync
+                let is_out_of_sync = if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                    // For directories: check if any child path starts with this directory
+                    let dir_prefix = if full_path.ends_with('/') {
+                        full_path.clone()
                     } else {
-                        format!("{}{}", current_path, item.name)
+                        format!("{}/", full_path)
                     };
 
-                    // Check if item itself is out-of-sync
-                    if out_of_sync_items.contains_key(&item_path) {
-                        return true;
-                    }
+                    out_of_sync_items
+                        .keys()
+                        .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
+                } else {
+                    // For files: direct match
+                    out_of_sync_items.contains_key(&full_path)
+                };
 
-                    // For directories, check if any descendant is out-of-sync
-                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                        let descendant_prefix = format!("{}/", item_path);
+                if is_out_of_sync {
+                    filtered.push(item.clone());
+                }
+            }
 
-                        // Check if ANY file/folder inside this directory tree is out-of-sync
-                        let has_out_of_sync_descendant = out_of_sync_items
-                            .keys()
-                            .any(|path| path.starts_with(&descendant_prefix));
-
-                        has_out_of_sync_descendant
-                    } else {
-                        false
-                    }
-                })
-                .collect();
-
-            // Update items with filtered list
-            level.items = filtered_items;
-
-            // Reset selection to first item (if any matches)
-            level.selected_index = if level.items.is_empty() {
-                None
+            // Store filtered items without destroying original
+            if filtered.is_empty() {
+                crate::log_debug("DEBUG [Filter]: No matches, clearing filter");
+                level.filtered_items = None;
             } else {
+                crate::log_debug(&format!(
+                    "DEBUG [Filter]: Filtered {} → {} items",
+                    current_items.len(),
+                    filtered.len()
+                ));
+                level.filtered_items = Some(filtered);
+            }
+
+            // Reset selection to first item in filtered view
+            level.selected_index = if level.filtered_items.is_some() {
                 Some(0)
+            } else {
+                level.selected_index
             };
         }
     }
