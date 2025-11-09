@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, Clear, List, ListItem},
     Frame,
 };
 
@@ -97,5 +97,8 @@ pub fn render_out_of_sync_summary(
         )
         .highlight_style(Style::default().bg(Color::DarkGray));
 
+    // Clear background behind modal first
+    f.render_widget(Clear, modal_area);
+    // Then render the modal
     f.render_widget(list, modal_area);
 }
