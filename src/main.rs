@@ -958,77 +958,64 @@ impl App {
     /// Apply out-of-sync filter to current breadcrumb level
     fn apply_out_of_sync_filter(&mut self) {
         // Don't filter folder list (only breadcrumbs)
-        if self.model.navigation.focus_level == 0 {
+        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
             return;
         }
 
-        let level_idx = self.model.navigation.focus_level - 1;
-        if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-            let folder_id = level.folder_id.clone();
-            let prefix = level.prefix.clone();
+        // Get folder_id from first breadcrumb level (all levels are in same folder)
+        let folder_id = self.model.navigation.breadcrumb_trail[0].folder_id.clone();
 
-            // Get folder sequence for cache validation
-            let folder_sequence = self
-                .model
-                .syncthing
-                .folder_statuses
-                .get(&folder_id)
-                .map(|status| status.sequence)
-                .unwrap_or(0);
-
-            // Get out-of-sync items from cache
-            let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
-                Ok(items) => items,
-                Err(e) => {
-                    // Cache query failed - keep showing unfiltered items
-                    crate::log_debug(&format!(
-                        "DEBUG [Filter]: Cache query failed, keeping unfiltered view: {}",
-                        e
-                    ));
+        // Get out-of-sync items from cache (once for entire folder)
+        let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
+            Ok(items) => items,
+            Err(e) => {
+                // Cache query failed - clear all filters
+                crate::log_debug(&format!(
+                    "DEBUG [Filter]: Cache query failed, clearing all filters: {}",
+                    e
+                ));
+                for level in &mut self.model.navigation.breadcrumb_trail {
                     level.filtered_items = None;
-                    return;
                 }
-            };
-
-            // If no out-of-sync items in cache, handle based on current filter state
-            if out_of_sync_items.is_empty() {
-                if level.filtered_items.is_some() {
-                    // Filter already active but cache is empty (likely just invalidated)
-                    // Queue fresh NeededFiles request to refresh cache, then filter will update
-                    crate::log_debug("DEBUG [Filter]: Cache empty but filter active, queuing NeededFiles refresh");
-                    let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
-                        folder_id: folder_id.clone(),
-                        page: None,
-                        perpage: Some(1000),
-                    });
-                    // Keep existing filtered_items until fresh data arrives
-                    return;
-                } else {
-                    // No filter active and no out-of-sync items - don't activate filter
-                    crate::log_debug("DEBUG [Filter]: No out-of-sync items, not activating filter");
-                    return;
-                }
+                return;
             }
+        };
 
-            // Get current directory items from cache (unfiltered source)
-            let current_items = match self
-                .cache
-                .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
-            {
-                Ok(Some(items)) => items,
-                _ => {
-                    // Can't get current items - use level.items as fallback
-                    crate::log_debug("DEBUG [Filter]: Using level.items as source");
-                    level.items.clone()
-                }
+        // If no out-of-sync items in cache, handle based on current filter state
+        if out_of_sync_items.is_empty() {
+            let any_filtered = self.model.navigation.breadcrumb_trail.iter().any(|l| l.filtered_items.is_some());
+
+            if any_filtered {
+                // Filter already active but cache is empty (likely just invalidated)
+                // Queue fresh NeededFiles request to refresh cache
+                crate::log_debug("DEBUG [Filter]: Cache empty but filter active, queuing NeededFiles refresh");
+                let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+                    folder_id: folder_id.clone(),
+                    page: None,
+                    perpage: Some(1000),
+                });
+                // Keep existing filtered_items until fresh data arrives
+                return;
+            } else {
+                // No filter active and no out-of-sync items - don't activate filter
+                crate::log_debug("DEBUG [Filter]: No out-of-sync items, not activating filter");
+                return;
+            }
+        }
+
+        // Apply filter to ALL breadcrumb levels
+        let num_levels = self.model.navigation.breadcrumb_trail.len();
+        for level_idx in 0..num_levels {
+            // Extract data from level (to avoid borrowing issues)
+            let (prefix, current_items) = {
+                let level = &self.model.navigation.breadcrumb_trail[level_idx];
+
+                // Use level.items as source (already sorted correctly)
+                (level.prefix.clone(), level.items.clone())
             };
 
             // Build current path for comparison
-            let current_path = if let Some(ref pfx) = prefix {
-                pfx.clone()
-            } else {
-                String::new()
-            };
+            let current_path = prefix.clone().unwrap_or_default();
 
             // Filter items: keep only those in out_of_sync_items map
             let mut filtered: Vec<api::BrowseItem> = Vec::new();
@@ -1062,25 +1049,29 @@ impl App {
                 }
             }
 
-            // Store filtered items without destroying original
+            // Update level with filtered items
+            let level = &mut self.model.navigation.breadcrumb_trail[level_idx];
+
             if filtered.is_empty() {
-                crate::log_debug("DEBUG [Filter]: No matches, clearing filter");
                 level.filtered_items = None;
             } else {
                 crate::log_debug(&format!(
-                    "DEBUG [Filter]: Filtered {} → {} items",
+                    "DEBUG [Filter]: Level {} filtered {} → {} items",
+                    level_idx,
                     current_items.len(),
                     filtered.len()
                 ));
                 level.filtered_items = Some(filtered);
             }
 
-            // Reset selection to first item in filtered view
-            level.selected_index = if level.filtered_items.is_some() {
-                Some(0)
-            } else {
-                level.selected_index
-            };
+            // Reset selection to first item in filtered view (only for current level)
+            if level_idx == self.model.navigation.focus_level - 1 {
+                level.selected_index = if level.filtered_items.is_some() {
+                    Some(0)
+                } else {
+                    level.selected_index
+                };
+            }
         }
     }
 
@@ -1187,22 +1178,25 @@ impl App {
             return;
         }
 
-        // If filter is already active for the CURRENT level, clear it
-        let filter_is_for_current_level = self
-            .model
-            .ui
-            .out_of_sync_filter
-            .as_ref()
-            .map(|filter| filter.origin_level == self.model.navigation.focus_level)
-            .unwrap_or(false);
-
-        if filter_is_for_current_level {
+        // If filter is already active, clear it (regardless of what level we're on)
+        if self.model.ui.out_of_sync_filter.is_some() {
             // Clear out-of-sync filter
             self.model.ui.out_of_sync_filter = None;
 
-            // Clear filtered items for ALL levels in the breadcrumb trail
+            // Clear filtered items for ALL levels, preserving selection by name
             for level in &mut self.model.navigation.breadcrumb_trail {
+                // Get currently selected item name from filtered view
+                let selected_name = level.selected_index
+                    .and_then(|idx| level.display_items().get(idx))
+                    .map(|item| item.name.clone());
+
+                // Clear filter
                 level.filtered_items = None;
+
+                // Restore selection to same item name in unfiltered view
+                if let Some(name) = selected_name {
+                    level.selected_index = logic::navigation::find_item_index_by_name(&level.items, &name);
+                }
             }
             return;
         }
@@ -1262,7 +1256,10 @@ impl App {
             last_refresh: std::time::SystemTime::now(),
         });
 
-        // Apply filter to current level
+        // Apply current sort mode first
+        self.sort_all_levels();
+
+        // Then apply filter (filtered_items will reflect sorted order)
         self.apply_out_of_sync_filter();
     }
 }

@@ -81,6 +81,11 @@ impl App {
             self.model.ui.sort_mode = new_mode;
             self.model.ui.sort_reverse = false; // Reset reverse when changing mode
             self.sort_all_levels(); // Apply to all levels
+
+            // Re-apply filter if active (filter must reflect new sort order)
+            if self.model.ui.out_of_sync_filter.is_some() {
+                self.apply_out_of_sync_filter();
+            }
         }
     }
 
@@ -91,6 +96,11 @@ impl App {
         ) {
             self.model.ui.sort_reverse = new_reverse;
             self.sort_all_levels(); // Apply to all levels
+
+            // Re-apply filter if active (filter must reflect new sort order)
+            if self.model.ui.out_of_sync_filter.is_some() {
+                self.apply_out_of_sync_filter();
+            }
         }
     }
 }
