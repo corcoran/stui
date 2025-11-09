@@ -656,22 +656,28 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
             }
 
-            // If in breadcrumb view for this folder, activate filter now that data is ready
+            // If in breadcrumb view for this folder, apply/reapply filter now that data is ready
             if app.model.navigation.focus_level > 0 {
                 let level_idx = app.model.navigation.focus_level - 1;
                 if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                    if level.folder_id == folder_id && app.model.ui.out_of_sync_filter.is_none() {
-                        // Activate filter
-                        app.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
-                            origin_level: app.model.navigation.focus_level,
-                            last_refresh: std::time::SystemTime::now(),
-                        });
+                    if level.folder_id == folder_id {
+                        if app.model.ui.out_of_sync_filter.is_none() {
+                            // First time: activate filter
+                            app.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
+                                origin_level: app.model.navigation.focus_level,
+                                last_refresh: std::time::SystemTime::now(),
+                            });
 
-                        // Apply filter
-                        app.apply_out_of_sync_filter();
+                            // Apply filter
+                            app.apply_out_of_sync_filter();
 
-                        // Clear loading toast
-                        app.model.ui.toast_message = None;
+                            // Clear loading toast
+                            app.model.ui.toast_message = None;
+                        } else {
+                            // Filter already active: re-apply with fresh cache data
+                            // This handles the case where cache was invalidated and just refreshed
+                            app.apply_out_of_sync_filter();
+                        }
                     }
                 }
             }
