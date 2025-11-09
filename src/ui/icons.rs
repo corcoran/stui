@@ -23,6 +23,7 @@ pub enum FolderState {
     Scanning,
     Unknown,
     Error,
+    LocalOnly,
 }
 
 /// Icon theme using terminal colors (respects user's terminal theme)
@@ -108,6 +109,7 @@ impl IconRenderer {
             FolderState::Scanning => self.status_icon(StatusType::Scanning),
             FolderState::Unknown => self.status_icon(StatusType::Unknown),
             FolderState::Error => self.status_icon(StatusType::Error),
+            FolderState::LocalOnly => self.status_icon(StatusType::LocalOnly),
         };
 
         spans.push(status_span);
