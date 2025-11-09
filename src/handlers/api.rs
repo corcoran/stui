@@ -629,11 +629,24 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         },
 
         ApiResponse::NeededFiles { folder_id, response } => {
-            // Stub handler - will be implemented in Task 12
-            crate::log_debug(&format!(
-                "DEBUG [NeededFiles]: folder={} progress={} queued={} rest={}",
-                folder_id, response.progress.len(), response.queued.len(), response.rest.len()
-            ));
+            // Cache the response
+            if let Err(e) = app.cache.cache_needed_files(&folder_id, &response) {
+                crate::log_debug(&format!("Failed to cache needed files for {}: {}", folder_id, e));
+            }
+
+            // Get breakdown from cache
+            match app.cache.get_folder_sync_breakdown(&folder_id) {
+                Ok(breakdown) => {
+                    // Update summary state if open
+                    if let Some(summary) = &mut app.model.ui.out_of_sync_summary {
+                        summary.breakdowns.insert(folder_id.clone(), breakdown);
+                        summary.loading.remove(&folder_id);
+                    }
+                }
+                Err(e) => {
+                    crate::log_debug(&format!("Failed to get breakdown for {}: {}", folder_id, e));
+                }
+            }
         },
     }
 }
