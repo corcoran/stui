@@ -745,5 +745,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
             }
         },
+
+        ApiResponse::LocalChanged { folder_id: _, file_paths: _ } => {
+            // TODO: Handler will be implemented in Phase 4, Task 6
+            // For now, just accept the response to satisfy the compiler
+        }
     }
 }

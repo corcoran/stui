@@ -54,6 +54,9 @@ pub(crate) enum RequestKey {
     NeededFiles {
         folder_id: String,
     },
+    LocalChanged {
+        folder_id: String,
+    },
 }
 
 /// API request types
@@ -93,6 +96,11 @@ pub enum ApiRequest {
         folder_id: String,
         page: Option<u32>,
         perpage: Option<u32>,
+    },
+
+    /// Get local changed files (receive-only folders)
+    GetLocalChanged {
+        folder_id: String,
     },
 }
 
@@ -140,6 +148,9 @@ impl ApiRequest {
             ApiRequest::GetNeededFiles { folder_id, .. } => RequestKey::NeededFiles {
                 folder_id: folder_id.clone(),
             },
+            ApiRequest::GetLocalChanged { folder_id } => RequestKey::LocalChanged {
+                folder_id: folder_id.clone(),
+            },
         }
     }
 }
@@ -185,6 +196,11 @@ pub enum ApiResponse {
     NeededFiles {
         folder_id: String,
         response: crate::api::NeedResponse,
+    },
+
+    LocalChanged {
+        folder_id: String,
+        file_paths: Vec<String>,
     },
 }
 
@@ -283,6 +299,12 @@ impl ApiService {
             // Notify service that this request is complete
             let _ = completion_tx.send(InternalMessage::Completed(completion_key));
         });
+    }
+
+    /// Helper to get local changed file paths
+    async fn get_local_changed_files(client: &SyncthingClient, folder_id: &str) -> Result<Vec<String>> {
+        let items = client.get_local_changed_items(folder_id, None).await?;
+        Ok(items.into_iter().map(|item| item.name).collect())
     }
 
     /// Execute an API request and return the response
@@ -399,6 +421,25 @@ impl ApiService {
                                 page: 0,
                                 perpage: 0,
                             },
+                        }
+                    }
+                }
+            }
+
+            ApiRequest::GetLocalChanged { folder_id } => {
+                match Self::get_local_changed_files(&client, &folder_id).await {
+                    Ok(file_paths) => {
+                        ApiResponse::LocalChanged {
+                            folder_id: folder_id.clone(),
+                            file_paths,
+                        }
+                    }
+                    Err(e) => {
+                        log_debug(&format!("Failed to get local changed files for {}: {}", folder_id, e));
+                        // Return empty response on error
+                        ApiResponse::LocalChanged {
+                            folder_id,
+                            file_paths: vec![],
                         }
                     }
                 }
