@@ -764,34 +764,23 @@ impl App {
     /// Searches ALL cached items in the folder recursively and filters the current
     /// level to show items that either match or have descendants that match.
     fn apply_search_filter(&mut self) {
-        // Don't filter folder list (only breadcrumbs)
         if self.model.navigation.focus_level == 0 {
             return;
         }
 
         let level_idx = self.model.navigation.focus_level - 1;
         if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+            let query = self.model.ui.search_query.to_lowercase();
+
+            // If query is empty, clear filter
+            if query.is_empty() {
+                crate::log_debug("DEBUG [Search]: Empty query, clearing filter");
+                level.filtered_items = None;
+                return;
+            }
+
             let folder_id = level.folder_id.clone();
             let prefix = level.prefix.clone();
-            let query = self.model.ui.search_query.clone();
-
-            // If query is empty, reload without filter
-            if query.is_empty() {
-                // Queue API request to reload the breadcrumb level
-                let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
-                    folder_id,
-                    prefix,
-                    priority: services::api::Priority::High,
-                });
-                return;
-            }
-
-            // Minimum 2 characters required for search
-            if query.len() < 2 {
-                return;
-            }
-
-            // Get folder sequence for cache validation
             let folder_sequence = self
                 .model
                 .syncthing
@@ -800,160 +789,108 @@ impl App {
                 .map(|status| status.sequence)
                 .unwrap_or(0);
 
-            // Get ALL cached items in the folder recursively
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Calling get_all_browse_items for folder={}, sequence={}",
-                folder_id,
-                folder_sequence
-            ));
+            // Get all items from cache (recursive search)
             let all_items = match self.cache.get_all_browse_items(&folder_id, folder_sequence) {
-                Ok(items) => {
-                    crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Got {} total cached items for folder {}",
-                        items.len(),
-                        folder_id
-                    ));
-                    items
-                }
+                Ok(items) => items,
                 Err(e) => {
                     crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Failed to get all items: {:?}",
+                        "DEBUG [Search]: Cache query failed, using level.items: {}",
                         e
                     ));
-                    // Fallback to current directory only if cache query fails
-                    // Fallback to current directory only if cache query fails
-                    if let Ok(Some(cached_items)) =
-                        self.cache
-                            .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
-                    {
-                        let filtered = logic::search::filter_items(
-                            &cached_items,
-                            &query,
-                            prefix.as_deref(),
-                        );
-                        level.items = filtered;
-                        level.selected_index = if level.items.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        };
-                    }
-                    return;
+                    // Fallback to current level items
+                    level.items.clone()
+                        .into_iter()
+                        .map(|item| (item.name.clone(), item))
+                        .collect()
                 }
             };
 
-            // Get current directory items from cache (unfiltered)
-            let current_items = match self
-                .cache
-                .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
-            {
-                Ok(Some(items)) => items,
-                _ => {
-                    // If we can't get current items, nothing to filter
-                    return;
-                }
-            };
+            // Build current path
+            let current_path = prefix.clone().unwrap_or_default();
 
-            // Build current path for comparison
-            let current_path = prefix.as_deref().unwrap_or("");
+            // Filter items by search query
+            let mut filtered: Vec<api::BrowseItem> = Vec::new();
+            let mut matched_paths = std::collections::HashSet::new();
 
-            // Filter current level items: show items that match OR have matching descendants
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Filtering {} items at path '{}' with query '{}'",
-                current_items.len(),
-                current_path,
-                query
-            ));
+            for (full_name, item) in &all_items {
+                let full_path = if current_path.is_empty() {
+                    full_name.clone()
+                } else if full_name.starts_with(&current_path) {
+                    full_name[current_path.len()..].to_string()
+                } else {
+                    continue; // Not in current directory
+                };
 
-            let filtered_items: Vec<api::BrowseItem> = current_items
-                .into_iter()
-                .filter(|item| {
-                    let item_path = if current_path.is_empty() {
-                        item.name.clone()
+                // Wildcard matching logic
+                let matches = if query.contains('*') {
+                    // Convert wildcard pattern to regex-like matching
+                    let parts: Vec<&str> = query.split('*').collect();
+                    let name_lower = full_path.to_lowercase();
+
+                    if parts.len() == 1 {
+                        name_lower.contains(parts[0])
                     } else {
-                        // current_path already ends with /, so just append
-                        format!("{}{}", current_path, item.name)
-                    };
+                        let first = parts[0];
+                        let last = parts[parts.len() - 1];
+                        let middle_parts = &parts[1..parts.len() - 1];
 
-                    crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Processing item '{}' (type: {}), all_items.len()={}",
-                        item_path,
-                        item.item_type,
-                        all_items.len()
-                    ));
+                        let starts_ok = first.is_empty() || name_lower.starts_with(first);
+                        let ends_ok = last.is_empty() || name_lower.ends_with(last);
+                        let middle_ok = middle_parts.iter().all(|part| name_lower.contains(part));
 
-                    // Check if item itself matches
-                    if logic::search::search_matches(&query, &item_path) {
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: MATCH - Item '{}' matches query",
-                            item_path
-                        ));
-                        return true;
+                        starts_ok && ends_ok && middle_ok
                     }
+                } else {
+                    full_path.to_lowercase().contains(&query)
+                };
 
-                    // For directories, check if any descendant (at any depth) matches
-                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                        let descendant_prefix = format!("{}/", item_path);
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: Checking directory '{}' for descendants matching '{}'",
-                            item_path,
-                            query
-                        ));
+                if matches {
+                    // Add this item
+                    filtered.push(item.clone());
+                    matched_paths.insert(full_path.clone());
 
-                        // Check if ANY file/folder inside this directory tree matches the query
-                        let has_matching_descendant = all_items.iter().any(|(full_path, _)| {
-                            // If this item is a descendant of our directory
-                            if full_path.starts_with(&descendant_prefix) {
-                                let matches = logic::search::search_matches(&query, full_path);
-                                if matches {
-                                    crate::log_debug(&format!(
-                                        "DEBUG [apply_search_filter]: Found matching descendant '{}' in directory '{}'",
-                                        full_path,
-                                        item_path
-                                    ));
-                                }
-                                matches
+                    // Add parent directories if not already added
+                    let parts: Vec<&str> = full_path.trim_end_matches('/').split('/').collect();
+                    for i in 1..parts.len() {
+                        let parent_path = format!("{}/", parts[..i].join("/"));
+                        if !matched_paths.contains(&parent_path) {
+                            // Find parent directory in all_items
+                            let parent_full_name = if current_path.is_empty() {
+                                parent_path.clone()
                             } else {
-                                false
+                                format!("{}{}", current_path, parent_path)
+                            };
+
+                            if let Some((_, parent_item)) = all_items.iter().find(|(name, _)| {
+                                name == &parent_full_name
+                            }) {
+                                filtered.push(parent_item.clone());
+                                matched_paths.insert(parent_path);
                             }
-                        });
-
-                        if has_matching_descendant {
-                            crate::log_debug(&format!(
-                                "DEBUG [apply_search_filter]: MATCH - Directory '{}' has matching descendants",
-                                item_path
-                            ));
-                        } else {
-                            crate::log_debug(&format!(
-                                "DEBUG [apply_search_filter]: NO MATCH - Directory '{}' has no matching descendants",
-                                item_path
-                            ));
                         }
-
-                        has_matching_descendant
-                    } else {
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: NO MATCH - File '{}' does not match query",
-                            item_path
-                        ));
-                        false
                     }
-                })
-                .collect();
+                }
+            }
 
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Filtered to {} items",
-                filtered_items.len()
-            ));
-
-            // Update items with filtered list
-            level.items = filtered_items;
-
-            // Reset selection to first item (if any matches)
-            level.selected_index = if level.items.is_empty() {
-                None
+            // Store filtered results
+            if filtered.is_empty() {
+                crate::log_debug("DEBUG [Search]: No matches found");
+                level.filtered_items = None;
             } else {
+                crate::log_debug(&format!(
+                    "DEBUG [Search]: Filtered {} → {} items for query '{}'",
+                    all_items.len(),
+                    filtered.len(),
+                    query
+                ));
+                level.filtered_items = Some(filtered);
+            }
+
+            // Reset selection
+            level.selected_index = if level.filtered_items.is_some() {
                 Some(0)
+            } else {
+                level.selected_index
             };
         }
     }
