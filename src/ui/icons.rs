@@ -41,6 +41,7 @@ pub struct IconTheme {
     pub remote_only_color: Color,
     pub ignored_color: Color,
     pub syncing_color: Color,
+    pub queued_color: Color,
     pub scanning_color: Color,
     pub unknown_color: Color,
     pub error_color: Color,
@@ -62,6 +63,7 @@ impl Default for IconTheme {
             remote_only_color: Color::White,  // Only on remote
             ignored_color: Color::Red,        // Ignored files
             syncing_color: Color::Yellow,     // Currently syncing
+            queued_color: Color::Cyan,        // Queued for syncing
             scanning_color: Color::Magenta,   // Scanning for changes
             unknown_color: Color::Gray,       // Unknown state (transient)
             error_color: Color::Red,          // Error state
@@ -79,6 +81,7 @@ enum StatusType {
     RemoteOnly,
     Ignored,
     Syncing,
+    Queued,
     Scanning,
     Unknown,
     Error,
@@ -227,6 +230,7 @@ impl IconRenderer {
             StatusType::RemoteOnly => ("☁️ ", "\u{F0C2} ", self.theme.remote_only_color),
             StatusType::Ignored => ("🚫 ", "\u{F05E} ", self.theme.ignored_color),
             StatusType::Syncing => ("🔄 ", "\u{F021} ", self.theme.syncing_color),
+            StatusType::Queued => ("⏳ ", "\u{F017} ", self.theme.queued_color),
             StatusType::Scanning => ("🔍 ", "\u{F002} ", self.theme.scanning_color),
             StatusType::Unknown => ("❓ ", "\u{F128} ", self.theme.unknown_color),
             StatusType::Error => ("❌ ", "\u{F00D} ", self.theme.error_color),
