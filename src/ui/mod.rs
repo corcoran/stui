@@ -19,6 +19,7 @@ pub mod folder_list;
 pub mod icons;
 pub mod layout;
 pub mod legend;
+pub mod out_of_sync_summary;
 pub mod render;
 pub mod search;
 pub mod status_bar;
