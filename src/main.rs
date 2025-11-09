@@ -1029,7 +1029,8 @@ impl App {
 
                 if has_needed || has_local_changes {
                     // Queue GetNeededFiles request for remote changes
-                    // Local-only files are counted from sync_states table (SyncState::LocalOnly)
+                    // TODO: Local changes (receive-only deletions) require /rest/db/localchanged API
+                    //       Currently only shows remote out-of-sync items from /rest/db/need
                     summary_state.loading.insert(folder_id.clone());
 
                     let _ = self.api_tx.send(ApiRequest::GetNeededFiles {
