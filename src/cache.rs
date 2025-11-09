@@ -780,6 +780,16 @@ impl CacheDb {
         Ok(breakdown)
     }
 
+    pub fn invalidate_out_of_sync_categories(&self, folder_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sync_states
+             SET need_category = NULL, need_cached_at = NULL
+             WHERE folder_id = ?1",
+            params![folder_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_device_name(&self) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -855,5 +865,28 @@ mod tests {
         assert_eq!(breakdown.remote_only, 0);
         assert_eq!(breakdown.modified, 0);
         assert_eq!(breakdown.local_only, 0);
+    }
+
+    #[test]
+    fn test_invalidate_out_of_sync_categories_clears_data() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        let need_response = NeedResponse {
+            progress: vec![FileInfo { name: "file1.txt".to_string(), ..Default::default() }],
+            queued: vec![],
+            rest: vec![],
+            page: 1,
+            perpage: 100,
+        };
+
+        cache.cache_needed_files("test-folder", &need_response).unwrap();
+
+        let before = cache.get_folder_sync_breakdown("test-folder").unwrap();
+        assert_eq!(before.downloading, 1);
+
+        cache.invalidate_out_of_sync_categories("test-folder").unwrap();
+
+        let after = cache.get_folder_sync_breakdown("test-folder").unwrap();
+        assert_eq!(after.downloading, 0);
     }
 }
