@@ -48,8 +48,8 @@ impl CacheDb {
         Ok(cache)
     }
 
-    #[cfg(test)]
-    fn new_in_memory() -> Result<Self> {
+    /// Create an in-memory cache for testing
+    pub fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let mut cache = CacheDb { conn };
         cache.init_schema()?;
@@ -670,11 +670,22 @@ impl CacheDb {
             format!("{}/", dir_path)
         };
 
-        // Delete browse cache for this exact directory
-        let browse_deleted = self.conn.execute(
-            "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
-            params![folder_id, &normalized_dir],
-        )?;
+        // Delete browse cache
+        // When dir_path is empty (entire folder invalidation), delete ALL prefixes
+        // When dir_path is specific, delete only that exact prefix
+        let browse_deleted = if normalized_dir.is_empty() {
+            // Delete ALL browse cache entries for this folder (all prefixes)
+            self.conn.execute(
+                "DELETE FROM browse_cache WHERE folder_id = ?1",
+                params![folder_id],
+            )?
+        } else {
+            // Delete only the specific prefix
+            self.conn.execute(
+                "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
+                params![folder_id, &normalized_dir],
+            )?
+        };
 
         // Delete sync states for all files in this directory and subdirectories
         // Use LIKE with pattern matching: "dir/%" matches "dir/file" and "dir/subdir/file"

@@ -2,9 +2,15 @@
 //!
 //! Exposes modules for testing
 
+use std::sync::atomic::AtomicBool;
+
 pub mod api;
+pub mod cache;
 pub mod model;
 pub mod logic;
+
+// DEBUG_MODE for cache logging (defaults to false in tests)
+pub(crate) static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
 
 // Re-export common types from main.rs that are needed by other modules
 // These will be made available at crate:: level

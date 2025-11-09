@@ -320,6 +320,11 @@ impl App {
                 if !self.model.ui.search_query.is_empty() {
                     self.apply_search_filter();
                 }
+
+                // Apply out-of-sync filter if active
+                if self.model.ui.out_of_sync_filter.is_some() {
+                    self.apply_out_of_sync_filter();
+                }
             }
         }
 
