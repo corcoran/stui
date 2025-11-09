@@ -153,15 +153,35 @@ fn build_status_line(
                         type_display
                     )
                 } else if let Some(status) = folder_statuses.get(&folder.id) {
-                    let state_display = if status.state.is_empty() {
+                    // Get API state (empty means paused)
+                    let api_state = if status.state.is_empty() {
                         "paused"
                     } else {
                         &status.state
                     };
+
+                    // Map to FolderState enum and get display label
+                    let (folder_state, state_label) = map_folder_state(
+                        api_state,
+                        status.receive_only_total_items,
+                    );
+
+                    // Render state icon + label
+                    let state_icon = icon_renderer.folder_with_status(folder_state);
+                    let state_display = format!(
+                        "{}{}",
+                        state_icon.iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<Vec<_>>()
+                            .join(""),
+                        state_label
+                    );
+
+                    // Calculate sync metrics
                     let in_sync = status
                         .global_total_items
                         .saturating_sub(status.need_total_items);
-                    let items_display = format!("{}/{}", in_sync, status.global_total_items);
+                    let items_display = format!("{}/{} items", in_sync, status.global_total_items);
 
                     // Build status message considering both remote needs and local additions
                     let need_display = if status.receive_only_total_items > 0 {
@@ -179,7 +199,7 @@ fn build_status_line(
                         } else {
                             // Only local additions
                             format!(
-                                "Local: {} items ({})",
+                                "{} items ({})",
                                 status.receive_only_total_items,
                                 utils::format_bytes(status.receive_only_changed_bytes)
                             )
@@ -187,22 +207,23 @@ fn build_status_line(
                     } else if status.need_total_items > 0 {
                         // Only remote needs
                         format!(
-                            "{} items ({}) ",
+                            "{} items ({})",
                             status.need_total_items,
                             utils::format_bytes(status.need_bytes)
                         )
                     } else {
-                        "Up to date ".to_string()
+                        "Up to date".to_string()
                     };
 
+                    // NEW FIELD ORDER: name | state | need_display | type | bytes | items
                     format!(
                         "Folder: {} | {} | {} | {} | {} | {}",
                         folder_name,
-                        type_display,
                         state_display,
+                        need_display,
+                        type_display,
                         utils::format_bytes(status.global_bytes),
                         items_display,
-                        need_display
                     )
                 } else {
                     format!(
