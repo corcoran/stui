@@ -33,6 +33,9 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             // Invalidate out-of-sync categories for this folder (will trigger re-fetch of /rest/db/need)
             let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
 
+            // Invalidate local changed cache for this folder
+            let _ = app.cache.invalidate_local_changed(&folder_id);
+
             // Request fresh folder status
             let _ = app.api_tx.send(ApiRequest::GetFolderStatus {
                 folder_id: folder_id.clone(),
@@ -100,6 +103,9 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
 
             // Invalidate out-of-sync categories for this folder (will trigger re-fetch of /rest/db/need)
             let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
+
+            // Invalidate local changed cache for this folder
+            let _ = app.cache.invalidate_local_changed(&folder_id);
 
             // Request fresh folder status
             let _ = app.api_tx.send(ApiRequest::GetFolderStatus {
