@@ -1029,7 +1029,7 @@ impl App {
 
                 if has_needed || has_local_changes {
                     // Queue GetNeededFiles request for remote changes
-                    // TODO: Also query /rest/db/localchanged for local-only files
+                    // Local-only files are counted from sync_states table (SyncState::LocalOnly)
                     summary_state.loading.insert(folder_id.clone());
 
                     let _ = self.api_tx.send(ApiRequest::GetNeededFiles {

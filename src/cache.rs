@@ -748,6 +748,9 @@ impl CacheDb {
         let ttl = 30; // 30 seconds
         let cutoff = now - ttl;
 
+        let mut breakdown = FolderSyncBreakdown::default();
+
+        // First, get counts from need_category (remote changes from /rest/db/need)
         let mut stmt = self.conn.prepare(
             "SELECT need_category, COUNT(*)
              FROM sync_states
@@ -756,8 +759,6 @@ impl CacheDb {
                AND need_cached_at > ?2
              GROUP BY need_category"
         )?;
-
-        let mut breakdown = FolderSyncBreakdown::default();
 
         let rows = stmt.query_map(params![folder_id, cutoff], |row| {
             let category: String = row.get(0)?;
@@ -776,6 +777,18 @@ impl CacheDb {
                 _ => {}
             }
         }
+
+        // Also count files with sync_state = 'LocalOnly' (local changes not in /rest/db/need)
+        let local_only_count: usize = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM sync_states
+             WHERE folder_id = ?1
+               AND sync_state = 'LocalOnly'",
+            params![folder_id],
+            |row| row.get(0),
+        )?;
+
+        breakdown.local_only += local_only_count;
 
         Ok(breakdown)
     }
