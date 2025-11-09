@@ -487,7 +487,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.model.ui.search_origin_level = None;
                     // Clear prefetch tracking
                     app.model.performance.discovered_dirs.clear();
-                    // Reload all breadcrumb levels without filter
+                    // Immediately clear filtered_items for all breadcrumb levels
+                    for level in &mut app.model.navigation.breadcrumb_trail {
+                        level.filtered_items = None;
+                    }
+                    // Reload all breadcrumb levels without filter (for fresh data)
                     app.refresh_all_breadcrumbs().await?;
                     return Ok(());
                 }
@@ -508,6 +512,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     if app.model.ui.search_query.is_empty() {
                         app.model.ui.search_mode = false;
                         app.model.ui.search_origin_level = None;
+                        // Immediately clear filtered_items for current breadcrumb
+                        if app.model.navigation.focus_level > 0 {
+                            let level_idx = app.model.navigation.focus_level - 1;
+                            if let Some(level) = app.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+                                level.filtered_items = None;
+                            }
+                        }
                         app.refresh_current_breadcrumb().await?;
                     } else {
                         // Re-filter current breadcrumb
@@ -569,7 +580,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.model.ui.search_query.clear();
                 // Clear prefetch tracking
                 app.model.performance.discovered_dirs.clear();
-                // Reload all breadcrumb levels without filter
+                // Immediately clear filtered_items for all breadcrumb levels
+                for level in &mut app.model.navigation.breadcrumb_trail {
+                    level.filtered_items = None;
+                }
+                // Reload all breadcrumb levels without filter (for fresh data)
                 app.refresh_all_breadcrumbs().await?;
                 return Ok(());
             }

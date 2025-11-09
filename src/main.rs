@@ -926,17 +926,16 @@ impl App {
             ));
 
             // Store filtered results (non-destructive)
-            level.filtered_items = if filtered_items.is_empty() {
+            // IMPORTANT: Use Some(vec![]) for zero matches, not None
+            // None = "no filter active, show all items"
+            // Some(vec![]) = "filter active, zero matches found"
+            level.filtered_items = Some(filtered_items);
+
+            // Reset selection to first item (only if there are matches)
+            level.selected_index = if level.display_items().is_empty() {
                 None
             } else {
-                Some(filtered_items)
-            };
-
-            // Reset selection to first item (if any matches)
-            level.selected_index = if level.filtered_items.is_some() {
                 Some(0)
-            } else {
-                level.selected_index
             };
         }
     }

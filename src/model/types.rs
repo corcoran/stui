@@ -338,4 +338,81 @@ mod tests {
             "Should select dir2 from filtered list, not dir1 from unfiltered list"
         );
     }
+
+    #[test]
+    fn test_display_items_empty_filter_shows_empty_not_all() {
+        // Bug: When search has zero matches, filtered_items = None shows ALL items
+        // Expected: filtered_items = Some(vec![]) shows ZERO items
+        let level = BreadcrumbLevel {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+            folder_path: "/test".to_string(),
+            prefix: None,
+            items: vec![
+                BrowseItem {
+                    name: "file1.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 1024,
+                },
+                BrowseItem {
+                    name: "file2.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 2048,
+                },
+            ],
+            selected_index: None,
+            file_sync_states: HashMap::new(),
+            ignored_exists: HashMap::new(),
+            translated_base_path: "/test".to_string(),
+            filtered_items: Some(vec![]), // Zero matches - should show empty list
+        };
+
+        // Should show empty list, not fall back to all items
+        let displayed = level.display_items();
+        assert_eq!(
+            displayed.len(),
+            0,
+            "Zero search matches should show empty list, not all items"
+        );
+    }
+
+    #[test]
+    fn test_display_items_none_filter_shows_all() {
+        // Baseline: filtered_items = None should show all items (no filter active)
+        let level = BreadcrumbLevel {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+            folder_path: "/test".to_string(),
+            prefix: None,
+            items: vec![
+                BrowseItem {
+                    name: "file1.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 1024,
+                },
+                BrowseItem {
+                    name: "file2.txt".to_string(),
+                    item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                    mod_time: "2025-01-09T10:00:00Z".to_string(),
+                    size: 2048,
+                },
+            ],
+            selected_index: None,
+            file_sync_states: HashMap::new(),
+            ignored_exists: HashMap::new(),
+            translated_base_path: "/test".to_string(),
+            filtered_items: None, // No filter active
+        };
+
+        // Should show all items
+        let displayed = level.display_items();
+        assert_eq!(
+            displayed.len(),
+            2,
+            "No filter (None) should show all items"
+        );
+    }
 }

@@ -210,7 +210,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 .navigation
                 .breadcrumb_trail
                 .get(level_idx)
-                .map(|level| level.items.len())
+                .map(|level| level.display_items().len()) // Use display_items to respect filtering
         } else {
             None
         };
