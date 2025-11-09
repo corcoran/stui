@@ -43,6 +43,7 @@ impl CacheDb {
         let mut cache = CacheDb { conn };
         cache.init_schema()?;
         cache.ensure_out_of_sync_columns()?;
+        cache.ensure_local_changed_columns()?;
 
         Ok(cache)
     }
@@ -53,6 +54,7 @@ impl CacheDb {
         let mut cache = CacheDb { conn };
         cache.init_schema()?;
         cache.ensure_out_of_sync_columns()?;
+        cache.ensure_local_changed_columns()?;
         Ok(cache)
     }
 
@@ -141,6 +143,32 @@ impl CacheDb {
             )?;
             self.conn.execute(
                 "ALTER TABLE sync_states ADD COLUMN need_cached_at INTEGER",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_local_changed_columns(&self) -> Result<()> {
+        // Check if columns exist
+        let has_columns: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sync_states')
+             WHERE name IN ('local_changed', 'local_cached_at')",
+            [],
+            |row| {
+                let count: i32 = row.get(0)?;
+                Ok(count == 2)
+            },
+        )?;
+
+        if !has_columns {
+            self.conn.execute(
+                "ALTER TABLE sync_states ADD COLUMN local_changed INTEGER DEFAULT 0",
+                [],
+            )?;
+            self.conn.execute(
+                "ALTER TABLE sync_states ADD COLUMN local_cached_at INTEGER",
                 [],
             )?;
         }
@@ -992,5 +1020,32 @@ mod tests {
 
         let after = cache.get_folder_sync_breakdown("test-folder").unwrap();
         assert_eq!(after.downloading, 0);
+    }
+
+    #[test]
+    fn test_local_changed_columns_exist() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        // Verify columns exist
+        let has_local_changed: bool = cache.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sync_states') WHERE name = 'local_changed'",
+            [],
+            |row| {
+                let count: i32 = row.get(0)?;
+                Ok(count == 1)
+            },
+        ).unwrap();
+
+        let has_local_cached_at: bool = cache.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sync_states') WHERE name = 'local_cached_at'",
+            [],
+            |row| {
+                let count: i32 = row.get(0)?;
+                Ok(count == 1)
+            },
+        ).unwrap();
+
+        assert!(has_local_changed, "local_changed column should exist");
+        assert!(has_local_cached_at, "local_cached_at column should exist");
     }
 }
