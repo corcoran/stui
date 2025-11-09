@@ -73,6 +73,66 @@ pub fn check_ignored_existence(
     ignored_exists
 }
 
+/// Aggregate directory sync state based on direct state and children states
+///
+/// Determines a directory's overall sync state by considering:
+/// 1. The directory's own direct state (from FileInfo)
+/// 2. The states of all its children
+///
+/// # Priority Rules
+/// - If directory itself is RemoteOnly or Ignored → use that (takes precedence)
+/// - Otherwise, use highest priority child state:
+///   - Syncing > RemoteOnly > OutOfSync > LocalOnly > Synced
+/// - If all children synced → use directory's direct state
+///
+/// # Arguments
+/// * `direct_state` - The directory's own sync state (None = default to Synced)
+/// * `child_states` - Slice of all children's sync states
+///
+/// # Returns
+/// The aggregated sync state for the directory
+pub fn aggregate_directory_state(
+    direct_state: Option<SyncState>,
+    child_states: &[SyncState],
+) -> SyncState {
+    let direct = direct_state.unwrap_or(SyncState::Synced);
+
+    // If directory itself is RemoteOnly or Ignored, that takes precedence
+    if matches!(direct, SyncState::RemoteOnly | SyncState::Ignored) {
+        return direct;
+    }
+
+    // Collect child state flags
+    let mut has_syncing = false;
+    let mut has_remote_only = false;
+    let mut has_out_of_sync = false;
+    let mut has_local_only = false;
+
+    for state in child_states {
+        match state {
+            SyncState::Syncing => has_syncing = true,
+            SyncState::RemoteOnly => has_remote_only = true,
+            SyncState::OutOfSync => has_out_of_sync = true,
+            SyncState::LocalOnly => has_local_only = true,
+            _ => {}
+        }
+    }
+
+    // Priority order: Syncing > RemoteOnly > OutOfSync > LocalOnly > Synced
+    if has_syncing {
+        SyncState::Syncing
+    } else if has_remote_only {
+        SyncState::RemoteOnly
+    } else if has_out_of_sync {
+        SyncState::OutOfSync
+    } else if has_local_only {
+        SyncState::LocalOnly
+    } else {
+        // All children synced, use directory's direct state
+        direct
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +233,85 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(result.contains_key("ignored.txt"));
         assert!(!result.contains_key("synced.txt"));
+    }
+}
+
+#[cfg(test)]
+mod aggregate_tests {
+    use super::*;
+
+    #[test]
+    fn test_aggregate_directory_state_all_synced() {
+        // When all children are synced, use direct state
+        let direct_state = Some(SyncState::Synced);
+        let child_states = vec![SyncState::Synced, SyncState::Synced];
+
+        let result = aggregate_directory_state(direct_state, &child_states);
+        assert_eq!(result, SyncState::Synced);
+    }
+
+    #[test]
+    fn test_aggregate_directory_state_one_syncing() {
+        // Syncing has highest priority
+        let direct_state = Some(SyncState::Synced);
+        let child_states = vec![
+            SyncState::Synced,
+            SyncState::Syncing,
+            SyncState::OutOfSync,
+        ];
+
+        let result = aggregate_directory_state(direct_state, &child_states);
+        assert_eq!(result, SyncState::Syncing);
+    }
+
+    #[test]
+    fn test_aggregate_directory_state_mixed_priorities() {
+        // RemoteOnly > OutOfSync > LocalOnly
+        let direct_state = Some(SyncState::Synced);
+
+        // RemoteOnly wins
+        let child_states1 = vec![
+            SyncState::RemoteOnly,
+            SyncState::OutOfSync,
+            SyncState::LocalOnly,
+        ];
+        assert_eq!(
+            aggregate_directory_state(direct_state, &child_states1),
+            SyncState::RemoteOnly
+        );
+
+        // OutOfSync wins (no RemoteOnly)
+        let child_states2 = vec![SyncState::OutOfSync, SyncState::LocalOnly];
+        assert_eq!(
+            aggregate_directory_state(direct_state, &child_states2),
+            SyncState::OutOfSync
+        );
+
+        // LocalOnly wins (no higher priority)
+        let child_states3 = vec![SyncState::LocalOnly, SyncState::Synced];
+        assert_eq!(
+            aggregate_directory_state(direct_state, &child_states3),
+            SyncState::LocalOnly
+        );
+    }
+
+    #[test]
+    fn test_aggregate_directory_state_remote_only_direct() {
+        // Directory itself is RemoteOnly - takes precedence
+        let direct_state = Some(SyncState::RemoteOnly);
+        let child_states = vec![SyncState::Synced]; // Doesn't matter
+
+        let result = aggregate_directory_state(direct_state, &child_states);
+        assert_eq!(result, SyncState::RemoteOnly);
+    }
+
+    #[test]
+    fn test_aggregate_directory_state_ignored_direct() {
+        // Directory itself is Ignored - takes precedence
+        let direct_state = Some(SyncState::Ignored);
+        let child_states = vec![SyncState::Syncing]; // Doesn't matter
+
+        let result = aggregate_directory_state(direct_state, &child_states);
+        assert_eq!(result, SyncState::Ignored);
     }
 }

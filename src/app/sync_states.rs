@@ -6,7 +6,7 @@
 //! - Prefetching subdirectory states
 //! - Tracking ignored file existence
 
-use crate::{App, SyncState, services, log_debug};
+use crate::{App, SyncState, logic, services, log_debug};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -38,13 +38,13 @@ impl App {
             // Get the directory's current direct state (from FileInfo)
             let direct_state = level.file_sync_states.get(dir_name).copied();
 
-            // Start with the direct state, or default to Synced if not set
-            let mut aggregate_state = direct_state.unwrap_or(SyncState::Synced);
-
             // If the directory itself is RemoteOnly or Ignored, that takes precedence
-            // (it means the directory itself doesn't exist locally or is ignored)
-            if matches!(aggregate_state, SyncState::RemoteOnly | SyncState::Ignored) {
-                dir_states.insert(dir_name.clone(), aggregate_state);
+            // (handled by aggregate_directory_state function)
+            if matches!(
+                direct_state,
+                Some(SyncState::RemoteOnly) | Some(SyncState::Ignored)
+            ) {
+                dir_states.insert(dir_name.clone(), direct_state.unwrap());
                 continue;
             }
 
@@ -56,56 +56,47 @@ impl App {
             };
 
             // Get folder sequence for cache validation
-            let folder_sequence = self.model.syncthing.folder_statuses.get(&level.folder_id)
+            let folder_sequence = self
+                .model
+                .syncthing
+                .folder_statuses
+                .get(&level.folder_id)
                 .map(|status| status.sequence)
                 .unwrap_or_else(|| {
-                    log_debug(&format!("DEBUG [update_directory_states]: folder_id '{}' not found in folder_statuses, using sequence=0", level.folder_id));
+                    log_debug(&format!(
+                        "DEBUG [update_directory_states]: folder_id '{}' not found in folder_statuses, using sequence=0",
+                        level.folder_id
+                    ));
                     0
                 });
 
             // Try to get cached browse items for this directory
-            if let Ok(Some(children)) =
-                self.cache
-                    .get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence)
+            if let Ok(Some(children)) = self
+                .cache
+                .get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence)
             {
-                // Check children states
-                let mut has_syncing = false;
-                let mut has_remote_only = false;
-                let mut has_out_of_sync = false;
-                let mut has_local_only = false;
+                // Collect all child states
+                let child_states: Vec<SyncState> = children
+                    .iter()
+                    .filter_map(|child| {
+                        let child_path = format!("{}{}", dir_prefix, child.name);
+                        self.cache
+                            .get_sync_state_unvalidated(&level.folder_id, &child_path)
+                            .ok()
+                            .flatten()
+                    })
+                    .collect();
 
-                for child in &children {
-                    let child_path = format!("{}{}", dir_prefix, child.name);
-                    if let Ok(Some(child_state)) = self
-                        .cache
-                        .get_sync_state_unvalidated(&level.folder_id, &child_path)
-                    {
-                        match child_state {
-                            SyncState::Syncing => has_syncing = true,
-                            SyncState::RemoteOnly => has_remote_only = true,
-                            SyncState::OutOfSync => has_out_of_sync = true,
-                            SyncState::LocalOnly => has_local_only = true,
-                            _ => {}
-                        }
-                    }
-                }
-
-                // Determine aggregate state (priority order: Syncing > RemoteOnly > OutOfSync > LocalOnly > Synced)
-                aggregate_state = if has_syncing {
-                    SyncState::Syncing
-                } else if has_remote_only {
-                    SyncState::RemoteOnly
-                } else if has_out_of_sync {
-                    SyncState::OutOfSync
-                } else if has_local_only {
-                    SyncState::LocalOnly
-                } else {
-                    // All children synced, use the directory's direct state
-                    direct_state.unwrap_or(SyncState::Synced)
-                };
+                // Use pure function to determine aggregate state
+                let aggregate_state = logic::sync_states::aggregate_directory_state(
+                    direct_state,
+                    &child_states,
+                );
+                dir_states.insert(dir_name.clone(), aggregate_state);
+            } else {
+                // No cached children, use direct state
+                dir_states.insert(dir_name.clone(), direct_state.unwrap_or(SyncState::Synced));
             }
-
-            dir_states.insert(dir_name.clone(), aggregate_state);
         }
 
         // Apply computed states
