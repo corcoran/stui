@@ -103,7 +103,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                         if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
                                             let selected_idx = level.selected_index;
                                             selected_idx.and_then(|idx| {
-                                                level.items.get(idx).map(|item| {
+                                                level.display_items().get(idx).map(|item| {
                                                     (
                                                         level.folder_id.clone(),
                                                         item.name.clone(),
@@ -744,7 +744,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     // Open popup for selected item
                     if let Some(level) = app.model.navigation.breadcrumb_trail.get(app.model.navigation.focus_level - 1) {
                         if let Some(selected_idx) = level.selected_index {
-                            if let Some(item) = level.items.get(selected_idx) {
+                            if let Some(item) = level.display_items().get(selected_idx) {
                                 // Construct full path
                                 let file_path = if let Some(prefix) = &level.prefix {
                                     format!("{}{}", prefix, item.name)

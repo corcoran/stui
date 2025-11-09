@@ -775,6 +775,9 @@ impl App {
             let prefix = level.prefix.clone();
             let query = self.model.ui.search_query.clone();
 
+            // Save currently selected item name BEFORE filtering to restore after
+            let selected_name = level.selected_item().map(|item| item.name.clone());
+
             // If query is empty, clear filter
             if query.is_empty() {
                 level.filtered_items = None;
@@ -931,11 +934,15 @@ impl App {
             // Some(vec![]) = "filter active, zero matches found"
             level.filtered_items = Some(filtered_items);
 
-            // Reset selection to first item (only if there are matches)
+            // Restore selection to same item name if possible, otherwise reset to first item
             level.selected_index = if level.display_items().is_empty() {
                 None
+            } else if let Some(name) = selected_name {
+                // Try to find previously selected item in filtered list
+                logic::navigation::find_item_index_by_name(level.display_items(), &name)
+                    .or(Some(0)) // If not found, default to first item
             } else {
-                Some(0)
+                Some(0) // No previous selection, default to first item
             };
         }
     }
@@ -1022,11 +1029,18 @@ impl App {
         let num_levels = self.model.navigation.breadcrumb_trail.len();
         for level_idx in 0..num_levels {
             // Extract data from level (to avoid borrowing issues)
-            let (prefix, current_items) = {
+            let (prefix, current_items, selected_name) = {
                 let level = &self.model.navigation.breadcrumb_trail[level_idx];
 
+                // Save currently selected item name BEFORE filtering (for current level only)
+                let selected_name = if level_idx == self.model.navigation.focus_level - 1 {
+                    level.selected_item().map(|item| item.name.clone())
+                } else {
+                    None
+                };
+
                 // Use level.items as source (already sorted correctly)
-                (level.prefix.clone(), level.items.clone())
+                (level.prefix.clone(), level.items.clone(), selected_name)
             };
 
             // Build current path for comparison
@@ -1082,13 +1096,18 @@ impl App {
                 level.filtered_items = Some(filtered);
             }
 
-            // Reset selection to first item in filtered view (only for current level)
+            // Restore selection to same item name if possible (only for current level)
             if level_idx == self.model.navigation.focus_level - 1 {
-                level.selected_index = if level.filtered_items.is_some() {
-                    Some(0)
-                } else {
-                    level.selected_index
-                };
+                if level.filtered_items.is_some() {
+                    // Filter is active - try to restore previous selection
+                    level.selected_index = if let Some(name) = selected_name {
+                        logic::navigation::find_item_index_by_name(level.display_items(), &name)
+                            .or(Some(0)) // If not found, default to first item
+                    } else {
+                        Some(0) // No previous selection, default to first item
+                    };
+                }
+                // If no filter (filtered_items = None), keep existing selection
             }
         }
     }

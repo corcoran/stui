@@ -171,7 +171,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     let selected_name = level
                         .selected_index
 
-                        .and_then(|sel_idx| level.items.get(sel_idx))
+                        .and_then(|sel_idx| level.display_items().get(sel_idx))
                         .map(|item| item.name.clone());
 
                     // Start with cached states (no preservation logic)
