@@ -6,6 +6,7 @@
 use std::time::Instant;
 
 use crate::api::SyncState;
+use crate::model;
 use crate::model::syncthing::ConnectionState;
 use crate::services::api::{ApiRequest, ApiResponse, Priority};
 use crate::App;
@@ -645,6 +646,26 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
                 Err(e) => {
                     crate::log_debug(&format!("Failed to get breakdown for {}: {}", folder_id, e));
+                }
+            }
+
+            // If in breadcrumb view for this folder, activate filter now that data is ready
+            if app.model.navigation.focus_level > 0 {
+                let level_idx = app.model.navigation.focus_level - 1;
+                if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
+                    if level.folder_id == folder_id && app.model.ui.out_of_sync_filter.is_none() {
+                        // Activate filter
+                        app.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
+                            origin_level: app.model.navigation.focus_level,
+                            last_refresh: std::time::SystemTime::now(),
+                        });
+
+                        // Apply filter
+                        app.apply_out_of_sync_filter();
+
+                        // Clear loading toast
+                        app.model.ui.toast_message = None;
+                    }
                 }
             }
         },

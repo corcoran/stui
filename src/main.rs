@@ -1214,13 +1214,14 @@ impl App {
                 perpage: Some(1000), // Get all items
             });
 
-            // Show loading toast
+            // Show loading toast and return - filter will activate when data arrives
             self.model
                 .ui
                 .show_toast("Loading out-of-sync files...".to_string());
+            return;
         }
 
-        // Activate filter
+        // Activate filter (only when data is already cached)
         self.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
             origin_level: self.model.navigation.focus_level,
             last_refresh: std::time::SystemTime::now(),
