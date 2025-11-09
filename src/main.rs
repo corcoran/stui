@@ -194,11 +194,10 @@ impl App {
 
     /// Clean up stale pending deletes (older than 60 seconds)
     fn cleanup_stale_pending_deletes(&mut self) {
-        let stale_timeout = Duration::from_secs(60);
         let now = Instant::now();
 
         self.model.performance.pending_ignore_deletes.retain(|folder_id, info| {
-            if now.duration_since(info.initiated_at) > stale_timeout {
+            if logic::performance::should_cleanup_stale_pending(info.initiated_at, now) {
                 log_debug(&format!("Cleaning up stale pending deletes for folder: {}", folder_id));
                 false // Remove this entry
             } else {
@@ -213,12 +212,15 @@ impl App {
     /// 2. Are older than 5 seconds (buffer for Syncthing to process)
     /// 3. Files are verified gone from disk
     fn verify_and_cleanup_pending_deletes(&mut self) {
-        let buffer_time = Duration::from_secs(5);
         let now = Instant::now();
 
         for (_folder_id, info) in self.model.performance.pending_ignore_deletes.iter_mut() {
-            // Only check if rescan has been triggered and buffer time has passed
-            if !info.rescan_triggered || now.duration_since(info.initiated_at) < buffer_time {
+            // Only check if ready for verification
+            if !logic::performance::should_verify_pending(
+                info.initiated_at,
+                now,
+                info.rescan_triggered,
+            ) {
                 continue;
             }
 

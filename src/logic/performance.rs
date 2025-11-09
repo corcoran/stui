@@ -45,6 +45,47 @@ pub fn should_flush_batch(queue_len: usize, time_since_last_flush: Duration) -> 
         || time_since_last_flush > Duration::from_millis(MAX_BATCH_AGE_MS)
 }
 
+/// Check if a pending delete operation is stale and should be cleaned up
+///
+/// Operations older than 60 seconds are considered stale, likely due to:
+/// - Network issues
+/// - Syncthing being down
+/// - User cancelled operation
+///
+/// # Arguments
+/// * `initiated_at` - When the operation started
+/// * `now` - Current time
+///
+/// # Returns
+/// `true` if the operation should be removed (stale)
+pub fn should_cleanup_stale_pending(initiated_at: std::time::Instant, now: std::time::Instant) -> bool {
+    const STALE_TIMEOUT: Duration = Duration::from_secs(60);
+    now.duration_since(initiated_at) > STALE_TIMEOUT
+}
+
+/// Check if a pending delete operation should be verified for completion
+///
+/// Verification happens when:
+/// 1. Rescan has been triggered (Syncthing notified)
+/// 2. At least 5 seconds have passed (buffer for Syncthing to process)
+///
+/// # Arguments
+/// * `initiated_at` - When the operation started
+/// * `now` - Current time
+/// * `rescan_triggered` - Whether the folder has been rescanned
+///
+/// # Returns
+/// `true` if we should check filesystem to verify deletion completed
+pub fn should_verify_pending(
+    initiated_at: std::time::Instant,
+    now: std::time::Instant,
+    rescan_triggered: bool,
+) -> bool {
+    const BUFFER_TIME: Duration = Duration::from_secs(5);
+
+    rescan_triggered && now.duration_since(initiated_at) >= BUFFER_TIME
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +132,68 @@ mod tests {
         // Both size and age exceeded - definitely flush
         assert!(should_flush_batch(50, Duration::from_millis(101)));
         assert!(should_flush_batch(100, Duration::from_millis(200)));
+    }
+}
+
+#[cfg(test)]
+mod pending_delete_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_should_cleanup_stale_pending_fresh() {
+        let initiated_at = Instant::now();
+        let now = Instant::now();
+
+        // Fresh (< 60s) should not be cleaned up
+        assert!(!should_cleanup_stale_pending(initiated_at, now));
+    }
+
+    #[test]
+    fn test_should_cleanup_stale_pending_old() {
+        let initiated_at = Instant::now() - Duration::from_secs(61);
+        let now = Instant::now();
+
+        // Stale (> 60s) should be cleaned up
+        assert!(should_cleanup_stale_pending(initiated_at, now));
+    }
+
+    #[test]
+    fn test_should_cleanup_stale_pending_boundary() {
+        let now = Instant::now();
+        let initiated_at = now - Duration::from_secs(60);
+
+        // Exactly 60s should not be cleaned up (> not >=)
+        assert!(!should_cleanup_stale_pending(initiated_at, now));
+    }
+
+    #[test]
+    fn test_should_verify_pending_not_ready() {
+        let initiated_at = Instant::now();
+        let now = Instant::now();
+        let rescan_triggered = true;
+
+        // Too recent (< 5s), should not verify yet
+        assert!(!should_verify_pending(initiated_at, now, rescan_triggered));
+    }
+
+    #[test]
+    fn test_should_verify_pending_no_rescan() {
+        let initiated_at = Instant::now() - Duration::from_secs(6);
+        let now = Instant::now();
+        let rescan_triggered = false;
+
+        // Rescan not triggered, should not verify
+        assert!(!should_verify_pending(initiated_at, now, rescan_triggered));
+    }
+
+    #[test]
+    fn test_should_verify_pending_ready() {
+        let initiated_at = Instant::now() - Duration::from_secs(6);
+        let now = Instant::now();
+        let rescan_triggered = true;
+
+        // Rescan triggered and > 5s, should verify
+        assert!(should_verify_pending(initiated_at, now, rescan_triggered));
     }
 }
