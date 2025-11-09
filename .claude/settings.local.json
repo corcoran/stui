@@ -31,7 +31,10 @@
       "Bash(cat:*)",
       "Bash(iconv:*)",
       "Bash(1)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "SlashCommand(/superpowers:write-plan)",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:executing-plans)"
     ],
     "deny": [],
     "ask": []
