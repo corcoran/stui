@@ -16,6 +16,10 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 ### 📁 File & Folder Management
 - **Breadcrumb Navigation**: Multi-pane directory browsing with ancestor highlighting
 - **Recursive Search**: Fast wildcard search (`*jeff*`, `*.txt`) with instant filtering as you type
+- **Out-of-Sync Filter**: Press `f` to show only files that need attention
+  - Shows remote files you need to download
+  - Shows local changes in receive-only folders (added/deleted/modified files)
+  - Works recursively across entire folder hierarchy
 - **Flexible Sorting**: Sort by sync state, name, date, or size
 - **File Preview Popup**: View file details, text content, ANSI art, or images directly in terminal
   - **Text files**: Scrollable with vim keybindings
@@ -134,6 +138,7 @@ synctui --debug
 | Key | Action | Confirmation |
 |-----|--------|--------------|
 | `Ctrl-F` / `/` | **Search**: Enter search mode (recursive wildcard search) | No |
+| `f` | **Filter**: Toggle out-of-sync filter (shows remote needed files + local changes) | No |
 | `?` | Show detailed file info popup (metadata, sync state, preview). Note: `Enter` on files also opens preview. | No |
 | `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
 | `p` | Pause/resume folder (folder view only) | Yes |
@@ -153,6 +158,11 @@ synctui --debug
 - `Enter` — Accept search (keep filtering, deactivate input)
 - `Backspace` — Delete character (auto-exits when query becomes empty)
 - `Esc` — Clear search and restore all items
+
+**Filter Mode** (when out-of-sync filter is active):
+- Press `f` again to toggle filter off and show all files
+- Status bar shows "Filter: Remote + Local" (receive-only) or "Filter: Remote" (other folder types)
+- Filter persists when navigating into subdirectories
 
 ## Cache Management
 
