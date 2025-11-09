@@ -815,37 +815,23 @@ impl App {
                         "DEBUG [apply_search_filter]: Failed to get all items: {:?}",
                         e
                     ));
-                    // Fallback to current directory only if cache query fails
-                    if let Ok(Some(cached_items)) =
-                        self.cache
-                            .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
-                    {
-                        let filtered = logic::search::filter_items(
-                            &cached_items,
-                            &query,
-                            prefix.as_deref(),
-                        );
-                        level.filtered_items = if filtered.is_empty() {
-                            None
-                        } else {
-                            Some(filtered)
-                        };
-                    }
+                    // Fallback to simple filtering of current level.items only
+                    let filtered = logic::search::filter_items(
+                        &level.items,
+                        &query,
+                        prefix.as_deref(),
+                    );
+                    level.filtered_items = if filtered.is_empty() {
+                        None
+                    } else {
+                        Some(filtered)
+                    };
                     return;
                 }
             };
 
-            // Get current directory items from cache (unfiltered)
-            let current_items = match self
-                .cache
-                .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
-            {
-                Ok(Some(items)) => items,
-                _ => {
-                    // If we can't get current items, nothing to filter
-                    return;
-                }
-            };
+            // Use level.items as source (already sorted correctly)
+            let current_items = level.items.clone();
 
             // Build current path for comparison
             let current_path = prefix.as_deref().unwrap_or("");
