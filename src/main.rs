@@ -967,8 +967,20 @@ impl App {
             }
         };
 
-        // If no out-of-sync items in cache, handle based on current filter state
-        if out_of_sync_items.is_empty() {
+        // Get local changed items from cache (once for entire folder)
+        let local_changed_items = match self.cache.get_local_changed_items(&folder_id) {
+            Ok(items) => items.into_iter().collect::<std::collections::HashSet<_>>(),
+            Err(e) => {
+                crate::log_debug(&format!(
+                    "DEBUG [Filter]: Failed to get local changed items: {}",
+                    e
+                ));
+                std::collections::HashSet::new()
+            }
+        };
+
+        // If no out-of-sync items and no local changed items in cache, handle based on current filter state
+        if out_of_sync_items.is_empty() && local_changed_items.is_empty() {
             let any_filtered = self.model.navigation.breadcrumb_trail.iter().any(|l| l.filtered_items.is_some());
 
             if any_filtered {
@@ -1013,9 +1025,9 @@ impl App {
                     format!("{}{}", current_path, item.name)
                 };
 
-                // Check if this item (or any child if directory) is out of sync
+                // Check if this item (or any child if directory) is out of sync OR local changed
                 let is_out_of_sync = if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
-                    // For directories: check if any child path starts with this directory
+                    // For directories: check if any child is out of sync OR local changed
                     let dir_prefix = if full_path.ends_with('/') {
                         full_path.clone()
                     } else {
@@ -1025,9 +1037,12 @@ impl App {
                     out_of_sync_items
                         .keys()
                         .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
+                    || local_changed_items
+                        .iter()
+                        .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
                 } else {
-                    // For files: direct match
-                    out_of_sync_items.contains_key(&full_path)
+                    // For files: direct match in either remote or local
+                    out_of_sync_items.contains_key(&full_path) || local_changed_items.contains(&full_path)
                 };
 
                 if is_out_of_sync {
