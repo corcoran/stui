@@ -49,7 +49,7 @@ pub enum SyncState {
     Unknown,    // ❓ Not yet determined
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct FileInfo {

@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use crate::api::{BrowseItem, FolderStatus, SyncState};
+use crate::api::{BrowseItem, FolderStatus, NeedResponse, SyncState};
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -42,6 +42,15 @@ impl CacheDb {
         cache.init_schema()?;
         cache.ensure_out_of_sync_columns()?;
 
+        Ok(cache)
+    }
+
+    #[cfg(test)]
+    fn new_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let mut cache = CacheDb { conn };
+        cache.init_schema()?;
+        cache.ensure_out_of_sync_columns()?;
         Ok(cache)
     }
 
@@ -691,6 +700,45 @@ impl CacheDb {
         Ok(())
     }
 
+    pub fn cache_needed_files(&self, folder_id: &str, need_response: &NeedResponse) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        // Process progress array (downloading)
+        for file in &need_response.progress {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sync_states
+                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
+                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+                params![folder_id, &file.name, "Syncing", "downloading", now],
+            )?;
+        }
+
+        // Process queued array
+        for file in &need_response.queued {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sync_states
+                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
+                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+                params![folder_id, &file.name, "RemoteOnly", "queued", now],
+            )?;
+        }
+
+        // Process rest array (categorize as remote_only or modified based on local state)
+        for file in &need_response.rest {
+            // For now, mark as remote_only (we'll refine categorization later)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sync_states
+                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
+                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+                params![folder_id, &file.name, "RemoteOnly", "remote_only", now],
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub fn get_device_name(&self) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -705,5 +753,37 @@ impl CacheDb {
             params![device_name],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{FileInfo, NeedResponse};
+
+    #[test]
+    fn test_cache_needed_files_stores_categories() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        let need_response = NeedResponse {
+            progress: vec![FileInfo {
+                name: "downloading.txt".to_string(),
+                size: 100,
+                ..Default::default()
+            }],
+            queued: vec![FileInfo {
+                name: "queued.txt".to_string(),
+                size: 200,
+                ..Default::default()
+            }],
+            rest: vec![],
+            page: 1,
+            perpage: 100,
+        };
+
+        cache.cache_needed_files("test-folder", &need_response).unwrap();
+
+        // Verify categories were stored
+        // (We'll implement get_folder_sync_breakdown next to verify)
     }
 }
