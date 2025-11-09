@@ -3,7 +3,8 @@ use ratatui::Frame;
 use synctui::DisplayMode;
 
 use super::{
-    breadcrumb, dialogs, folder_list, layout, legend, search, status_bar, system_bar, toast,
+    breadcrumb, dialogs, folder_list, layout, legend, out_of_sync_summary, search, status_bar,
+    system_bar, toast,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -315,6 +316,17 @@ pub fn render(f: &mut Frame, app: &mut App) {
             &app.icon_renderer,
             app.model.ui.image_font_size,
             &mut app.image_state_map,
+        );
+    }
+
+    // Render out-of-sync summary modal if active
+    if let Some(summary_state) = &app.model.ui.out_of_sync_summary {
+        out_of_sync_summary::render_out_of_sync_summary(
+            f,
+            size,
+            &app.model.syncthing.folders,
+            summary_state,
+            &app.icon_renderer,
         );
     }
 
