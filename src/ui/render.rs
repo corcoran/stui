@@ -29,11 +29,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Calculate status bar data (needed for status height calculation)
     // Clone strings to avoid borrowing issues
-    let (breadcrumb_folder_label, breadcrumb_item_count, breadcrumb_selected_item) =
+    let (breadcrumb_folder_label, breadcrumb_folder_id, breadcrumb_item_count, breadcrumb_selected_item) =
         if app.model.navigation.focus_level > 0 {
             let level_idx = app.model.navigation.focus_level - 1;
             if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
                 let folder_label = Some(level.folder_label.clone());
+                let folder_id = Some(level.folder_id.clone());
                 // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
                 let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
                 let item_count = Some(display_items.len());
@@ -54,12 +55,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         )
                     })
                 });
-                (folder_label, item_count, selected_item)
+                (folder_label, folder_id, item_count, selected_item)
             } else {
-                (None, None, None)
+                (None, None, None, None)
             }
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
     let pending_operations_count: usize = app
@@ -78,6 +79,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         &app.model.syncthing.folder_statuses,
         app.model.navigation.folders_state_selection,
         breadcrumb_folder_label.clone(),
+        breadcrumb_folder_id.clone(),
         breadcrumb_item_count,
         breadcrumb_selected_item.clone(),
         app.model.ui.sort_mode.as_str(),
@@ -247,6 +249,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         &app.model.syncthing.folder_statuses,
         app.model.navigation.folders_state_selection,
         breadcrumb_folder_label,
+        breadcrumb_folder_id,
         breadcrumb_item_count,
         breadcrumb_selected_item,
         app.model.ui.sort_mode.as_str(),

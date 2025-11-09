@@ -74,6 +74,7 @@ pub fn build_status_paragraph(
     folder_statuses: &HashMap<String, FolderStatus>,
     folders_state_selected: Option<usize>,
     breadcrumb_folder_label: Option<String>,
+    breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
     breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
     sort_mode: &str,
@@ -90,6 +91,7 @@ pub fn build_status_paragraph(
         folder_statuses,
         folders_state_selected,
         breadcrumb_folder_label,
+        breadcrumb_folder_id,
         breadcrumb_item_count,
         breadcrumb_selected_item,
         sort_mode,
@@ -150,6 +152,7 @@ fn build_status_line(
     folder_statuses: &HashMap<String, FolderStatus>,
     folders_state_selected: Option<usize>,
     breadcrumb_folder_label: Option<String>,
+    breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
     breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
     sort_mode: &str,
@@ -286,9 +289,23 @@ fn build_status_line(
         );
         metrics.push(sort_display);
 
-        // Show out-of-sync filter indicator
+        // Show out-of-sync filter indicator with folder-type-specific detail
         if out_of_sync_filter_active {
-            metrics.push("Filter: Out-of-Sync".to_string());
+            // Determine filter type based on folder
+            let filter_desc = if let Some(fid) = &breadcrumb_folder_id {
+                if let Some(folder) = folders.iter().find(|f| &f.id == fid) {
+                    if folder.folder_type == "receiveonly" {
+                        "Filter: Remote + Local"
+                    } else {
+                        "Filter: Remote"
+                    }
+                } else {
+                    "Filter: Active"
+                }
+            } else {
+                "Filter: Active"
+            };
+            metrics.push(filter_desc.to_string());
         }
 
         // Show pending operations count if any
@@ -370,6 +387,7 @@ pub fn render_status_bar(
     folder_statuses: &HashMap<String, FolderStatus>,
     folders_state_selected: Option<usize>,
     breadcrumb_folder_label: Option<String>,
+    breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
     breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
     sort_mode: &str,
@@ -386,6 +404,7 @@ pub fn render_status_bar(
         folder_statuses,
         folders_state_selected,
         breadcrumb_folder_label,
+        breadcrumb_folder_id,
         breadcrumb_item_count,
         breadcrumb_selected_item,
         sort_mode,
@@ -407,6 +426,7 @@ pub fn calculate_status_height(
     folder_statuses: &HashMap<String, FolderStatus>,
     folders_state_selected: Option<usize>,
     breadcrumb_folder_label: Option<String>,
+    breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
     breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
     sort_mode: &str,
@@ -424,6 +444,7 @@ pub fn calculate_status_height(
         folder_statuses,
         folders_state_selected,
         breadcrumb_folder_label,
+        breadcrumb_folder_id,
         breadcrumb_item_count,
         breadcrumb_selected_item,
         sort_mode,
@@ -603,6 +624,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Synced), None)),
             "A-Z",
@@ -629,6 +651,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::OutOfSync), None)),
             "A-Z",
@@ -655,6 +678,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::LocalOnly), None)),
             "A-Z",
@@ -680,6 +704,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::RemoteOnly), None)),
             "A-Z",
@@ -705,6 +730,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Syncing), None)),
             "A-Z",
@@ -731,6 +757,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("subdir".to_string(), "FILE_INFO_TYPE_DIRECTORY".to_string(), Some(SyncState::Synced), None)),
             "A-Z",
@@ -756,6 +783,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(true))),
             "A-Z",
@@ -782,6 +810,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(false))),
             "A-Z",
@@ -809,6 +838,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Unknown), None)),
             "A-Z",
@@ -835,6 +865,7 @@ mod tests {
             &HashMap::new(),
             None,
             Some("TestFolder".to_string()),
+            None, // breadcrumb_folder_id
             Some(5),
             Some(("test.txt".to_string(), "file".to_string(), None, None)),
             "A-Z",
