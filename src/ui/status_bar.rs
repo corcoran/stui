@@ -12,19 +12,30 @@ use std::collections::HashMap;
 
 /// Map Syncthing API state to FolderState enum and user-friendly label
 ///
-/// Special case: When receive_only_items > 0, returns "Local Additions"
-/// state regardless of API state (matches Syncthing web UI behavior).
+/// Special cases:
+/// - When receive_only_items > 0, returns "Local Additions" (matches Syncthing web UI)
+/// - When need_total_items > 0 and state is "idle", returns "Out of Sync" (matches web UI)
 ///
 /// # Arguments
 /// * `api_state` - Raw state string from Syncthing API
 /// * `receive_only_items` - Number of local additions in receive-only folder
+/// * `need_total_items` - Number of items that need syncing
 ///
 /// # Returns
 /// Tuple of (FolderState enum, display label)
-fn map_folder_state(api_state: &str, receive_only_items: u64) -> (FolderState, &'static str) {
+fn map_folder_state(
+    api_state: &str,
+    receive_only_items: u64,
+    need_total_items: u64,
+) -> (FolderState, &'static str) {
     // Special case: Local Additions takes precedence
     if receive_only_items > 0 {
         return (FolderState::LocalOnly, "Local Additions");
+    }
+
+    // Special case: Idle but has items to sync = Out of Sync (matches web UI behavior)
+    if api_state == "idle" && need_total_items > 0 {
+        return (FolderState::OutOfSync, "Out of Sync");
     }
 
     match api_state {
@@ -164,6 +175,7 @@ fn build_status_line(
                     let (folder_state, state_label) = map_folder_state(
                         api_state,
                         status.receive_only_total_items,
+                        status.need_total_items,
                     );
 
                     // Render state icon + label
@@ -423,70 +435,78 @@ mod tests {
 
     #[test]
     fn test_map_folder_state_idle() {
-        let (state, label) = map_folder_state("idle", 0);
+        let (state, label) = map_folder_state("idle", 0, 0);
         assert_eq!(state, FolderState::Synced);
         assert_eq!(label, "Idle");
     }
 
     #[test]
+    fn test_map_folder_state_idle_with_needs() {
+        // Idle with items to sync = Out of Sync (matches web UI)
+        let (state, label) = map_folder_state("idle", 0, 1);
+        assert_eq!(state, FolderState::OutOfSync);
+        assert_eq!(label, "Out of Sync");
+    }
+
+    #[test]
     fn test_map_folder_state_scanning() {
-        let (state, label) = map_folder_state("scanning", 0);
+        let (state, label) = map_folder_state("scanning", 0, 0);
         assert_eq!(state, FolderState::Scanning);
         assert_eq!(label, "Scanning");
     }
 
     #[test]
     fn test_map_folder_state_syncing() {
-        let (state, label) = map_folder_state("syncing", 0);
+        let (state, label) = map_folder_state("syncing", 0, 0);
         assert_eq!(state, FolderState::Syncing);
         assert_eq!(label, "Syncing");
     }
 
     #[test]
     fn test_map_folder_state_preparing() {
-        let (state, label) = map_folder_state("preparing", 0);
+        let (state, label) = map_folder_state("preparing", 0, 0);
         assert_eq!(state, FolderState::Syncing);
         assert_eq!(label, "Preparing");
     }
 
     #[test]
     fn test_map_folder_state_waiting() {
-        let (state, label) = map_folder_state("waiting-to-scan", 0);
+        let (state, label) = map_folder_state("waiting-to-scan", 0, 0);
         assert_eq!(state, FolderState::Scanning);
         assert_eq!(label, "Waiting to Scan");
     }
 
     #[test]
     fn test_map_folder_state_outofsync() {
-        let (state, label) = map_folder_state("outofsync", 0);
+        let (state, label) = map_folder_state("outofsync", 0, 0);
         assert_eq!(state, FolderState::OutOfSync);
         assert_eq!(label, "Out of Sync");
     }
 
     #[test]
     fn test_map_folder_state_error() {
-        let (state, label) = map_folder_state("error", 0);
+        let (state, label) = map_folder_state("error", 0, 0);
         assert_eq!(state, FolderState::Error);
         assert_eq!(label, "Error");
     }
 
     #[test]
     fn test_map_folder_state_stopped() {
-        let (state, label) = map_folder_state("stopped", 0);
+        let (state, label) = map_folder_state("stopped", 0, 0);
         assert_eq!(state, FolderState::Paused);
         assert_eq!(label, "Stopped");
     }
 
     #[test]
     fn test_map_folder_state_paused() {
-        let (state, label) = map_folder_state("paused", 0);
+        let (state, label) = map_folder_state("paused", 0, 0);
         assert_eq!(state, FolderState::Paused);
         assert_eq!(label, "Paused");
     }
 
     #[test]
     fn test_map_folder_state_unshared() {
-        let (state, label) = map_folder_state("unshared", 0);
+        let (state, label) = map_folder_state("unshared", 0, 0);
         assert_eq!(state, FolderState::Unknown);
         assert_eq!(label, "Unshared");
     }
@@ -494,7 +514,15 @@ mod tests {
     #[test]
     fn test_map_folder_state_local_additions() {
         // Local additions takes precedence over API state
-        let (state, label) = map_folder_state("idle", 5);
+        let (state, label) = map_folder_state("idle", 5, 0);
+        assert_eq!(state, FolderState::LocalOnly);
+        assert_eq!(label, "Local Additions");
+    }
+
+    #[test]
+    fn test_map_folder_state_local_additions_with_needs() {
+        // Local additions takes precedence over need_total_items
+        let (state, label) = map_folder_state("idle", 5, 10);
         assert_eq!(state, FolderState::LocalOnly);
         assert_eq!(label, "Local Additions");
     }
@@ -502,7 +530,7 @@ mod tests {
     #[test]
     fn test_map_folder_state_unknown() {
         // Fallback for unknown API states
-        let (state, label) = map_folder_state("unknown-state", 0);
+        let (state, label) = map_folder_state("unknown-state", 0, 0);
         assert_eq!(state, FolderState::Unknown);
         assert_eq!(label, "Unknown");
     }
