@@ -958,6 +958,103 @@ impl App {
         }
     }
 
+    /// Apply out-of-sync filter to current breadcrumb level
+    fn apply_out_of_sync_filter(&mut self) {
+        // Don't filter folder list (only breadcrumbs)
+        if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        let level_idx = self.model.navigation.focus_level - 1;
+        if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+            let folder_id = level.folder_id.clone();
+            let prefix = level.prefix.clone();
+
+            // Get folder sequence for cache validation
+            let folder_sequence = self
+                .model
+                .syncthing
+                .folder_statuses
+                .get(&folder_id)
+                .map(|status| status.sequence)
+                .unwrap_or(0);
+
+            // Get out-of-sync items from cache
+            let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
+                Ok(items) => items,
+                Err(_) => {
+                    // If cache query fails, show nothing
+                    level.items = vec![];
+                    level.selected_index = None;
+                    return;
+                }
+            };
+
+            // If no out-of-sync items, show nothing
+            if out_of_sync_items.is_empty() {
+                level.items = vec![];
+                level.selected_index = None;
+                return;
+            }
+
+            // Get current directory items from cache (unfiltered)
+            let current_items = match self
+                .cache
+                .get_browse_items(&folder_id, prefix.as_deref(), folder_sequence)
+            {
+                Ok(Some(items)) => items,
+                _ => {
+                    // If we can't get current items, nothing to filter
+                    return;
+                }
+            };
+
+            // Build current path for comparison
+            let current_path = prefix.as_deref().unwrap_or("");
+
+            // Filter current level items: show items that are out-of-sync OR have out-of-sync descendants
+            let filtered_items: Vec<api::BrowseItem> = current_items
+                .into_iter()
+                .filter(|item| {
+                    let item_path = if current_path.is_empty() {
+                        item.name.clone()
+                    } else {
+                        format!("{}{}", current_path, item.name)
+                    };
+
+                    // Check if item itself is out-of-sync
+                    if out_of_sync_items.contains_key(&item_path) {
+                        return true;
+                    }
+
+                    // For directories, check if any descendant is out-of-sync
+                    if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
+                        let descendant_prefix = format!("{}/", item_path);
+
+                        // Check if ANY file/folder inside this directory tree is out-of-sync
+                        let has_out_of_sync_descendant = out_of_sync_items
+                            .keys()
+                            .any(|path| path.starts_with(&descendant_prefix));
+
+                        has_out_of_sync_descendant
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            // Update items with filtered list
+            level.items = filtered_items;
+
+            // Reset selection to first item (if any matches)
+            level.selected_index = if level.items.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        }
+    }
+
     /// Refresh current breadcrumb without search filter (restore original items)
     async fn refresh_current_breadcrumb(&mut self) -> Result<()> {
         if self.model.navigation.focus_level == 0 {
@@ -1052,6 +1149,85 @@ impl App {
 
     pub fn close_out_of_sync_summary(&mut self) {
         self.model.ui.out_of_sync_summary = None;
+    }
+
+    /// Toggle out-of-sync filter in breadcrumb view
+    pub fn toggle_out_of_sync_filter(&mut self) {
+        // Only works in breadcrumb view
+        if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        // If filter is already active, clear it
+        if self.model.ui.out_of_sync_filter.is_some() {
+            self.model.ui.out_of_sync_filter = None;
+            // Reload current breadcrumb to show all items
+            let level_idx = self.model.navigation.focus_level - 1;
+            if let Some(level) = self.model.navigation.breadcrumb_trail.get(level_idx) {
+                let folder_id = level.folder_id.clone();
+                let prefix = level.prefix.clone();
+                let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                    folder_id,
+                    prefix,
+                    priority: services::api::Priority::High,
+                });
+            }
+            return;
+        }
+
+        // Get current folder info
+        let level_idx = self.model.navigation.focus_level - 1;
+        let (folder_id, _prefix) = match self.model.navigation.breadcrumb_trail.get(level_idx) {
+            Some(level) => (level.folder_id.clone(), level.prefix.clone()),
+            None => return,
+        };
+
+        // Check folder status
+        let has_out_of_sync = self
+            .model
+            .syncthing
+            .folder_statuses
+            .get(&folder_id)
+            .map(|status| status.need_total_items > 0 || status.receive_only_total_items > 0)
+            .unwrap_or(false);
+
+        if !has_out_of_sync {
+            // No out-of-sync items, show toast
+            self.model
+                .ui
+                .show_toast("All files synced!".to_string());
+            return;
+        }
+
+        // Check if we have cached out-of-sync data
+        let has_cached_data = self
+            .cache
+            .get_out_of_sync_items(&folder_id)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
+
+        if !has_cached_data {
+            // Queue GetNeededFiles request
+            let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+                folder_id: folder_id.clone(),
+                page: None,
+                perpage: Some(1000), // Get all items
+            });
+
+            // Show loading toast
+            self.model
+                .ui
+                .show_toast("Loading out-of-sync files...".to_string());
+        }
+
+        // Activate filter
+        self.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
+            origin_level: self.model.navigation.focus_level,
+            last_refresh: std::time::SystemTime::now(),
+        });
+
+        // Apply filter to current level
+        self.apply_out_of_sync_filter();
     }
 }
 

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -801,6 +802,39 @@ impl CacheDb {
             params![folder_id],
         )?;
         Ok(())
+    }
+
+    /// Get all out-of-sync items for a folder (items with need_category set)
+    /// Returns map of file_path -> category
+    pub fn get_out_of_sync_items(&self, folder_id: &str) -> Result<HashMap<String, String>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        let ttl = 30; // 30 seconds
+        let cutoff = now - ttl;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT file_path, need_category
+             FROM sync_states
+             WHERE folder_id = ?1
+               AND need_category IS NOT NULL
+               AND need_cached_at > ?2"
+        )?;
+
+        let rows = stmt.query_map(params![folder_id, cutoff], |row| {
+            let file_path: String = row.get(0)?;
+            let category: String = row.get(1)?;
+            Ok((file_path, category))
+        })?;
+
+        let mut items = HashMap::new();
+        for row in rows {
+            let (path, category) = row?;
+            items.insert(path, category);
+        }
+
+        Ok(items)
     }
 
     pub fn get_device_name(&self) -> Result<Option<String>> {

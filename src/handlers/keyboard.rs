@@ -672,6 +672,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 // Open out-of-sync summary modal (only in folder view)
                 app.open_out_of_sync_summary();
             }
+            KeyCode::Char('f') if app.model.navigation.focus_level > 0 => {
+                // Toggle out-of-sync filter (only in breadcrumb view)
+                app.toggle_out_of_sync_filter();
+            }
             KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {
                 // Pause/resume folder (only in folder view)
                 if let Some(folder) = app.model.selected_folder() {
