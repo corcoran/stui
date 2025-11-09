@@ -10,6 +10,19 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+/// Map SyncState to user-friendly label for file/directory display
+fn map_sync_state_label(sync_state: SyncState) -> &'static str {
+    match sync_state {
+        SyncState::Synced => "Synced",
+        SyncState::OutOfSync => "Out of Sync",
+        SyncState::LocalOnly => "Local Only",
+        SyncState::RemoteOnly => "Remote Only",
+        SyncState::Ignored => "Ignored",
+        SyncState::Syncing => "Syncing",
+        SyncState::Unknown => "Unknown",
+    }
+}
+
 /// Map Syncthing API state to FolderState enum and user-friendly label
 ///
 /// Special cases:
@@ -285,6 +298,34 @@ fn build_status_line(
 
         // Show selected item info if available
         if let Some((item_name, item_type, sync_state, exists)) = breadcrumb_selected_item {
+            // Add state display with icon if sync state is available
+            if let Some(state) = sync_state {
+                let is_dir = item_type.as_str() == "FILE_INFO_TYPE_DIRECTORY";
+
+                // For ignored items, check existence to choose correct icon
+                let state_icon = if state == SyncState::Ignored {
+                    if let Some(exists_val) = exists {
+                        icon_renderer.ignored_item(is_dir, exists_val)
+                    } else {
+                        // Default to warning icon if exists is None
+                        icon_renderer.ignored_item(is_dir, true)
+                    }
+                } else {
+                    icon_renderer.item_with_sync_state(is_dir, state)
+                };
+
+                let state_label = map_sync_state_label(state);
+                let state_display = format!(
+                    "{}{}",
+                    state_icon.iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    state_label
+                );
+                metrics.push(state_display);
+            }
+
             // Format name based on type: "dirname/" for directories, "filename" for files
             let formatted_name = match item_type.as_str() {
                 "FILE_INFO_TYPE_DIRECTORY" => format!("{}/", item_name),
@@ -533,5 +574,263 @@ mod tests {
         let (state, label) = map_folder_state("unknown-state", 0, 0);
         assert_eq!(state, FolderState::Unknown);
         assert_eq!(label, "Unknown");
+    }
+
+    // Tests for file/directory state display in breadcrumb view
+    #[test]
+    fn test_file_state_display_synced() {
+        // Test: File with Synced state shows icon before "Selected:"
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1, // breadcrumb view
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Synced), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄✅ Synced"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_file_state_display_out_of_sync() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::OutOfSync), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄⚠️ Out of Sync"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_file_state_display_local_only() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::LocalOnly), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄💻 Local Only"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_file_state_display_remote_only() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::RemoteOnly), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄☁️ Remote Only"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_file_state_display_syncing() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Syncing), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄🔄 Syncing"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_dir_state_display_synced() {
+        // Test: Directory with Synced state shows folder icon
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("subdir".to_string(), "FILE_INFO_TYPE_DIRECTORY".to_string(), Some(SyncState::Synced), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📁✅ Synced"));
+        assert!(status.contains("Selected: subdir/"));
+    }
+
+    #[test]
+    fn test_file_state_display_ignored_exists() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(true))),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄⚠️ Ignored"));
+        assert!(status.contains("Selected: test.txt"));
+        assert!(status.contains("Ignored, not deleted!"));
+    }
+
+    #[test]
+    fn test_file_state_display_ignored_deleted() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(false))),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄🚫 Ignored"));
+        assert!(status.contains("Selected: test.txt"));
+        assert!(status.contains("Ignored")); // Should have single "Ignored" (not "Ignored, not deleted!")
+        assert!(!status.contains("Ignored, not deleted!"));
+    }
+
+    #[test]
+    fn test_file_state_display_unknown() {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Unknown), None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(status.contains("📄❓ Unknown"));
+        assert!(status.contains("Selected: test.txt"));
+    }
+
+    #[test]
+    fn test_file_state_display_none() {
+        // Test: No sync state (None) should not show state display
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let status = build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("TestFolder".to_string()),
+            Some(5),
+            Some(("test.txt".to_string(), "file".to_string(), None, None)),
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+        );
+        assert!(!status.contains("Synced"));
+        assert!(!status.contains("Out of Sync"));
+        assert!(status.contains("Selected: test.txt"));
     }
 }
