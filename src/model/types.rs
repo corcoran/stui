@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use crate::api::{BrowseItem, FileDetails, SyncState};
 
@@ -127,6 +127,21 @@ pub struct FolderSyncBreakdown {
     pub remote_only: usize,
     pub modified: usize,
     pub local_only: usize,
+}
+
+/// Out-of-sync filter state for breadcrumb view
+#[derive(Debug, Clone)]
+pub struct OutOfSyncFilterState {
+    pub origin_level: usize,
+    pub last_refresh: SystemTime,
+}
+
+/// Out-of-sync summary modal state
+#[derive(Debug, Clone)]
+pub struct OutOfSyncSummaryState {
+    pub selected_index: usize,
+    pub breakdowns: HashMap<String, FolderSyncBreakdown>,
+    pub loading: HashSet<String>,
 }
 
 #[cfg(test)]
