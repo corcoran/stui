@@ -940,6 +940,16 @@ impl CacheDb {
         Ok(items)
     }
 
+    pub fn invalidate_local_changed(&self, folder_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sync_states
+             SET local_changed = 0, local_cached_at = NULL
+             WHERE folder_id = ?1",
+            params![folder_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_device_name(&self) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -1153,5 +1163,21 @@ mod tests {
         let fresh_items = cache.get_local_changed_items("test-folder").unwrap();
         assert_eq!(fresh_items.len(), 1, "Fresh items should be returned");
         assert_eq!(fresh_items[0], "fresh-file.txt");
+    }
+
+    #[test]
+    fn test_invalidate_local_changed_clears_data() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        let local_files = vec!["file1.txt".to_string()];
+        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+
+        let before = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(before.len(), 1);
+
+        cache.invalidate_local_changed("test-folder").unwrap();
+
+        let after = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(after.len(), 0);
     }
 }
