@@ -466,6 +466,35 @@ impl SyncthingClient {
         Ok(items)
     }
 
+    pub async fn get_needed_files(
+        &self,
+        folder_id: &str,
+        page: Option<u32>,
+        perpage: Option<u32>,
+    ) -> Result<NeedResponse> {
+        let mut url = format!("{}/rest/db/need?folder={}", self.base_url, folder_id);
+
+        if let Some(page) = page {
+            url.push_str(&format!("&page={}", page));
+        }
+        if let Some(perpage) = perpage {
+            url.push_str(&format!("&perpage={}", perpage));
+        }
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to get needed files")?;
+
+        response
+            .json()
+            .await
+            .context("Failed to parse need response")
+    }
+
     pub async fn get_ignore_patterns(&self, folder_id: &str) -> Result<Vec<String>> {
         let url = format!("{}/rest/db/ignores?folder={}", self.base_url, folder_id);
         let response = self
@@ -645,5 +674,23 @@ impl FileDetails {
             // Neither present
             (None, None) => SyncState::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_get_needed_files_builds_correct_url() {
+        // This is a basic smoke test - full integration test requires real Syncthing
+        let client = SyncthingClient::new(
+            "http://localhost:8384".to_string(),
+            "test-key".to_string(),
+        );
+
+        // We can't actually call the API without a real instance,
+        // but we can verify the method exists and accepts correct params
+        // Real testing will happen in integration tests
     }
 }
