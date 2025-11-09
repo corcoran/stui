@@ -152,7 +152,10 @@ mod tests {
         let mut model = Model::new(false);
         assert!(!model.has_modal());
 
-        model.ui.confirm_revert = Some(("test".to_string(), vec![]));
+        model.ui.confirm_action = Some(ConfirmAction::Revert {
+            folder_id: "test".to_string(),
+            changed_files: vec![],
+        });
         assert!(model.has_modal());
     }
 

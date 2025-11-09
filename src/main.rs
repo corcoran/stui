@@ -40,10 +40,8 @@ mod cache;
 mod config;
 mod handlers;
 mod logic;
-mod messages;
 mod model;
 mod services;
-mod state;
 mod ui;
 mod utils;
 
@@ -53,6 +51,7 @@ use api::{
 };
 use cache::CacheDb;
 use config::Config;
+use synctui::{DisplayMode, SortMode};
 use ui::icons::{IconMode, IconRenderer, IconTheme};
 
 fn log_debug(msg: &str) {
@@ -69,33 +68,6 @@ fn log_debug(msg: &str) {
         .open("/tmp/synctui-debug.log")
     {
         let _ = writeln!(file, "{}", msg);
-    }
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayMode {
-    Off,              // No timestamp or size
-    TimestampOnly,    // Show timestamp only
-    TimestampAndSize, // Show both size and timestamp
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortMode {
-    VisualIndicator, // Sort by sync state icon (directories first, then by state priority)
-    Alphabetical,    // Sort alphabetically
-    LastModified,    // Sort by last modified time (if available)
-    FileSize,        // Sort by file size
-}
-
-impl SortMode {
-    pub fn as_str(&self) -> &str {
-        match self {
-            SortMode::VisualIndicator => "Sync State",
-            SortMode::Alphabetical => "A-Z",
-            SortMode::LastModified => "Timestamp",
-            SortMode::FileSize => "Size",
-        }
     }
 }
 

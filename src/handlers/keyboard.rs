@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::api::SyncState;
-use crate::model;
+use crate::model::{self, ConfirmAction};
 use crate::App;
 
 /// Handle keyboard input
@@ -71,162 +71,125 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
 
-        // Handle confirmation prompts first
-        if let Some((folder_id, _)) = &app.model.ui.confirm_revert {
+
+        // Handle unified confirmation prompts first
+        if let Some(action) = app.model.ui.confirm_action.clone() {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    // User confirmed - revert the folder
-                    let folder_id = folder_id.clone();
-                    app.model.ui.confirm_revert = None;
-                    let _ = app.client.revert_folder(&folder_id).await;
+                    // User confirmed - execute the action
+                    app.model.ui.confirm_action = None;
 
-                    // Refresh statuses in background (non-blocking)
-                    app.refresh_folder_statuses_nonblocking();
-
-                    return Ok(());
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    // User cancelled
-                    app.model.ui.confirm_revert = None;
-                    return Ok(());
-                }
-                _ => {
-                    // Ignore other keys while prompt is showing
-                    return Ok(());
-                }
-            }
-        }
-
-        // Handle delete confirmation prompt
-        if let Some((host_path, _name, is_dir)) = &app.model.ui.confirm_delete {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    // User confirmed - delete the file/directory
-                    let host_path = host_path.clone();
-                    let is_dir = *is_dir;
-                    app.model.ui.confirm_delete = None;
-
-                    // Perform deletion
-                    let delete_result = if is_dir {
-                        std::fs::remove_dir_all(&host_path)
-                    } else {
-                        std::fs::remove_file(&host_path)
-                    };
-
-                    if delete_result.is_ok() {
-                        // Get current folder info for cache invalidation
-                        if app.model.navigation.focus_level > 0 && !app.model.navigation.breadcrumb_trail.is_empty() {
-                            let level_idx = app.model.navigation.focus_level - 1;
-
-                            // Extract all needed data first (immutable borrow)
-                            let deletion_info =
-                                if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                                    let selected_idx = level.selected_index;
-                                    selected_idx.and_then(|idx| {
-                                        level.items.get(idx).map(|item| {
-                                            (
-                                                level.folder_id.clone(),
-                                                item.name.clone(),
-                                                level.prefix.clone(),
-                                                idx,
-                                            )
-                                        })
-                                    })
-                                } else {
-                                    None
-                                };
-
-                            // Now do the mutations
-                            if let Some((folder_id, item_name, prefix, idx)) = deletion_info {
-                                // Build file path for cache invalidation
-                                let file_path = if let Some(ref prefix) = prefix {
-                                    format!("{}{}", prefix, item_name)
-                                } else {
-                                    item_name.clone()
-                                };
-
-                                // Invalidate cache for this file/directory
-                                if is_dir {
-                                    let _ = app.cache.invalidate_directory(&folder_id, &file_path);
-                                } else {
-                                    let _ =
-                                        app.cache.invalidate_single_file(&folder_id, &file_path);
-                                }
-
-                                // Immediately remove from current view (mutable borrow)
-                                if let Some(level) = app.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                                    // Remove from items
-                                    if idx < level.items.len() {
-                                        level.items.remove(idx);
-                                    }
-                                    // Remove from sync states
-                                    level.file_sync_states.remove(&item_name);
-
-                                    // Adjust selection
-                                    let new_selection = if level.items.is_empty() {
-                                        None
-                                    } else if idx >= level.items.len() {
-                                        Some(level.items.len() - 1)
-                                    } else {
-                                        Some(idx)
-                                    };
-                                    level.selected_index = new_selection;
-                                }
-
-                                // Invalidate browse cache for this directory
-                                let browse_key =
-                                    format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
-                                app.model.performance.loading_browse.remove(&browse_key);
-                            }
+                    match action {
+                        ConfirmAction::Revert { folder_id, .. } => {
+                            // Revert receive-only folder
+                            let _ = app.client.revert_folder(&folder_id).await;
+                            app.refresh_folder_statuses_nonblocking();
                         }
+                        ConfirmAction::Delete { path, is_dir, .. } => {
+                            // Delete file or directory
+                            let delete_result = if is_dir {
+                                std::fs::remove_dir_all(&path)
+                            } else {
+                                std::fs::remove_file(&path)
+                            };
 
-                        // Trigger rescan after successful deletion
-                        let _ = app.rescan_selected_folder();
-                    }
-                    // TODO: Show error message if deletion fails
+                            if delete_result.is_ok() {
+                                // Get current folder info for cache invalidation
+                                if app.model.navigation.focus_level > 0 && !app.model.navigation.breadcrumb_trail.is_empty() {
+                                    let level_idx = app.model.navigation.focus_level - 1;
 
-                    return Ok(());
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    // User cancelled
-                    app.model.ui.confirm_delete = None;
-                    return Ok(());
-                }
-                _ => {
-                    // Ignore other keys while prompt is showing
-                    return Ok(());
-                }
-            }
-        }
+                                    // Extract all needed data first (immutable borrow)
+                                    let deletion_info =
+                                        if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
+                                            let selected_idx = level.selected_index;
+                                            selected_idx.and_then(|idx| {
+                                                level.items.get(idx).map(|item| {
+                                                    (
+                                                        level.folder_id.clone(),
+                                                        item.name.clone(),
+                                                        level.prefix.clone(),
+                                                        idx,
+                                                    )
+                                                })
+                                            })
+                                        } else {
+                                            None
+                                        };
 
-        // Handle pause/resume confirmation prompt
-        if let Some((folder_id, _folder_label, is_paused)) = &app.model.ui.confirm_pause_resume {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    // User confirmed - pause/resume the folder
-                    let folder_id = folder_id.clone();
-                    let is_paused = *is_paused;
-                    app.model.ui.confirm_pause_resume = None;
+                                    // Now do the mutations
+                                    if let Some((folder_id, item_name, prefix, idx)) = deletion_info {
+                                        // Build file path for cache invalidation
+                                        let file_path = if let Some(ref prefix) = prefix {
+                                            format!("{}{}", prefix, item_name)
+                                        } else {
+                                            item_name.clone()
+                                        };
 
-                    // Toggle pause state
-                    let new_paused_state = !is_paused;
-                    match app.client.set_folder_paused(&folder_id, new_paused_state).await {
-                        Ok(_) => {
-                            let action = if new_paused_state { "paused" } else { "resumed" };
-                            app.model.ui.show_toast(format!("Folder {}", action));
+                                        // Invalidate cache for this file/directory
+                                        if is_dir {
+                                            let _ = app.cache.invalidate_directory(&folder_id, &file_path);
+                                        } else {
+                                            let _ =
+                                                app.cache.invalidate_single_file(&folder_id, &file_path);
+                                        }
 
-                            // Immediately reload folder list to update paused state
-                            match app.client.get_folders().await {
-                                Ok(folders) => {
-                                    app.model.syncthing.folders = folders;
+                                        // Immediately remove from current view (mutable borrow)
+                                        if let Some(level) = app.model.navigation.breadcrumb_trail.get_mut(level_idx) {
+                                            // Remove from items
+                                            if idx < level.items.len() {
+                                                level.items.remove(idx);
+                                            }
+                                            // Remove from sync states
+                                            level.file_sync_states.remove(&item_name);
+
+                                            // Adjust selection
+                                            let new_selection = if level.items.is_empty() {
+                                                None
+                                            } else if idx >= level.items.len() {
+                                                Some(level.items.len() - 1)
+                                            } else {
+                                                Some(idx)
+                                            };
+                                            level.selected_index = new_selection;
+                                        }
+
+                                        // Invalidate browse cache for this directory
+                                        let browse_key =
+                                            format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
+                                        app.model.performance.loading_browse.remove(&browse_key);
+                                    }
+                                }
+
+                                // Trigger rescan after successful deletion
+                                let _ = app.rescan_selected_folder();
+                            }
+                            // TODO: Show error message if deletion fails
+                        }
+                        ConfirmAction::IgnoreDelete { .. } => {
+                            // Not implemented yet - this variant is never set
+                        }
+                        ConfirmAction::PauseResume { folder_id, is_paused, .. } => {
+                            // Toggle pause state
+                            let new_paused_state = !is_paused;
+                            match app.client.set_folder_paused(&folder_id, new_paused_state).await {
+                                Ok(_) => {
+                                    let action = if new_paused_state { "paused" } else { "resumed" };
+                                    app.model.ui.show_toast(format!("Folder {}", action));
+
+                                    // Immediately reload folder list to update paused state
+                                    match app.client.get_folders().await {
+                                        Ok(folders) => {
+                                            app.model.syncthing.folders = folders;
+                                        }
+                                        Err(e) => {
+                                            crate::log_debug(&format!("Failed to reload folders after pause/resume: {}", e));
+                                        }
+                                    }
                                 }
                                 Err(e) => {
-                                    crate::log_debug(&format!("Failed to reload folders after pause/resume: {}", e));
+                                    app.model.ui.show_toast(format!("Failed to pause/resume folder: {}", e));
                                 }
                             }
-                        }
-                        Err(e) => {
-                            app.model.ui.show_toast(format!("Failed to pause/resume folder: {}", e));
                         }
                     }
 
@@ -234,7 +197,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     // User cancelled
-                    app.model.ui.confirm_pause_resume = None;
+                    app.model.ui.confirm_action = None;
                     return Ok(());
                 }
                 _ => {
@@ -243,6 +206,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
             }
         }
+
 
         // Handle pattern selection menu
         if let Some(pattern_state) = &mut app.model.ui.pattern_selection {
@@ -695,11 +659,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 // Pause/resume folder (only in folder view)
                 if let Some(folder) = app.model.selected_folder() {
                     let label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
-                    app.model.ui.confirm_pause_resume = Some((
-                        folder.id.clone(),
+                    app.model.ui.confirm_action = Some(crate::model::ConfirmAction::PauseResume {
+                        folder_id: folder.id.clone(),
                         label,
-                        folder.paused,
-                    ));
+                        is_paused: folder.paused,
+                    });
                 }
             }
             KeyCode::Char('s') => {

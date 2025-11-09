@@ -25,3 +25,14 @@ pub enum SortMode {
     LastModified,    // Sort by last modified time (if available)
     FileSize,        // Sort by file size
 }
+
+impl SortMode {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SortMode::VisualIndicator => "Sync State",
+            SortMode::Alphabetical => "A-Z",
+            SortMode::LastModified => "Timestamp",
+            SortMode::FileSize => "Size",
+        }
+    }
+}

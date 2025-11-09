@@ -91,3 +91,135 @@ pub struct FileInfoPopupState {
     pub scroll_offset: u16,
     // image_state moved to Runtime - ImagePreviewState is not Clone
 }
+
+/// Unified confirmation action enum
+///
+/// Replaces 4 separate Option<(...)> fields with single enum.
+/// Each variant holds the data needed for that specific confirmation type.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfirmAction {
+    Revert {
+        folder_id: String,
+        changed_files: Vec<String>,
+    },
+    Delete {
+        path: String,
+        name: String,
+        is_dir: bool,
+    },
+    IgnoreDelete {
+        path: String,
+        name: String,
+        is_dir: bool,
+    },
+    PauseResume {
+        folder_id: String,
+        label: String,
+        is_paused: bool,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_confirm_action_revert() {
+        let action = ConfirmAction::Revert {
+            folder_id: "test-folder".to_string(),
+            changed_files: vec!["file1.txt".to_string(), "file2.txt".to_string()],
+        };
+
+        match action {
+            ConfirmAction::Revert { folder_id, changed_files } => {
+                assert_eq!(folder_id, "test-folder");
+                assert_eq!(changed_files.len(), 2);
+            }
+            _ => panic!("Expected Revert variant"),
+        }
+    }
+
+    #[test]
+    fn test_confirm_action_delete() {
+        let action = ConfirmAction::Delete {
+            path: "/path/to/file".to_string(),
+            name: "file.txt".to_string(),
+            is_dir: false,
+        };
+
+        match action {
+            ConfirmAction::Delete { path, name, is_dir } => {
+                assert_eq!(path, "/path/to/file");
+                assert_eq!(name, "file.txt");
+                assert!(!is_dir);
+            }
+            _ => panic!("Expected Delete variant"),
+        }
+    }
+
+    #[test]
+    fn test_confirm_action_ignore_delete() {
+        let action = ConfirmAction::IgnoreDelete {
+            path: "/path/to/dir".to_string(),
+            name: "dir".to_string(),
+            is_dir: true,
+        };
+
+        match action {
+            ConfirmAction::IgnoreDelete { path, name, is_dir } => {
+                assert_eq!(path, "/path/to/dir");
+                assert_eq!(name, "dir");
+                assert!(is_dir);
+            }
+            _ => panic!("Expected IgnoreDelete variant"),
+        }
+    }
+
+    #[test]
+    fn test_confirm_action_pause_resume() {
+        let action = ConfirmAction::PauseResume {
+            folder_id: "folder-123".to_string(),
+            label: "My Folder".to_string(),
+            is_paused: true,
+        };
+
+        match action {
+            ConfirmAction::PauseResume { folder_id, label, is_paused } => {
+                assert_eq!(folder_id, "folder-123");
+                assert_eq!(label, "My Folder");
+                assert!(is_paused);
+            }
+            _ => panic!("Expected PauseResume variant"),
+        }
+    }
+
+    #[test]
+    fn test_confirm_action_is_cloneable() {
+        let action = ConfirmAction::Delete {
+            path: "/test".to_string(),
+            name: "test".to_string(),
+            is_dir: false,
+        };
+        let _cloned = action.clone();
+    }
+
+    #[test]
+    fn test_confirm_action_equality() {
+        let action1 = ConfirmAction::Revert {
+            folder_id: "folder".to_string(),
+            changed_files: vec!["file.txt".to_string()],
+        };
+        let action2 = ConfirmAction::Revert {
+            folder_id: "folder".to_string(),
+            changed_files: vec!["file.txt".to_string()],
+        };
+        let action3 = ConfirmAction::Delete {
+            path: "/path".to_string(),
+            name: "name".to_string(),
+            is_dir: false,
+        };
+
+        assert_eq!(action1, action2);
+        assert_ne!(action1, action3);
+    }
+}

@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::types::{FileInfoPopupState, FolderTypeSelectionState, PatternSelectionState, VimCommandState};
+use super::types::{ConfirmAction, FileInfoPopupState, FolderTypeSelectionState, PatternSelectionState, VimCommandState};
 use crate::{DisplayMode, SortMode};
 
 /// UI preferences and popups
@@ -32,17 +32,8 @@ pub struct UiModel {
     // ============================================
     // DIALOGS & POPUPS
     // ============================================
-    /// Confirmation dialog for revert operation
-    pub confirm_revert: Option<(String, Vec<String>)>, // (folder_id, changed_files)
-
-    /// Confirmation dialog for delete operation
-    pub confirm_delete: Option<(String, String, bool)>, // (host_path, display_name, is_dir)
-
-    /// Confirmation dialog for ignore+delete operation
-    pub confirm_ignore_delete: Option<(String, String, bool)>, // (host_path, display_name, is_dir)
-
-    /// Confirmation dialog for pause/resume folder
-    pub confirm_pause_resume: Option<(String, String, bool)>, // (folder_id, folder_label, is_paused)
+    /// Unified confirmation dialog
+    pub confirm_action: Option<ConfirmAction>,
 
     /// Pattern selection menu for un-ignore
     pub pattern_selection: Option<PatternSelectionState>,
@@ -99,10 +90,7 @@ impl UiModel {
             display_mode: DisplayMode::TimestampAndSize,
             vim_mode,
             vim_command_state: VimCommandState::None,
-            confirm_revert: None,
-            confirm_delete: None,
-            confirm_ignore_delete: None,
-            confirm_pause_resume: None,
+            confirm_action: None,
             pattern_selection: None,
             folder_type_selection: None,
             file_info_popup: None,
@@ -121,10 +109,7 @@ impl UiModel {
 
     /// Check if any modal dialog is currently showing
     pub fn has_modal(&self) -> bool {
-        self.confirm_revert.is_some()
-            || self.confirm_delete.is_some()
-            || self.confirm_ignore_delete.is_some()
-            || self.confirm_pause_resume.is_some()
+        self.confirm_action.is_some()
             || self.pattern_selection.is_some()
             || self.folder_type_selection.is_some()
             || self.file_info_popup.is_some()
@@ -134,10 +119,7 @@ impl UiModel {
 
     /// Close all modal dialogs
     pub fn close_all_modals(&mut self) {
-        self.confirm_revert = None;
-        self.confirm_delete = None;
-        self.confirm_ignore_delete = None;
-        self.confirm_pause_resume = None;
+        self.confirm_action = None;
         self.pattern_selection = None;
         self.folder_type_selection = None;
         self.file_info_popup = None;
@@ -185,15 +167,21 @@ mod tests {
         let mut model = UiModel::new(false);
         assert!(!model.has_modal());
 
-        model.confirm_revert = Some(("test".to_string(), vec![]));
+        model.confirm_action = Some(ConfirmAction::Revert {
+            folder_id: "test".to_string(),
+            changed_files: vec![],
+        });
         assert!(model.has_modal());
     }
 
     #[test]
     fn test_close_all_modals() {
         let mut model = UiModel::new(false);
-        model.confirm_revert = Some(("test".to_string(), vec![]));
-        model.confirm_delete = Some(("path".to_string(), "name".to_string(), false));
+        model.confirm_action = Some(ConfirmAction::Delete {
+            path: "path".to_string(),
+            name: "name".to_string(),
+            is_dir: false,
+        });
 
         model.close_all_modals();
         assert!(!model.has_modal());

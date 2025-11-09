@@ -1,5 +1,6 @@
 use super::icons::IconRenderer;
 use crate::api::{BrowseItem, SyncState};
+use ::synctui::DisplayMode;
 use ratatui::{
     layout::{Margin, Rect},
     style::{Color, Modifier, Style},
@@ -8,14 +9,6 @@ use ratatui::{
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
-
-/// Display mode for file info (timestamp and/or size)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayMode {
-    Off,              // No timestamp or size
-    TimestampOnly,    // Show timestamp only
-    TimestampAndSize, // Show both size and timestamp
-}
 
 /// Format ISO timestamp into human-readable string (e.g., "2025-10-26 20:58")
 fn format_timestamp(timestamp: &str) -> String {

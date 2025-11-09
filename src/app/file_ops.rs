@@ -70,7 +70,10 @@ impl App {
                 .unwrap_or_else(|_| Vec::new());
 
             // Show confirmation prompt with file list
-            self.model.ui.confirm_revert = Some((folder_id, changed_files));
+            self.model.ui.confirm_action = Some(crate::model::ConfirmAction::Revert {
+                folder_id,
+                changed_files,
+            });
             return Ok(());
         }
 
@@ -129,7 +132,11 @@ impl App {
         let is_dir = std::path::Path::new(&host_path).is_dir();
 
         // Show confirmation prompt
-        self.model.ui.confirm_delete = Some((host_path, item.name.clone(), is_dir));
+        self.model.ui.confirm_action = Some(crate::model::ConfirmAction::Delete {
+            path: host_path,
+            name: item.name.clone(),
+            is_dir,
+        });
 
         Ok(())
     }

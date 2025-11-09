@@ -1,9 +1,9 @@
 use crate::App;
 use ratatui::Frame;
+use synctui::DisplayMode;
 
 use super::{
-    breadcrumb::{self, DisplayMode},
-    dialogs, folder_list, layout, legend, search, status_bar, system_bar, toast,
+    breadcrumb, dialogs, folder_list, layout, legend, search, status_bar, system_bar, toast,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -249,12 +249,22 @@ pub fn render(f: &mut Frame, app: &mut App) {
     );
 
     // Render confirmation dialogs if active
-    if let Some((_folder_id, changed_files)) = &app.model.ui.confirm_revert {
-        dialogs::render_revert_confirmation(f, changed_files);
-    }
-
-    if let Some((_host_path, display_name, is_dir)) = &app.model.ui.confirm_delete {
-        dialogs::render_delete_confirmation(f, display_name, *is_dir);
+    if let Some(action) = &app.model.ui.confirm_action {
+        match action {
+            crate::model::ConfirmAction::Revert { changed_files, .. } => {
+                dialogs::render_revert_confirmation(f, changed_files);
+            }
+            crate::model::ConfirmAction::Delete { name, is_dir, .. } => {
+                dialogs::render_delete_confirmation(f, name, *is_dir);
+            }
+            crate::model::ConfirmAction::IgnoreDelete { name, is_dir, .. } => {
+                // Not implemented - would render ignore+delete confirmation
+                dialogs::render_delete_confirmation(f, name, *is_dir);
+            }
+            crate::model::ConfirmAction::PauseResume { label, is_paused, .. } => {
+                dialogs::render_pause_resume_confirmation(f, label, *is_paused);
+            }
+        }
     }
 
     // Render setup help dialog if active
@@ -265,10 +275,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
             _ => "Unknown error",
         };
         dialogs::render_setup_help(f, error_message, &app.model.ui.config_path);
-    }
-
-    if let Some((_folder_id, folder_label, is_paused)) = &app.model.ui.confirm_pause_resume {
-        dialogs::render_pause_resume_confirmation(f, folder_label, *is_paused);
     }
 
     if let Some(pattern_state) = &mut app.model.ui.pattern_selection {
