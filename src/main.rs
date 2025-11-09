@@ -947,6 +947,24 @@ impl App {
         }
     }
 
+    /// Invalidate out-of-sync cache and refresh summary modal if open
+    ///
+    /// This is the single operation for "folder's out-of-sync state changed".
+    /// Invalidates cache AND triggers refresh of summary modal (if open).
+    fn invalidate_and_refresh_out_of_sync_summary(&mut self, folder_id: &str) {
+        // Invalidate cache
+        let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
+
+        // If summary modal is open, refresh it
+        if self.model.ui.out_of_sync_summary.is_some() {
+            let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+                folder_id: folder_id.to_string(),
+                page: None,
+                perpage: Some(1000),
+            });
+        }
+    }
+
     /// Apply out-of-sync filter to current breadcrumb level
     fn apply_out_of_sync_filter(&mut self) {
         // Don't filter folder list (only breadcrumbs)

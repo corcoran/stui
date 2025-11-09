@@ -111,7 +111,9 @@ pub struct NeedResponse {
     pub progress: Vec<FileInfo>,
     pub queued: Vec<FileInfo>,
     pub rest: Vec<FileInfo>,
+    #[allow(dead_code)]
     pub page: u32,
+    #[allow(dead_code)]
     pub perpage: u32,
 }
 

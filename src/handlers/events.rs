@@ -30,17 +30,8 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             let _ = app.cache.invalidate_single_file(&folder_id, &file_path);
             let _ = app.cache.invalidate_folder_status(&folder_id);
 
-            // Invalidate out-of-sync categories for this folder (will trigger re-fetch of /rest/db/need)
-            let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
-
-            // If out-of-sync summary modal is open, queue fresh data fetch
-            if app.model.ui.out_of_sync_summary.is_some() {
-                let _ = app.api_tx.send(ApiRequest::GetNeededFiles {
-                    folder_id: folder_id.clone(),
-                    page: None,
-                    perpage: Some(1000),
-                });
-            }
+            // Invalidate out-of-sync cache and refresh summary modal if open
+            app.invalidate_and_refresh_out_of_sync_summary(&folder_id);
 
             // Invalidate local changed cache for this folder
             let _ = app.cache.invalidate_local_changed(&folder_id);
@@ -110,17 +101,8 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             // Invalidate folder status cache to refresh receiveOnlyTotalItems count
             let _ = app.cache.invalidate_folder_status(&folder_id);
 
-            // Invalidate out-of-sync categories for this folder (will trigger re-fetch of /rest/db/need)
-            let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
-
-            // If out-of-sync summary modal is open, queue fresh data fetch
-            if app.model.ui.out_of_sync_summary.is_some() {
-                let _ = app.api_tx.send(ApiRequest::GetNeededFiles {
-                    folder_id: folder_id.clone(),
-                    page: None,
-                    perpage: Some(1000),
-                });
-            }
+            // Invalidate out-of-sync cache and refresh summary modal if open
+            app.invalidate_and_refresh_out_of_sync_summary(&folder_id);
 
             // Invalidate local changed cache for this folder
             let _ = app.cache.invalidate_local_changed(&folder_id);
@@ -235,18 +217,9 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 folder_id, file_path
             ));
 
-            // Invalidate out-of-sync categories for this folder
+            // Invalidate out-of-sync cache and refresh summary modal if open
             // File just finished syncing, so need_category may have changed
-            let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
-
-            // If out-of-sync summary modal is open, queue fresh data fetch
-            if app.model.ui.out_of_sync_summary.is_some() {
-                let _ = app.api_tx.send(ApiRequest::GetNeededFiles {
-                    folder_id: folder_id.clone(),
-                    page: None,
-                    perpage: Some(1000),
-                });
-            }
+            app.invalidate_and_refresh_out_of_sync_summary(&folder_id);
 
             // Don't clear state or fetch FileInfo - causes flicker and API flood
             // LocalIndexUpdated event will trigger Browse refresh with fresh data
