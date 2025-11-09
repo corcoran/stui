@@ -67,18 +67,44 @@ pub fn can_delete_file(focus_level: usize, breadcrumb_trail_empty: bool) -> bool
 /// # Examples
 /// ```
 /// use synctui::logic::folder::should_show_restore_button;
-/// use synctui::api::FolderStatus;
 ///
 /// // Show restore: breadcrumb view + has changes
-/// let status = FolderStatus { receive_only_total_items: 5, ..Default::default() };
-/// assert!(should_show_restore_button(1, Some(&status)));
+/// assert!(should_show_restore_button(1, Some(&synctui::api::FolderStatus {
+///     state: "idle".to_string(),
+///     sequence: 0,
+///     global_bytes: 0,
+///     global_deleted: 0,
+///     global_directories: 0,
+///     global_files: 0,
+///     global_symlinks: 0,
+///     global_total_items: 0,
+///     in_sync_bytes: 0,
+///     in_sync_files: 0,
+///     local_bytes: 0,
+///     local_deleted: 0,
+///     local_directories: 0,
+///     local_files: 0,
+///     local_symlinks: 0,
+///     local_total_items: 0,
+///     need_bytes: 0,
+///     need_deletes: 0,
+///     need_directories: 0,
+///     need_files: 0,
+///     need_symlinks: 0,
+///     need_total_items: 0,
+///     receive_only_changed_bytes: 0,
+///     receive_only_changed_deletes: 0,
+///     receive_only_changed_directories: 0,
+///     receive_only_changed_files: 0,
+///     receive_only_changed_symlinks: 0,
+///     receive_only_total_items: 5,  // Has local changes
+/// })));
 ///
 /// // Don't show: in folder list view
-/// assert!(!should_show_restore_button(0, Some(&status)));
+/// assert!(!should_show_restore_button(0, None));
 ///
 /// // Don't show: no local changes
-/// let status = FolderStatus { receive_only_total_items: 0, ..Default::default() };
-/// assert!(!should_show_restore_button(1, Some(&status)));
+/// assert!(!should_show_restore_button(1, None));
 /// ```
 pub fn should_show_restore_button(
     focus_level: usize,
