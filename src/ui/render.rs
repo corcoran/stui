@@ -34,9 +34,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
             let level_idx = app.model.navigation.focus_level - 1;
             if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
                 let folder_label = Some(level.folder_label.clone());
-                let item_count = Some(level.items.len());
+                // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
+                let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
+                let item_count = Some(display_items.len());
                 let selected_item = level.selected_index.and_then(|sel| {
-                    level.items.get(sel).map(|item| {
+                    display_items.get(sel).map(|item| {
                         let sync_state = level.file_sync_states.get(&item.name).copied();
                         let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
                         let exists = if is_ignored {

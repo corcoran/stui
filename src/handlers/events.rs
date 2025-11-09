@@ -107,9 +107,15 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             });
 
             // Update last change info for this folder
+            // RemoteIndexUpdated sends empty dir_path, so show a generic message
+            let display_path = if dir_path.is_empty() {
+                "(remote changes)".to_string()
+            } else {
+                dir_path.clone()
+            };
             app.model.syncthing.last_folder_updates.insert(
                 folder_id.clone(),
-                (std::time::SystemTime::now(), dir_path.clone()),
+                (std::time::SystemTime::now(), display_path),
             );
 
             // Clear in-memory state for all files in this directory and trigger refresh if viewing

@@ -35,7 +35,11 @@
       "SlashCommand(/superpowers:write-plan)",
       "Skill(superpowers:writing-plans)",
       "Skill(superpowers:executing-plans)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "SlashCommand(/superpowers:execute-plan:*)",
+      "Bash(/tmp/attempted-fixes.patch)",
+      "Bash(git checkout:*)",
+      "Skill(superpowers:systematic-debugging)"
     ],
     "deny": [],
     "ask": []

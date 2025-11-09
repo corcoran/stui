@@ -930,11 +930,24 @@ impl App {
                 }
             };
 
-            // If no out-of-sync items, clear filter (show all items)
+            // If no out-of-sync items in cache, handle based on current filter state
             if out_of_sync_items.is_empty() {
-                crate::log_debug("DEBUG [Filter]: No out-of-sync items, clearing filter");
-                level.filtered_items = None;
-                return;
+                if level.filtered_items.is_some() {
+                    // Filter already active but cache is empty (likely just invalidated)
+                    // Queue fresh NeededFiles request to refresh cache, then filter will update
+                    crate::log_debug("DEBUG [Filter]: Cache empty but filter active, queuing NeededFiles refresh");
+                    let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+                        folder_id: folder_id.clone(),
+                        page: None,
+                        perpage: Some(1000),
+                    });
+                    // Keep existing filtered_items until fresh data arrives
+                    return;
+                } else {
+                    // No filter active and no out-of-sync items - don't activate filter
+                    crate::log_debug("DEBUG [Filter]: No out-of-sync items, not activating filter");
+                    return;
+                }
             }
 
             // Get current directory items from cache (unfiltered source)

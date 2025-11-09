@@ -264,6 +264,24 @@ async fn event_listener_loop(
                                         }
                                     }
                                 }
+                                "RemoteIndexUpdated" => {
+                                    // Remote device's index changed - invalidate entire folder
+                                    // This triggers sequence check which will refresh Browse if needed
+                                    if let Some(folder_id) =
+                                        event.data.get("folder").and_then(|v| v.as_str())
+                                    {
+                                        let invalidation = CacheInvalidation::Directory {
+                                            folder_id: folder_id.to_string(),
+                                            dir_path: String::new(), // Empty = entire folder
+                                        };
+
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: RemoteIndexUpdated - invalidating entire folder: {}",
+                                            folder_id
+                                        ));
+                                        let _ = invalidation_tx.send(invalidation);
+                                    }
+                                }
                                 _ => {
                                     // Ignore other event types (but log them for debugging)
                                     log_debug(&format!(
