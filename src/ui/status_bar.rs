@@ -750,7 +750,7 @@ mod tests {
             None,
             0,
         );
-        assert!(status.contains("📄⚠️ Ignored"));
+        assert!(status.contains("📄🔇 Ignored"));
         assert!(status.contains("Selected: test.txt"));
         assert!(status.contains("Ignored, not deleted!"));
     }

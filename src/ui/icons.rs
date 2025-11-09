@@ -144,8 +144,8 @@ impl IconRenderer {
 
     /// Render an ignored item (shows special indicator based on existence)
     /// Follows pattern: <file|dir><status>
-    /// - exists: <file|dir>⚠️  (e.g., 📄⚠️ or 📁⚠️)
-    /// - deleted: <file|dir>🚫  (e.g., 📄🚫 or 📁🚫)
+    /// - exists: <file|dir>🔇  (e.g., 📄🔇 or 📁🔇) - muted/ignored but present
+    /// - deleted: <file|dir>🚫  (e.g., 📄🚫 or 📁🚫) - blocked/deleted
     pub fn ignored_item(&self, is_dir: bool, exists: bool) -> Vec<Span<'static>> {
         let mut spans = vec![];
 
@@ -158,17 +158,17 @@ impl IconRenderer {
 
         // Add status icon based on existence
         if exists {
-            // Ignored + exists: show warning icon
-            let warning_span = match self.mode {
+            // Ignored + exists: show muted icon (distinct from warning)
+            let muted_span = match self.mode {
                 IconMode::Emoji => {
-                    Span::styled("⚠️ ", Style::default().fg(self.theme.out_of_sync_color))
+                    Span::styled("🔇 ", Style::default().fg(self.theme.ignored_color))
                 }
                 IconMode::NerdFont => Span::styled(
-                    "\u{F071} ",
-                    Style::default().fg(self.theme.out_of_sync_color),
+                    "\u{F070} ",  // eye-slash icon
+                    Style::default().fg(self.theme.ignored_color),
                 ),
             };
-            spans.push(warning_span);
+            spans.push(muted_span);
         } else {
             // Ignored + deleted: show block icon
             let block_span = match self.mode {
