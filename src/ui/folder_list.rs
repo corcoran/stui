@@ -1,4 +1,5 @@
 use super::icons::{FolderState, IconRenderer};
+use super::status_bar::map_folder_state;
 use crate::api::{Folder, FolderStatus};
 use ratatui::{
     layout::Rect,
@@ -33,21 +34,19 @@ pub fn render_folder_list(
             } else if folder.paused {
                 FolderState::Paused
             } else if let Some(status) = folder_statuses.get(&folder.id) {
-                if status.state == "" || status.state == "paused" {
-                    FolderState::Paused
-                } else if status.state == "syncing" {
-                    FolderState::Syncing
-                } else if status.need_total_items > 0 || status.receive_only_total_items > 0 {
-                    FolderState::OutOfSync
-                } else if status.state == "idle" {
-                    FolderState::Synced
-                } else if status.state.starts_with("sync") {
-                    FolderState::Syncing
-                } else if status.state == "scanning" {
-                    FolderState::Scanning
+                // Use the same mapping logic as status bar for consistency
+                let api_state = if status.state.is_empty() {
+                    "paused"
                 } else {
-                    FolderState::Unknown
-                }
+                    &status.state
+                };
+
+                let (state, _label) = map_folder_state(
+                    api_state,
+                    status.receive_only_total_items,
+                    status.need_total_items,
+                );
+                state
             } else {
                 FolderState::Error
             };

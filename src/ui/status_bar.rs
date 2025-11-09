@@ -23,7 +23,7 @@ use std::collections::HashMap;
 ///
 /// # Returns
 /// Tuple of (FolderState enum, display label)
-fn map_folder_state(
+pub fn map_folder_state(
     api_state: &str,
     receive_only_items: u64,
     need_total_items: u64,
