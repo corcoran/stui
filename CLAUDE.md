@@ -60,6 +60,30 @@ Every code change requires this exact workflow:
 
 This is not optional. This is not a suggestion. **This is how professional software is built.**
 
+### Git Commit Commands
+
+**CRITICAL: Avoid "STDIN" prefix in commit messages**
+
+The user has `cat` aliased to `bat`, which adds "STDIN" label when reading from heredocs. **Always use `/bin/cat` instead of `cat` in git commit commands.**
+
+**Bad pattern (adds "STDIN" prefix):**
+```bash
+git commit -m "$(cat <<'EOF'
+commit message
+EOF
+)"
+```
+
+**Good pattern (no STDIN prefix):**
+```bash
+git commit -m "$(/bin/cat <<'EOF'
+commit message
+EOF
+)"
+```
+
+**Why:** `cat` is aliased to `bat --style header --style snip --style changes --style header`, and bat labels stdin input as "STDIN".
+
 ### Other Instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.
