@@ -644,6 +644,12 @@ impl FileDetails {
         match (&self.local, &self.global) {
             // Both local and global are present
             (Some(local), Some(global)) => {
+                // Check if file doesn't exist locally (sequence=0)
+                // API returns local object even when file doesn't exist locally
+                if local.sequence == 0 && global.sequence > 0 {
+                    return SyncState::RemoteOnly;
+                }
+
                 if local.ignored {
                     SyncState::Ignored
                 } else if local.deleted && global.deleted {
@@ -692,5 +698,71 @@ mod tests {
         // We can't actually call the API without a real instance,
         // but we can verify the method exists and accepts correct params
         // Real testing will happen in integration tests
+    }
+
+    #[test]
+    fn test_determine_sync_state_remote_only_with_sequence_zero() {
+        // Bug: Files with local.sequence=0 (don't exist locally) were showing as OutOfSync
+        // because empty local.version != global.version
+        // Expected: sequence=0 should return RemoteOnly, not OutOfSync
+
+        let file_details = FileDetails {
+            local: Some(FileInfo {
+                sequence: 0, // KEY: File doesn't exist locally
+                deleted: false,
+                ignored: false,
+                version: vec![], // Empty version
+                blocks_hash: None,
+                ..Default::default()
+            }),
+            global: Some(FileInfo {
+                sequence: 6629, // Exists remotely
+                deleted: false,
+                ignored: false,
+                version: vec!["DEVICE:12345".to_string()], // Has version
+                blocks_hash: Some("hash123".to_string()),
+                ..Default::default()
+            }),
+            availability: vec![], // Has availability (remote devices have it)
+        };
+
+        let state = file_details.determine_sync_state();
+        assert_eq!(
+            state,
+            SyncState::RemoteOnly,
+            "File with local.sequence=0 should be RemoteOnly, not {:?}",
+            state
+        );
+    }
+
+    #[test]
+    fn test_determine_sync_state_out_of_sync_with_actual_version_mismatch() {
+        // Verify that real version mismatches (both files exist) still return OutOfSync
+        let file_details = FileDetails {
+            local: Some(FileInfo {
+                sequence: 100, // File exists locally
+                deleted: false,
+                ignored: false,
+                version: vec!["DEVICE:100".to_string()],
+                blocks_hash: Some("hash_local".to_string()),
+                ..Default::default()
+            }),
+            global: Some(FileInfo {
+                sequence: 200, // Different global version
+                deleted: false,
+                ignored: false,
+                version: vec!["DEVICE:200".to_string()],
+                blocks_hash: Some("hash_global".to_string()),
+                ..Default::default()
+            }),
+            availability: vec![],
+        };
+
+        let state = file_details.determine_sync_state();
+        assert_eq!(
+            state,
+            SyncState::OutOfSync,
+            "File with different versions should be OutOfSync"
+        );
     }
 }
