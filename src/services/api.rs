@@ -303,8 +303,9 @@ impl ApiService {
 
     /// Helper to get local changed file paths
     async fn get_local_changed_files(client: &SyncthingClient, folder_id: &str) -> Result<Vec<String>> {
-        let items = client.get_local_changed_items(folder_id, None).await?;
-        Ok(items.into_iter().map(|item| item.name).collect())
+        // Use get_local_changed_files() which includes deleted files
+        // NOT get_local_changed_items() which filters them out for browse UI
+        client.get_local_changed_files(folder_id).await
     }
 
     /// Execute an API request and return the response

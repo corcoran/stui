@@ -1180,4 +1180,27 @@ mod tests {
         let after = cache.get_local_changed_items("test-folder").unwrap();
         assert_eq!(after.len(), 0);
     }
+
+    #[test]
+    fn test_cache_includes_deleted_files() {
+        // This test verifies that the cache can store and retrieve deleted file paths
+        // The bug was that services/api.rs was calling get_local_changed_items()
+        // which filters out deleted files, instead of get_local_changed_files()
+        // which includes all files
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        // Simulate caching deleted files (which should come from API)
+        let local_files = vec![
+            "deleted-file.jpg".to_string(),  // Deleted file
+            "added-file.txt".to_string(),    // Added file
+        ];
+
+        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+
+        // Both files should be in cache, including deleted ones
+        let items = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(items.len(), 2, "Cache should include all files from API, including deleted");
+        assert!(items.contains(&"deleted-file.jpg".to_string()), "Deleted files should be cached");
+        assert!(items.contains(&"added-file.txt".to_string()), "Added files should be cached");
+    }
 }
