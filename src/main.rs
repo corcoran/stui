@@ -1005,6 +1005,52 @@ impl App {
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         handlers::handle_key(self, key).await
     }
+
+    pub fn open_out_of_sync_summary(&mut self) {
+        use crate::model::types::OutOfSyncSummaryState;
+        use crate::services::api::ApiRequest;
+        use std::collections::{HashMap, HashSet};
+
+        // Initialize summary state
+        let mut summary_state = OutOfSyncSummaryState {
+            selected_index: 0,
+            breakdowns: HashMap::new(),
+            loading: HashSet::new(),
+        };
+
+        // For each folder, check status and queue requests if needed
+        for folder in &self.model.syncthing.folders {
+            let folder_id = folder.id.clone();
+
+            // Check if folder has out-of-sync items (from cached status)
+            if let Some(status) = self.model.syncthing.folder_statuses.get(&folder_id) {
+                let has_needed = status.need_total_items > 0;
+                let has_local_changes = status.receive_only_total_items > 0;
+
+                if has_needed {
+                    // Queue GetNeededFiles request
+                    summary_state.loading.insert(folder_id.clone());
+
+                    let _ = self.api_tx.send(ApiRequest::GetNeededFiles {
+                        folder_id: folder_id.clone(),
+                        page: None,
+                        perpage: Some(1000), // Get all items
+                    });
+                }
+
+                if !has_needed && !has_local_changes {
+                    // All synced - set empty breakdown
+                    summary_state.breakdowns.insert(folder_id, Default::default());
+                }
+            }
+        }
+
+        self.model.ui.out_of_sync_summary = Some(summary_state);
+    }
+
+    pub fn close_out_of_sync_summary(&mut self) {
+        self.model.ui.out_of_sync_summary = None;
+    }
 }
 
 /// Determine the config file path with fallback logic

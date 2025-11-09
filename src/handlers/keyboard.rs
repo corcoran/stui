@@ -207,6 +207,19 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
 
+        // Handle summary modal closing (process before other keys)
+        if app.model.ui.out_of_sync_summary.is_some() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('f') => {
+                    app.close_out_of_sync_summary();
+                    return Ok(());
+                }
+                _ => {
+                    // Ignore other keys while modal is showing
+                    return Ok(());
+                }
+            }
+        }
 
         // Handle pattern selection menu
         if let Some(pattern_state) = &mut app.model.ui.pattern_selection {
@@ -654,6 +667,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Char('c') if app.model.navigation.focus_level > 0 => {
                 // Copy file/directory path (breadcrumbs only)
                 let _ = app.copy_to_clipboard();
+            }
+            KeyCode::Char('f') if app.model.navigation.focus_level == 0 => {
+                // Open out-of-sync summary modal (only in folder view)
+                app.open_out_of_sync_summary();
             }
             KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {
                 // Pause/resume folder (only in folder view)
