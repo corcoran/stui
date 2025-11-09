@@ -403,6 +403,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Sequence changed - invalidate cache
                     let _ = app.cache.invalidate_folder(&folder_id);
 
+                    // Invalidate out-of-sync categories (rescan may have changed sync states)
+                    let _ = app.cache.invalidate_out_of_sync_categories(&folder_id);
+
                     // Clear discovered directories for this folder (so they get re-discovered with new sequence)
                     app.model.performance.discovered_dirs
                         .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
