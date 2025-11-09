@@ -610,6 +610,7 @@ mod tests {
             None,
             None,
             0,
+            false, // out_of_sync_filter_active
         );
         assert!(status.contains("📄✅ Synced"));
         assert!(status.contains("Selected: test.txt"));
@@ -635,6 +636,7 @@ mod tests {
             None,
             None,
             0,
+            false, // out_of_sync_filter_active
         );
         assert!(status.contains("📄⚠️ Out of Sync"));
         assert!(status.contains("Selected: test.txt"));
@@ -659,7 +661,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄💻 Local Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -684,7 +686,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄☁️ Remote Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -709,7 +711,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄🔄 Syncing"));
         assert!(status.contains("Selected: test.txt"));
@@ -735,7 +737,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📁✅ Synced"));
         assert!(status.contains("Selected: subdir/"));
@@ -760,7 +762,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄🔇 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -786,7 +788,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄🚫 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -813,7 +815,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(status.contains("📄❓ Unknown"));
         assert!(status.contains("Selected: test.txt"));
@@ -839,7 +841,7 @@ mod tests {
             false,
             None,
             None,
-            0,
+            0, false,
         );
         assert!(!status.contains("Synced"));
         assert!(!status.contains("Out of Sync"));
