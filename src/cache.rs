@@ -787,6 +787,34 @@ impl CacheDb {
         Ok(())
     }
 
+    pub fn cache_local_changed_files(&self, folder_id: &str, file_paths: &[String]) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        // Clear all local_changed flags for this folder first
+        self.conn.execute(
+            "UPDATE sync_states
+             SET local_changed = 0, local_cached_at = NULL
+             WHERE folder_id = ?1",
+            params![folder_id],
+        )?;
+
+        // Set local_changed flag for provided files
+        for file_path in file_paths {
+            self.conn.execute(
+                "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, local_changed, local_cached_at)
+                 VALUES (?1, ?2, 0, 'LocalOnly', 1, ?3)
+                 ON CONFLICT(folder_id, file_path) DO UPDATE SET
+                     local_changed = 1,
+                     local_cached_at = ?3",
+                params![folder_id, file_path, now],
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub fn get_folder_sync_breakdown(&self, folder_id: &str) -> Result<FolderSyncBreakdown> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -878,6 +906,35 @@ impl CacheDb {
         for row in rows {
             let (path, category) = row?;
             items.insert(path, category);
+        }
+
+        Ok(items)
+    }
+
+    pub fn get_local_changed_items(&self, folder_id: &str) -> Result<Vec<String>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        let ttl = 30; // 30 seconds
+        let cutoff = now - ttl;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT file_path
+             FROM sync_states
+             WHERE folder_id = ?1
+               AND local_changed = 1
+               AND local_cached_at > ?2"
+        )?;
+
+        let rows = stmt.query_map(params![folder_id, cutoff], |row| {
+            let file_path: String = row.get(0)?;
+            Ok(file_path)
+        })?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
         }
 
         Ok(items)
@@ -1047,5 +1104,54 @@ mod tests {
 
         assert!(has_local_changed, "local_changed column should exist");
         assert!(has_local_cached_at, "local_cached_at column should exist");
+    }
+
+    #[test]
+    fn test_cache_local_changed_files_stores_flag() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        let local_files = vec![
+            "dir1/file1.txt".to_string(),
+            "file2.txt".to_string(),
+        ];
+
+        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+
+        // Verify files were marked as local_changed
+        let items = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.contains(&"dir1/file1.txt".to_string()));
+        assert!(items.contains(&"file2.txt".to_string()));
+    }
+
+    #[test]
+    fn test_cache_local_changed_files_respects_ttl() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use rusqlite::params;
+
+        // Insert file with timestamp 40 seconds in the past (expired)
+        let past = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap()
+            .as_secs() as i64 - 40;
+
+        cache.conn.execute(
+            "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, local_changed, local_cached_at)
+             VALUES ('test-folder', 'old-file.txt', 0, 'LocalOnly', 1, ?1)",
+            params![past],
+        ).unwrap();
+
+        // Should return empty due to TTL expiration (40s > 30s)
+        let items = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(items.len(), 0, "Expired items should not be returned");
+
+        // Now cache fresh data - should be returned
+        let fresh_files = vec!["fresh-file.txt".to_string()];
+        cache.cache_local_changed_files("test-folder", &fresh_files).unwrap();
+
+        let fresh_items = cache.get_local_changed_items("test-folder").unwrap();
+        assert_eq!(fresh_items.len(), 1, "Fresh items should be returned");
+        assert_eq!(fresh_items[0], "fresh-file.txt");
     }
 }
