@@ -179,7 +179,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
         breadcrumb::render_breadcrumb_panel(
             f,
             area,
-            &level.items,
+            &level.items,                       // Unfiltered source
+            level.filtered_items.as_ref(),      // Filtered view (if active)
             &level.file_sync_states,
             &level.ignored_exists,
             &mut temp_state,

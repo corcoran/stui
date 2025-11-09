@@ -162,7 +162,8 @@ fn build_list_item<'a>(
 pub fn render_breadcrumb_panel(
     f: &mut Frame,
     area: Rect,
-    items: &[BrowseItem],
+    items: &[BrowseItem],              // Source items (unfiltered)
+    filtered_items: Option<&Vec<BrowseItem>>, // Filtered view
     file_sync_states: &std::collections::HashMap<String, SyncState>,
     ignored_exists: &std::collections::HashMap<String, bool>,
     state: &mut ratatui::widgets::ListState,
@@ -176,7 +177,10 @@ pub fn render_breadcrumb_panel(
 ) {
     let panel_width = area.width;
 
-    let list_items: Vec<ListItem> = items
+    // Use filtered items if available, otherwise use all items
+    let display_items = filtered_items.map_or(items, |v| v.as_slice());
+
+    let list_items: Vec<ListItem> = display_items
         .iter()
         .map(|item| {
             // Use cached state directly (directories show their own metadata state, not aggregate)
