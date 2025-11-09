@@ -30,7 +30,8 @@
       "Bash({} ;)",
       "Bash(cat:*)",
       "Bash(iconv:*)",
-      "Bash(1)"
+      "Bash(1)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
