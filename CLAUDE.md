@@ -84,6 +84,35 @@ EOF
 
 **Why:** `cat` is aliased to `bat --style header --style snip --style changes --style header`, and bat labels stdin input as "STDIN".
 
+### Syncthing API Testing with curl
+
+**CRITICAL: Always read API credentials from user config file**
+
+When testing Syncthing API endpoints with curl commands:
+
+1. **Read the config file first**: `~/.config/synctui/config.yaml`
+2. **Extract `api_key` and `base_url` from the config**
+3. **Use those values in curl commands**
+
+**Example workflow:**
+```bash
+# Read config to get API key and base URL
+cat ~/.config/synctui/config.yaml
+
+# Then use extracted values in curl
+curl -s -H "X-API-Key: <key-from-config>" "<base_url-from-config>/rest/db/need?folder=lok75-7d42r"
+```
+
+**NEVER:**
+- ❌ Use hardcoded API keys
+- ❌ Guess at API credentials
+- ❌ Use old/stale credentials from previous sessions
+
+**ALWAYS:**
+- ✅ Read config file first
+- ✅ Use current credentials from config
+- ✅ Verify base_url matches user's setup
+
 ### Other Instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.

@@ -34,7 +34,8 @@
       "Bash(git log:*)",
       "SlashCommand(/superpowers:write-plan)",
       "Skill(superpowers:writing-plans)",
-      "Skill(superpowers:executing-plans)"
+      "Skill(superpowers:executing-plans)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

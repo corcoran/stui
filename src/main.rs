@@ -1158,8 +1158,16 @@ impl App {
             return;
         }
 
-        // If filter is already active, clear it
-        if self.model.ui.out_of_sync_filter.is_some() {
+        // If filter is already active for the CURRENT level, clear it
+        let filter_is_for_current_level = self
+            .model
+            .ui
+            .out_of_sync_filter
+            .as_ref()
+            .map(|filter| filter.origin_level == self.model.navigation.focus_level)
+            .unwrap_or(false);
+
+        if filter_is_for_current_level {
             self.model.ui.out_of_sync_filter = None;
             // Reload current breadcrumb to show all items
             let level_idx = self.model.navigation.focus_level - 1;
@@ -1174,6 +1182,9 @@ impl App {
             }
             return;
         }
+
+        // Clear any stale filter from a different folder/level
+        self.model.ui.out_of_sync_filter = None;
 
         // Get current folder info
         let level_idx = self.model.navigation.focus_level - 1;

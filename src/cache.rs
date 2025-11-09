@@ -464,6 +464,9 @@ impl CacheDb {
         }
     }
 
+    /// Save sync state for a single file
+    ///
+    /// IMPORTANT: Uses UPSERT to preserve need_category and need_cached_at columns
     pub fn save_sync_state(
         &self,
         folder_id: &str,
@@ -472,8 +475,13 @@ impl CacheDb {
         file_sequence: u64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO sync_states (folder_id, file_path, file_sequence, sync_state)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+             ON CONFLICT(folder_id, file_path)
+             DO UPDATE SET
+                file_sequence = excluded.file_sequence,
+                sync_state = excluded.sync_state
+                -- Explicitly preserve need_category and need_cached_at by not updating them",
             params![
                 folder_id,
                 file_path,
@@ -486,6 +494,10 @@ impl CacheDb {
     }
 
     /// Save multiple sync states in a single transaction for better performance
+    ///
+    /// IMPORTANT: This uses UPSERT to preserve need_category and need_cached_at columns
+    /// when updating existing rows. This prevents race conditions where cache_needed_files()
+    /// sets need_category, then save_sync_states_batch() clears it.
     pub fn save_sync_states_batch(
         &self,
         states: &[(String, String, SyncState, u64)], // (folder_id, file_path, state, sequence)
@@ -503,9 +515,15 @@ impl CacheDb {
         let tx = self.conn.unchecked_transaction()?;
 
         {
+            // Use INSERT ... ON CONFLICT to preserve need_category and need_cached_at
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO sync_states (folder_id, file_path, file_sequence, sync_state)
-                 VALUES (?1, ?2, ?3, ?4)"
+                "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+                 ON CONFLICT(folder_id, file_path)
+                 DO UPDATE SET
+                    file_sequence = excluded.file_sequence,
+                    sync_state = excluded.sync_state
+                    -- Explicitly preserve need_category and need_cached_at by not updating them"
             )?;
 
             for (folder_id, file_path, state, seq) in states {
@@ -883,6 +901,45 @@ mod tests {
 
         // Verify categories were stored
         // (We'll implement get_folder_sync_breakdown next to verify)
+    }
+
+    #[test]
+    fn test_save_sync_states_batch_preserves_need_category() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        // First, cache needed files (sets need_category and need_cached_at)
+        let need_response = NeedResponse {
+            progress: vec![],
+            queued: vec![],
+            rest: vec![
+                FileInfo { name: "status-test".to_string(), ..Default::default() },
+                FileInfo { name: "test".to_string(), ..Default::default() },
+            ],
+            page: 1,
+            perpage: 100,
+        };
+
+        cache.cache_needed_files("test-folder", &need_response).unwrap();
+
+        // Verify need_category was set
+        let items = cache.get_out_of_sync_items("test-folder").unwrap();
+        assert_eq!(items.len(), 2, "Should have 2 items with need_category");
+        assert_eq!(items.get("status-test"), Some(&"remote_only".to_string()));
+        assert_eq!(items.get("test"), Some(&"remote_only".to_string()));
+
+        // Now simulate save_sync_states_batch being called (like from pending writes flush)
+        let batch = vec![
+            ("test-folder".to_string(), "status-test".to_string(), SyncState::OutOfSync, 100),
+            ("test-folder".to_string(), "test".to_string(), SyncState::OutOfSync, 100),
+        ];
+
+        cache.save_sync_states_batch(&batch).unwrap();
+
+        // BUG: need_category should still be set, but it gets cleared!
+        let items_after = cache.get_out_of_sync_items("test-folder").unwrap();
+        assert_eq!(items_after.len(), 2, "Should STILL have 2 items with need_category after batch save");
+        assert_eq!(items_after.get("status-test"), Some(&"remote_only".to_string()), "need_category should be preserved");
+        assert_eq!(items_after.get("test"), Some(&"remote_only".to_string()), "need_category should be preserved");
     }
 
     #[test]

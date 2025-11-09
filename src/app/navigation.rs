@@ -340,9 +340,21 @@ impl App {
             self.model.performance.discovered_dirs.clear();
         }
 
+        // Only clear out-of-sync filter if backing out past the level where it was initiated
+        let should_clear_filter = if let Some(filter) = &self.model.ui.out_of_sync_filter {
+            // Clear filter if we're backing out of the origin level or below it
+            self.model.navigation.focus_level <= filter.origin_level
+        } else {
+            false
+        };
+
+        if should_clear_filter {
+            self.model.ui.out_of_sync_filter = None;
+        }
+
         if self.model.navigation.focus_level > 1 {
-            // Backing out to a parent breadcrumb - refresh it if search was cleared
-            if should_clear_search && self.model.navigation.focus_level >= 2 {
+            // Backing out to a parent breadcrumb - refresh it if search or filter was cleared
+            if (should_clear_search || should_clear_filter) && self.model.navigation.focus_level >= 2 {
                 let parent_idx = self.model.navigation.focus_level - 2;
                 if let Some(parent_level) = self.model.navigation.breadcrumb_trail.get(parent_idx) {
                     let folder_id = parent_level.folder_id.clone();
@@ -359,8 +371,8 @@ impl App {
             self.model.navigation.breadcrumb_trail.pop();
             self.model.navigation.focus_level -= 1;
         } else if self.model.navigation.focus_level == 1 {
-            // Going back to folder view - refresh root directory if search was cleared
-            if should_clear_search {
+            // Going back to folder view - refresh root directory if search or filter was cleared
+            if should_clear_search || should_clear_filter {
                 if let Some(root_level) = self.model.navigation.breadcrumb_trail.first() {
                     let folder_id = root_level.folder_id.clone();
                     let prefix = root_level.prefix.clone();
