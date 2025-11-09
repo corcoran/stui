@@ -181,8 +181,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     }
 
                     // Update level
-                    level.items = items.clone();
+                    level.items = items.clone();  // Update unfiltered source
                     level.file_sync_states = sync_states;
+
+                    // DON'T touch filtered_items here - let the filter functions manage it
 
                     // Update directory states based on their children
                     app.update_directory_states(idx);
@@ -190,9 +192,14 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Sort and restore selection using the saved name
                     app.sort_level_with_selection(idx, selected_name);
 
-                    // Apply search filter if search is active
+                    // Re-apply search filter if active
                     if !app.model.ui.search_query.is_empty() {
                         app.apply_search_filter();
+                    }
+
+                    // Re-apply out-of-sync filter if active
+                    if app.model.ui.out_of_sync_filter.is_some() {
+                        app.apply_out_of_sync_filter();
                     }
 
                     // Request FileInfo for ALL items (no filtering, let API service deduplicate)
