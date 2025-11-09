@@ -119,6 +119,16 @@ pub enum ConfirmAction {
     },
 }
 
+/// Folder sync breakdown - category counts for out-of-sync items
+#[derive(Debug, Clone, Default)]
+pub struct FolderSyncBreakdown {
+    pub downloading: usize,
+    pub queued: usize,
+    pub remote_only: usize,
+    pub modified: usize,
+    pub local_only: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

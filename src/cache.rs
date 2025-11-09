@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use crate::api::{BrowseItem, FolderStatus, NeedResponse, SyncState};
+use crate::model::types::FolderSyncBreakdown;
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -739,6 +740,46 @@ impl CacheDb {
         Ok(())
     }
 
+    pub fn get_folder_sync_breakdown(&self, folder_id: &str) -> Result<FolderSyncBreakdown> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        let ttl = 30; // 30 seconds
+        let cutoff = now - ttl;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT need_category, COUNT(*)
+             FROM sync_states
+             WHERE folder_id = ?1
+               AND need_category IS NOT NULL
+               AND need_cached_at > ?2
+             GROUP BY need_category"
+        )?;
+
+        let mut breakdown = FolderSyncBreakdown::default();
+
+        let rows = stmt.query_map(params![folder_id, cutoff], |row| {
+            let category: String = row.get(0)?;
+            let count: usize = row.get(1)?;
+            Ok((category, count))
+        })?;
+
+        for row in rows {
+            let (category, count) = row?;
+            match category.as_str() {
+                "downloading" => breakdown.downloading = count,
+                "queued" => breakdown.queued = count,
+                "remote_only" => breakdown.remote_only = count,
+                "modified" => breakdown.modified = count,
+                "local_only" => breakdown.local_only = count,
+                _ => {}
+            }
+        }
+
+        Ok(breakdown)
+    }
+
     pub fn get_device_name(&self) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -785,5 +826,34 @@ mod tests {
 
         // Verify categories were stored
         // (We'll implement get_folder_sync_breakdown next to verify)
+    }
+
+    #[test]
+    fn test_get_folder_sync_breakdown_counts_categories() {
+        let cache = CacheDb::new_in_memory().unwrap();
+
+        // Setup test data
+        let need_response = NeedResponse {
+            progress: vec![
+                FileInfo { name: "file1.txt".to_string(), ..Default::default() },
+                FileInfo { name: "file2.txt".to_string(), ..Default::default() },
+            ],
+            queued: vec![
+                FileInfo { name: "file3.txt".to_string(), ..Default::default() },
+            ],
+            rest: vec![],
+            page: 1,
+            perpage: 100,
+        };
+
+        cache.cache_needed_files("test-folder", &need_response).unwrap();
+
+        let breakdown = cache.get_folder_sync_breakdown("test-folder").unwrap();
+
+        assert_eq!(breakdown.downloading, 2);
+        assert_eq!(breakdown.queued, 1);
+        assert_eq!(breakdown.remote_only, 0);
+        assert_eq!(breakdown.modified, 0);
+        assert_eq!(breakdown.local_only, 0);
     }
 }
