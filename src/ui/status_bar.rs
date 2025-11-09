@@ -81,6 +81,7 @@ pub fn build_status_paragraph(
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
     pending_operations_count: usize,
+    out_of_sync_filter_active: bool,
 ) -> Paragraph<'static> {
     let status_line = build_status_line(
         icon_renderer,
@@ -96,6 +97,7 @@ pub fn build_status_paragraph(
         last_load_time_ms,
         cache_hit,
         pending_operations_count,
+        out_of_sync_filter_active,
     );
 
     // Parse status_line and color the labels (before colons)
@@ -155,6 +157,7 @@ fn build_status_line(
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
     pending_operations_count: usize,
+    out_of_sync_filter_active: bool,
 ) -> String {
     if focus_level == 0 {
         // Show selected folder status
@@ -283,6 +286,11 @@ fn build_status_line(
         );
         metrics.push(sort_display);
 
+        // Show out-of-sync filter indicator
+        if out_of_sync_filter_active {
+            metrics.push("Filter: Out-of-Sync".to_string());
+        }
+
         // Show pending operations count if any
         if pending_operations_count > 0 {
             metrics.push(format!("⏳ {} deletions processing", pending_operations_count));
@@ -369,6 +377,7 @@ pub fn render_status_bar(
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
     pending_operations_count: usize,
+    out_of_sync_filter_active: bool,
 ) {
     let status_bar = build_status_paragraph(
         icon_renderer,
@@ -384,6 +393,7 @@ pub fn render_status_bar(
         last_load_time_ms,
         cache_hit,
         pending_operations_count,
+        out_of_sync_filter_active,
     );
     f.render_widget(status_bar, area);
 }
@@ -404,6 +414,7 @@ pub fn calculate_status_height(
     last_load_time_ms: Option<u64>,
     cache_hit: Option<bool>,
     pending_operations_count: usize,
+    out_of_sync_filter_active: bool,
 ) -> u16 {
     // Build status line WITHOUT block borders for accurate line counting
     let status_line = build_status_line(
@@ -420,6 +431,7 @@ pub fn calculate_status_height(
         last_load_time_ms,
         cache_hit,
         pending_operations_count,
+        out_of_sync_filter_active,
     );
 
     // Parse status_line and color the labels (same as in build_status_paragraph)

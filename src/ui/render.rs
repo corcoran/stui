@@ -67,6 +67,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .sum();
 
     // Calculate dynamic status bar height
+    let out_of_sync_filter_active = app.model.ui.out_of_sync_filter.is_some();
     let status_height = status_bar::calculate_status_height(
         size.width,
         &app.icon_renderer,
@@ -82,6 +83,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.last_load_time_ms,
         app.model.performance.cache_hit,
         pending_operations_count,
+        out_of_sync_filter_active,
     );
 
     // Determine if search should be visible
@@ -249,6 +251,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.last_load_time_ms,
         app.model.performance.cache_hit,
         pending_operations_count,
+        out_of_sync_filter_active,
     );
 
     // Render confirmation dialogs if active
