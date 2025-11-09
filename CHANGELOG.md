@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ New Features
 
+**Status Bar State Indicators**
+- Visual sync state indicators for folders and files/directories in status bar
+- **Folder states**: Idle, Scanning, Syncing, Out of Sync, Local Additions, Error, Paused
+- **File/directory states**: Synced, Out of Sync, Local Only, Remote Only, Syncing, Ignored (exists/deleted), Unknown
+- Icons match Syncthing web UI terminology (e.g., "Local Additions" for receive-only folders with extra files)
+- Consistent icon display between folder list and status bar
+- Supports both emoji and nerdfont icon modes
+- Smart "Out of Sync" detection: shows warning when idle folder has items needing sync
+
 **ANSI/ASCII Art Viewer**
 - View classic ANSI art files directly in the terminal
 - Auto-detection of ANSI codes in any file (not just .ans/.asc extensions)
@@ -75,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **216 library tests + 221 binary tests + 16 integration tests = 453 total tests passing**
+- **245 binary tests + 16 integration tests = 261 total tests passing**
+- Added 23 new tests for status bar state indicators (14 folder state + 9 file/directory state)
 - Added 22 new tests for pure logic functions (TDD methodology)
 - Added 10 comprehensive reconnection flow tests
 - Added 6 tests for unified confirmation dialogs
