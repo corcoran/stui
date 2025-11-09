@@ -96,6 +96,15 @@ pub struct FileInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct NeedResponse {
+    pub progress: Vec<FileInfo>,
+    pub queued: Vec<FileInfo>,
+    pub rest: Vec<FileInfo>,
+    pub page: u32,
+    pub perpage: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct DeviceAvailability {
     pub id: String,
