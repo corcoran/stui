@@ -248,6 +248,23 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     ));
                     // This will recursively queue subdirectories, but discovered_dirs prevents duplicates
                     app.prefetch_subdirectories_for_search(&folder_id, prefix.as_deref());
+
+                    // Re-apply search filter to show newly cached items, but throttle to once per 300ms
+                    // to prevent grinding the app to a halt when prefetching hundreds of directories
+                    let elapsed = app.model.performance.last_search_filter_update.elapsed();
+                    if elapsed.as_millis() >= 300 {
+                        crate::log_debug(&format!(
+                            "DEBUG [BrowseResult]: Updating search filter ({}ms since last update)",
+                            elapsed.as_millis()
+                        ));
+                        app.model.performance.last_search_filter_update = std::time::Instant::now();
+                        app.apply_search_filter();
+                    } else {
+                        crate::log_debug(&format!(
+                            "DEBUG [BrowseResult]: Throttling search filter update (only {}ms since last)",
+                            elapsed.as_millis()
+                        ));
+                    }
                 }
             }
         }

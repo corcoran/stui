@@ -55,6 +55,9 @@ pub struct PerformanceModel {
 
     /// Last time user interacted with UI
     pub last_user_action: Instant,
+
+    /// Last time search filter was updated (for throttling)
+    pub last_search_filter_update: Instant,
 }
 
 impl PerformanceModel {
@@ -72,6 +75,7 @@ impl PerformanceModel {
             cache_hit: None,
             pending_ignore_deletes: HashMap::new(),
             last_user_action: Instant::now(),
+            last_search_filter_update: Instant::now(),
         }
     }
 

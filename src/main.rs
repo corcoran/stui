@@ -1654,6 +1654,17 @@ async fn run_app<B: ratatui::backend::Backend>(
             // LOWEST PRIORITY: Batch fetch file sync states for visible files
             app.batch_fetch_visible_sync_states(5);
 
+            // If search is active and we haven't updated recently, do a final update
+            // This ensures results appear after prefetch completes
+            if !app.model.ui.search_query.is_empty()
+                && app.model.ui.search_query.len() >= 2
+                && app.model.performance.last_search_filter_update.elapsed().as_millis() >= 300
+            {
+                crate::log_debug("DEBUG [idle]: Doing final search filter update after prefetch");
+                app.model.performance.last_search_filter_update = std::time::Instant::now();
+                app.apply_search_filter();
+            }
+
             // Update directory states based on their children (uses cache only, non-blocking)
             if app.model.navigation.focus_level > 0 && !app.model.navigation.breadcrumb_trail.is_empty() {
                 app.update_directory_states(app.model.navigation.focus_level - 1);
