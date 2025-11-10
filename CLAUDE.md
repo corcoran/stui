@@ -218,7 +218,10 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
 - `o`: Open file/directory with configured command (e.g., `xdg-open`, `code`, `vim`)
 - `d`: Delete file/directory from disk (with confirmation prompt)
-- `r`: Rescan folder via `POST /rest/db/scan`
+- `r`: **Rescan folder** - Shows confirmation dialog with options:
+  - `y`: Normal rescan - Trigger Syncthing scan, wait for sequence change to invalidate cache
+  - `f`: Force refresh - Immediately invalidate cache and trigger rescan (useful for stale cache bugs)
+  - `n` or `Esc`: Cancel
 - `R`: Restore deleted files (revert receive-only folder)
 - `s`: Cycle sort mode (Sync State → A-Z → Timestamp → Size)
 - `S`: Toggle reverse sort order

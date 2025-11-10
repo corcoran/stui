@@ -12,27 +12,29 @@ use anyhow::Result;
 use std::time::Instant;
 
 impl App {
-    pub(crate) fn rescan_selected_folder(&mut self) -> Result<()> {
-        // Get the folder ID to rescan
-        let folder_id = if self.model.navigation.focus_level == 0 {
-            // On folder list - rescan selected folder
-            if let Some(selected) = self.model.navigation.folders_state_selection {
-                if let Some(folder) = self.model.syncthing.folders.get(selected) {
-                    folder.id.clone()
-                } else {
-                    return Ok(());
-                }
-            } else {
-                return Ok(());
-            }
+    /// Get folder ID and label for rescan operation
+    /// Works in both folder list view and breadcrumb view
+    pub(crate) fn get_rescan_folder_info(&self) -> Option<(String, String)> {
+        if self.model.navigation.focus_level == 0 {
+            // Folder list view - get selected folder
+            let selected = self.model.navigation.folders_state_selection?;
+            let folder = self.model.syncthing.folders.get(selected)?;
+            Some((folder.id.clone(), folder.label.clone().unwrap_or_else(|| folder.id.clone())))
         } else {
-            // In a breadcrumb level - rescan the current folder
-            if !self.model.navigation.breadcrumb_trail.is_empty() {
-                self.model.navigation.breadcrumb_trail[0].folder_id.clone()
-            } else {
-                return Ok(());
+            // Breadcrumb view - get current folder from trail
+            if self.model.navigation.breadcrumb_trail.is_empty() {
+                return None;
             }
-        };
+            let level = &self.model.navigation.breadcrumb_trail[0];
+            Some((level.folder_id.clone(), level.folder_label.clone()))
+        }
+    }
+
+    pub(crate) fn rescan_selected_folder(&mut self) -> Result<()> {
+        // Get the folder ID using helper method
+        let (folder_id, _) = self
+            .get_rescan_folder_info()
+            .ok_or_else(|| anyhow::anyhow!("No folder selected"))?;
 
         log_debug(&format!(
             "DEBUG [rescan_selected_folder]: Requesting rescan for folder={}",
@@ -45,6 +47,87 @@ impl App {
             .send(services::api::ApiRequest::RescanFolder { folder_id });
 
         Ok(())
+    }
+
+    /// Force refresh a folder - invalidate cache immediately and trigger rescan
+    /// Unlike normal rescan, this doesn't wait for sequence change to invalidate cache
+    pub(crate) fn force_refresh_folder(&mut self, folder_id: &str) -> Result<()> {
+        log_debug(&format!(
+            "DEBUG [force_refresh_folder]: Force refreshing folder={}",
+            folder_id
+        ));
+
+        // Step 1: Invalidate cache and refresh breadcrumbs immediately
+        self.invalidate_and_refresh_folder(folder_id);
+
+        // Step 2: Trigger Syncthing rescan
+        let _ = self
+            .api_tx
+            .send(services::api::ApiRequest::RescanFolder {
+                folder_id: folder_id.to_string(),
+            });
+
+        Ok(())
+    }
+
+    /// Invalidate cache and refresh breadcrumbs for a folder
+    /// Used by both force_refresh_folder and FolderStatusResult handler
+    pub(crate) fn invalidate_and_refresh_folder(&mut self, folder_id: &str) {
+        log_debug(&format!(
+            "DEBUG [invalidate_and_refresh_folder]: Invalidating cache for folder={}",
+            folder_id
+        ));
+
+        // Invalidate cache
+        let _ = self.cache.invalidate_folder(folder_id);
+        let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
+
+        // Clear discovered directories (force re-discovery)
+        self.model
+            .performance
+            .discovered_dirs
+            .retain(|key| !key.starts_with(&format!("{}:", folder_id)));
+
+        // Refresh breadcrumbs if currently viewing this folder
+        if !self.model.navigation.breadcrumb_trail.is_empty()
+            && self.model.navigation.breadcrumb_trail[0].folder_id == folder_id
+        {
+            log_debug(&format!(
+                "DEBUG [invalidate_and_refresh_folder]: Refreshing {} breadcrumb levels for folder={}",
+                self.model.navigation.breadcrumb_trail.len(),
+                folder_id
+            ));
+
+            for (idx, level) in self.model.navigation.breadcrumb_trail.iter().enumerate() {
+                if level.folder_id == folder_id {
+                    let browse_key = format!(
+                        "{}:{}",
+                        folder_id,
+                        level.prefix.as_deref().unwrap_or("")
+                    );
+
+                    log_debug(&format!(
+                        "DEBUG [invalidate_and_refresh_folder]: Level {}: prefix={:?} loading_browse.contains={}",
+                        idx, level.prefix, self.model.performance.loading_browse.contains(&browse_key)
+                    ));
+
+                    if !self.model.performance.loading_browse.contains(&browse_key) {
+                        self.model.performance.loading_browse.insert(browse_key);
+
+                        let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
+                            folder_id: folder_id.to_string(),
+                            prefix: level.prefix.clone(),
+                            priority: services::api::Priority::High,
+                        });
+
+                        log_debug(&format!(
+                            "DEBUG [invalidate_and_refresh_folder]: Sent BrowseFolder request for prefix={:?}",
+                            level.prefix
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) async fn restore_selected_file(&mut self) -> Result<()> {

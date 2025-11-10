@@ -123,6 +123,10 @@ pub enum ConfirmAction {
         label: String,
         is_paused: bool,
     },
+    Rescan {
+        folder_id: String,
+        folder_label: String,
+    },
 }
 
 /// Folder sync breakdown - category counts for out-of-sync items
@@ -414,5 +418,31 @@ mod tests {
             2,
             "No filter (None) should show all items"
         );
+    }
+
+    #[test]
+    fn test_confirm_action_rescan() {
+        let action = ConfirmAction::Rescan {
+            folder_id: "folder-abc".to_string(),
+            folder_label: "My Folder".to_string(),
+        };
+
+        match action {
+            ConfirmAction::Rescan { folder_id, folder_label } => {
+                assert_eq!(folder_id, "folder-abc");
+                assert_eq!(folder_label, "My Folder");
+            }
+            _ => panic!("Expected Rescan variant"),
+        }
+    }
+
+    #[test]
+    fn test_confirm_action_rescan_clone() {
+        let action = ConfirmAction::Rescan {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+        };
+        let cloned = action.clone();
+        assert_eq!(action, cloned);
     }
 }

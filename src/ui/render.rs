@@ -276,6 +276,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
             crate::model::ConfirmAction::PauseResume { label, is_paused, .. } => {
                 dialogs::render_pause_resume_confirmation(f, label, *is_paused);
             }
+            crate::model::ConfirmAction::Rescan { folder_label, .. } => {
+                dialogs::render_rescan_confirmation(f, folder_label);
+            }
         }
     }
 

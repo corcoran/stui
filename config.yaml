@@ -1,4 +1,4 @@
-api_key: "P3bR2oc3Dte2GCtcYvpAkbytTnR7iWSC"
+api_key: "foo"
 base_url: "http://127.0.0.1:8384"
 icon_mode: "emoji"            # Options: "emoji" or "nerdfont"
 vim_mode: false
