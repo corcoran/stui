@@ -681,6 +681,10 @@ impl FileDetails {
                     SyncState::RemoteOnly // Local deleted but exists remotely
                 } else if !local.deleted && global.deleted {
                     SyncState::LocalOnly // Exists locally but deleted remotely
+                } else if local.invalid {
+                    // Local additions in receive-only folders are marked as invalid
+                    // They can't be synced to other devices, so they're LocalOnly
+                    SyncState::LocalOnly
                 } else if local.version != global.version || local.blocks_hash != global.blocks_hash
                 {
                     SyncState::OutOfSync // Different versions or content
@@ -786,6 +790,50 @@ mod tests {
             state,
             SyncState::OutOfSync,
             "File with different versions should be OutOfSync"
+        );
+    }
+
+    #[test]
+    fn test_determine_sync_state_local_addition_in_receive_only_folder() {
+        // Bug: Local additions in receive-only folders show as Synced instead of LocalOnly
+        // When a file is added locally to a receive-only folder, Syncthing marks it with:
+        // - invalid=true (can't be synced to other devices)
+        // - localFlags=8 (bit flag for receive-only local addition)
+        // - Both local and global have SAME version/hash (Syncthing copies local to global)
+        //
+        // Expected: Should return LocalOnly, not Synced
+        let file_details = FileDetails {
+            local: Some(FileInfo {
+                sequence: 10017,
+                deleted: false,
+                ignored: false,
+                invalid: true, // KEY: Marked as invalid
+                local_flags: 8, // KEY: Receive-only local addition flag
+                version: vec!["LHNT25C:1762736484".to_string()],
+                blocks_hash: Some("Xfbg4nYTWdMKgnUFjimfzAOBU0VF9Vz0PkGYP11MlFY=".to_string()),
+                modified_by: "LHNT25C".to_string(),
+                ..Default::default()
+            }),
+            global: Some(FileInfo {
+                sequence: 10017, // Same as local
+                deleted: false,
+                ignored: false,
+                invalid: true,
+                local_flags: 8,
+                version: vec!["LHNT25C:1762736484".to_string()], // Same as local
+                blocks_hash: Some("Xfbg4nYTWdMKgnUFjimfzAOBU0VF9Vz0PkGYP11MlFY=".to_string()), // Same as local
+                modified_by: "LHNT25C".to_string(),
+                ..Default::default()
+            }),
+            availability: vec![], // No other devices have it
+        };
+
+        let state = file_details.determine_sync_state();
+        assert_eq!(
+            state,
+            SyncState::LocalOnly,
+            "Local addition in receive-only folder (invalid=true) should be LocalOnly, not {:?}",
+            state
         );
     }
 }
