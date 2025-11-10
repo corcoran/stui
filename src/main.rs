@@ -1235,29 +1235,12 @@ impl App {
 
         // If filter is already active, clear it (regardless of what level we're on)
         if self.model.ui.out_of_sync_filter.is_some() {
-            // Clear out-of-sync filter
-            self.model.ui.out_of_sync_filter = None;
-
-            // Clear filtered items for ALL levels, preserving selection by name
-            for level in &mut self.model.navigation.breadcrumb_trail {
-                // Get currently selected item name from filtered view
-                let selected_name = level.selected_index
-                    .and_then(|idx| level.display_items().get(idx))
-                    .map(|item| item.name.clone());
-
-                // Clear filter
-                level.filtered_items = None;
-
-                // Restore selection to same item name in unfiltered view
-                if let Some(name) = selected_name {
-                    level.selected_index = logic::navigation::find_item_index_by_name(&level.items, &name);
-                }
-            }
+            self.clear_out_of_sync_filter(true, None);  // Preserve selection, no toast (user toggling off)
             return;
         }
 
         // Clear any stale filter from a different folder/level
-        self.model.ui.out_of_sync_filter = None;
+        self.clear_out_of_sync_filter(false, None);  // Don't preserve (stale context), no toast
 
         // Get current folder info
         let level_idx = self.model.navigation.focus_level - 1;
@@ -1344,6 +1327,93 @@ impl App {
 
         // Then apply filter (filtered_items will reflect sorted order)
         self.apply_out_of_sync_filter();
+    }
+
+    /// Clear search state and filtered items
+    ///
+    /// # Arguments
+    /// * `show_toast` - Optional toast message to display
+    fn clear_search(&mut self, show_toast: Option<&str>) {
+        self.model.ui.search_query.clear();
+        self.model.ui.search_mode = false;
+        self.model.ui.search_origin_level = None;
+        self.model.performance.discovered_dirs.clear();
+
+        // Clear filtered items from all breadcrumb levels
+        for level in &mut self.model.navigation.breadcrumb_trail {
+            level.filtered_items = None;
+        }
+
+        if let Some(msg) = show_toast {
+            self.model.ui.show_toast(msg.to_string());
+        }
+    }
+
+    /// Clear out-of-sync filter state and filtered items
+    ///
+    /// # Arguments
+    /// * `preserve_selection` - Whether to keep cursor on same item by name
+    /// * `show_toast` - Optional toast message to display
+    fn clear_out_of_sync_filter(&mut self, preserve_selection: bool, show_toast: Option<&str>) {
+        self.model.ui.out_of_sync_filter = None;
+
+        if preserve_selection {
+            // Clear filtered items while preserving selection by name
+            for level in &mut self.model.navigation.breadcrumb_trail {
+                let selected_name = level.selected_index
+                    .and_then(|idx| level.display_items().get(idx))
+                    .map(|item| item.name.clone());
+
+                level.filtered_items = None;
+
+                if let Some(name) = selected_name {
+                    level.selected_index = logic::navigation::find_item_index_by_name(&level.items, &name);
+                }
+            }
+        } else {
+            // Simple clear without preserving selection
+            for level in &mut self.model.navigation.breadcrumb_trail {
+                level.filtered_items = None;
+            }
+        }
+
+        if let Some(msg) = show_toast {
+            self.model.ui.show_toast(msg.to_string());
+        }
+    }
+
+    /// Enter search mode (handles mutual exclusion with filter)
+    fn enter_search_mode(&mut self) {
+        // Only works in breadcrumb view
+        if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        // Clear filter if active (mutual exclusion)
+        if self.model.ui.out_of_sync_filter.is_some() {
+            self.clear_out_of_sync_filter(true, Some("Filter cleared - search active"));
+        }
+
+        // Activate search mode
+        self.model.ui.search_mode = true;
+        self.model.ui.search_query.clear();
+        self.model.ui.search_origin_level = Some(self.model.navigation.focus_level);
+    }
+
+    /// Activate out-of-sync filter (handles mutual exclusion with search)
+    fn activate_out_of_sync_filter(&mut self) {
+        // Only works in breadcrumb view
+        if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        // Clear search if active (mutual exclusion)
+        if !self.model.ui.search_query.is_empty() || self.model.ui.search_mode {
+            self.clear_search(Some("Search cleared - filter active"));
+        }
+
+        // Toggle the filter
+        self.toggle_out_of_sync_filter();
     }
 }
 

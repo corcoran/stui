@@ -482,15 +482,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             match key.code {
                 KeyCode::Esc => {
                     // Exit search mode and clear query
-                    app.model.ui.search_mode = false;
-                    app.model.ui.search_query.clear();
-                    app.model.ui.search_origin_level = None;
-                    // Clear prefetch tracking
-                    app.model.performance.discovered_dirs.clear();
-                    // Immediately clear filtered_items for all breadcrumb levels
-                    for level in &mut app.model.navigation.breadcrumb_trail {
-                        level.filtered_items = None;
-                    }
+                    app.clear_search(None);  // No toast, user explicitly pressed Esc
                     // Reload all breadcrumb levels without filter (for fresh data)
                     app.refresh_all_breadcrumbs().await?;
                     return Ok(());
@@ -577,13 +569,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
             if app.model.navigation.focus_level > 0 && !app.model.ui.search_query.is_empty() {
                 crate::log_debug("DEBUG [keyboard]: Clearing search...");
-                app.model.ui.search_query.clear();
-                // Clear prefetch tracking
-                app.model.performance.discovered_dirs.clear();
-                // Immediately clear filtered_items for all breadcrumb levels
-                for level in &mut app.model.navigation.breadcrumb_trail {
-                    level.filtered_items = None;
-                }
+                app.clear_search(None);  // No toast, user explicitly pressed Esc
                 // Reload all breadcrumb levels without filter (for fresh data)
                 app.refresh_all_breadcrumbs().await?;
                 return Ok(());
@@ -617,12 +603,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if !app.model.ui.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 // Ctrl-F: Enter search mode (normal mode only - vim uses / instead)
-                // Only available in breadcrumb view, not folder list
-                if app.model.navigation.focus_level > 0 {
-                    app.model.ui.search_mode = true;
-                    app.model.ui.search_query.clear();
-                    app.model.ui.search_origin_level = Some(app.model.navigation.focus_level);
-                }
+                app.enter_search_mode();
             }
             KeyCode::Char('f')
                 if app.model.ui.vim_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -689,7 +670,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('f') if app.model.navigation.focus_level > 0 => {
                 // Toggle out-of-sync filter (only in breadcrumb view)
-                app.toggle_out_of_sync_filter();
+                app.activate_out_of_sync_filter();
             }
             KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {
                 // Pause/resume folder (only in folder view)
@@ -725,12 +706,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('/') if app.model.ui.vim_mode => {
                 // /: Enter search mode (vim mode only)
-                // Only available in breadcrumb view, not folder list
-                if app.model.navigation.focus_level > 0 {
-                    app.model.ui.search_mode = true;
-                    app.model.ui.search_query.clear();
-                    app.model.ui.search_origin_level = Some(app.model.navigation.focus_level);
-                }
+                app.enter_search_mode();
             }
             KeyCode::Char('?') if app.model.navigation.focus_level > 0 => {
                 // Toggle file information popup
