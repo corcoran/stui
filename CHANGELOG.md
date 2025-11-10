@@ -60,7 +60,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persistent search when navigating into subdirectories
 - Smart context-aware clearing when backing out
 
+**Out-of-Sync Filter with Summary Modal**
+- Press `f` in folder view to see detailed breakdown of out-of-sync items
+- **Summary modal** shows categorized counts: Downloading, Queued, Remote Only, Modified, Local Only
+- **Breadcrumb filter** - press `f` again to filter current directory to show only out-of-sync items
+- Status bar shows active filter indicator
+- Real-time updates as events come in
+- Cached for performance - instant display on subsequent views
+- Includes local-only files in receive-only folders
+
+**Search and Out-of-Sync Filter Mutual Exclusivity**
+- Search and out-of-sync filter cannot be active simultaneously
+- Activating one automatically clears the other
+- Prevents UI confusion and ensures predictable behavior
+- Clear visual feedback via status bar indicators
+
+**Rescan Confirmation Dialog with Force Refresh**
+- Press `r` to show rescan options instead of immediate rescan
+- **Normal rescan** (`y`): Ask Syncthing to scan for changes (waits for sequence change to invalidate cache)
+- **Force refresh** (`f`): Immediately clear cache + trigger rescan (useful for stale cache bugs)
+- **Cancel** (`n` or `Esc`): Close dialog without action
+- Cyan border dialog with clear option descriptions
+- Works in both folder list and breadcrumb views
+
 ### 🔧 Improvements
+
+**Filtering & Search**
+- Non-destructive filtering with `filtered_items` field - original data preserved
+- Search debouncing improves performance on large directories
+- Filters persist when navigating into subdirectories
+- Sorting order retained when toggling filters on/off
+- Search works correctly while cache is building
+- Out-of-sync filter updates in real-time as events arrive
+
+**UI & Display**
+- Local-only files now display properly in breadcrumbs
+- Distinct icon for ignored files that still exist on disk (⚠️ vs 🚫)
+- Out-of-sync filter indicator in status bar
+- Queued status icon added to IconRenderer
 
 **Reliability & Error Handling**
 - Fixed folder refresh after reconnection - folders now populate correctly
@@ -68,11 +105,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Better offline mode: gracefully handles network errors without crashing
 - Cached device names eliminate "Unknown" flash on startup
 - Clearer error messages (removed unhelpful technical context)
+- Out-of-sync cache invalidation on folder sequence change
+- Ignore pattern matching works correctly with path components
 
 **Performance**
 - Optimized folder status polling (medium priority vs high)
 - Non-blocking operations keep UI responsive during network issues
 - Efficient cache validation for offline browsing
+- Out-of-sync data cached for instant subsequent views
+
+### 🐛 Bug Fixes
+
+**Search & Filtering**
+- Fixed search term clearing behavior
+- Fixed cache filter state management
+- Search results properly update when clearing terms
+- Filters clear correctly from all breadcrumb levels
+- Filtered results update correctly in subdirectories
+
+**Out-of-Sync Filter**
+- Fixed filter persistence when new files/events arrive
+- Local files now trigger proper cache invalidation
+- Out-of-sync summary updates correctly as events come in
+- Filter re-applies correctly after Browse cache refresh
+- Filter re-applies correctly after Need cache updates
+
+**Display & State**
+- Fixed sync state for files with sequence=0
+- Preserved need_category when updating sync states
+- Out-of-sync filter activates only when data is cached (prevents empty results)
 
 ### 📚 Documentation
 
@@ -82,13 +143,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clear RED → GREEN → REFACTOR workflow
 - Examples of what to do vs what not to do
 
+**Feature Documentation**
+- Added detailed implementation plan for out-of-sync filter feature
+- Documented search/filter mutual exclusion design
+- Simplified README for end users
+- Added git commit pattern to avoid STDIN prefix
+- Documented limitation with receive-only local changes in summary modal
+
 ### 🧪 Testing
 
-- **245 binary tests + 16 integration tests = 261 total tests passing**
+- **549 total tests passing** (499 binary + 25 integration + 25 doc tests)
+- Added tests for out-of-sync filter and summary modal functionality
+- Added tests for search and filter mutual exclusivity
+- Added tests for non-destructive filtering (filtered_items field)
 - Added 23 new tests for status bar state indicators (14 folder state + 9 file/directory state)
 - Added 22 new tests for pure logic functions (TDD methodology)
 - Added 10 comprehensive reconnection flow tests
 - Added 6 tests for unified confirmation dialogs
+- Fixed status_bar tests for out-of-sync filter parameter
+- Fixed FolderStatus doctest after field additions
 - All refactoring covered by existing test suite
 - Zero compiler warnings
 

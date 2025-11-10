@@ -74,6 +74,31 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
         // Handle unified confirmation prompts first
         if let Some(action) = app.model.ui.confirm_action.clone() {
+            // Handle Rescan separately (needs y/f/n instead of y/n)
+            if let ConfirmAction::Rescan { folder_id, folder_label } = action {
+                match key.code {
+                    KeyCode::Char('y') => {
+                        // Normal rescan
+                        app.model.ui.confirm_action = None;
+                        let _ = app.rescan_selected_folder();
+                        app.model.ui.show_toast(format!("Rescanning {}...", folder_label));
+                    }
+                    KeyCode::Char('f') => {
+                        // Force refresh
+                        app.model.ui.confirm_action = None;
+                        let _ = app.force_refresh_folder(&folder_id);
+                        app.model.ui.show_toast(format!("Force refreshing {}...", folder_label));
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        // Cancel
+                        app.model.ui.confirm_action = None;
+                    }
+                    _ => {} // Ignore other keys while dialog is open
+                }
+                return Ok(());
+            }
+
+            // Handle other confirmation dialogs (y/n only)
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     // User confirmed - execute the action
@@ -190,6 +215,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                     app.model.ui.show_toast(format!("Failed to pause/resume folder: {}", e));
                                 }
                             }
+                        }
+                        ConfirmAction::Rescan { .. } => {
+                            // Handled above (needs y/f/n instead of just y/n)
+                            unreachable!("Rescan should be handled earlier")
                         }
                     }
 
@@ -579,8 +608,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('q') => app.model.ui.should_quit = true,
             KeyCode::Char('r') => {
-                // Rescan the selected/current folder
-                let _ = app.rescan_selected_folder();
+                // Show rescan confirmation dialog
+                if let Some((folder_id, folder_label)) = app.get_rescan_folder_info() {
+                    app.model.ui.confirm_action = Some(ConfirmAction::Rescan {
+                        folder_id,
+                        folder_label,
+                    });
+                }
             }
             KeyCode::Char('R') => {
                 // Restore selected file (if remote-only/deleted locally)

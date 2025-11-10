@@ -836,3 +836,37 @@ pub fn render_setup_help(f: &mut Frame, error_message: &str, config_path: &str) 
     f.render_widget(ratatui::widgets::Clear, prompt_area);
     f.render_widget(paragraph, prompt_area);
 }
+
+/// Render the rescan confirmation dialog
+pub fn render_rescan_confirmation(f: &mut Frame, folder_label: &str) {
+    use ratatui::widgets::Clear;
+
+    let text = vec![
+        Line::from(format!("Rescan folder \"{}\"?", folder_label)),
+        Line::from(""),
+        Line::from("(y) Rescan - Ask Syncthing to scan for changes"),
+        Line::from("(f) Force Refresh - Clear cache + rescan"),
+        Line::from("(n) Cancel"),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Rescan Folder ");
+
+    let paragraph = Paragraph::new(text).block(block);
+
+    // Center the dialog
+    let area = f.area();
+    let dialog_width = 52;
+    let dialog_height = 9;
+    let dialog_area = Rect {
+        x: (area.width.saturating_sub(dialog_width)) / 2,
+        y: (area.height.saturating_sub(dialog_height)) / 2,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    f.render_widget(Clear, dialog_area);
+    f.render_widget(paragraph, dialog_area);
+}

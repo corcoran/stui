@@ -39,7 +39,8 @@
       "SlashCommand(/superpowers:execute-plan:*)",
       "Bash(/tmp/attempted-fixes.patch)",
       "Bash(git checkout:*)",
-      "Skill(superpowers:systematic-debugging)"
+      "Skill(superpowers:systematic-debugging)",
+      "Skill(superpowers:brainstorming)"
     ],
     "deny": [],
     "ask": []
