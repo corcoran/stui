@@ -21,4 +21,5 @@ unicode-width = "0.1"
 ratatui-image = "8.0"
 image = { version = "0.25", default-features = true }
 codepage-437 = "0.1"
+chrono = "0.4"
 

@@ -470,6 +470,27 @@ impl App {
             app.model.syncthing.connection_stats = Some(conn_stats);
         }
 
+        // Pre-populate last folder updates from /rest/stats/folder for instant display
+        // This matches what Syncthing web GUI shows and is more reliable than event parsing
+        match app.client.get_folder_stats().await {
+            Ok(folder_updates) => {
+                log_debug(&format!(
+                    "Pre-populated {} folder updates from stats API",
+                    folder_updates.len()
+                ));
+                for (folder_id, (timestamp, filename)) in &folder_updates {
+                    log_debug(&format!(
+                        "  Folder {}: {} (timestamp: {:?})",
+                        folder_id, filename, timestamp
+                    ));
+                }
+                app.model.syncthing.last_folder_updates = folder_updates;
+            }
+            Err(e) => {
+                log_debug(&format!("Failed to fetch folder stats: {}", e));
+            }
+        }
+
         if !app.model.syncthing.folders.is_empty() {
             app.model.navigation.folders_state_selection = Some(0);
             // Try to load root level, but don't fail initialization if it errors (e.g., Syncthing down)

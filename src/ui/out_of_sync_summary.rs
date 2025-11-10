@@ -91,7 +91,7 @@ pub fn render_out_of_sync_summary(
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Out-of-Sync Summary")
+                .title("Folder Sync Summary")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         )

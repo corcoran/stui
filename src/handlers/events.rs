@@ -22,6 +22,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
         CacheInvalidation::File {
             folder_id,
             file_path,
+            timestamp,
         } => {
             crate::log_debug(&format!(
                 "DEBUG [Event]: Invalidating file: folder={} path={}",
@@ -41,10 +42,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 folder_id: folder_id.clone(),
             });
 
-            // Update last change info for this folder
+            // Update last change info for this folder (use event timestamp, not current time)
             app.model.syncthing.last_folder_updates.insert(
                 folder_id.clone(),
-                (std::time::SystemTime::now(), file_path.clone()),
+                (timestamp, file_path.clone()),
             );
 
             // Extract parent directory path
@@ -91,6 +92,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
         CacheInvalidation::Directory {
             folder_id,
             dir_path,
+            timestamp: _,
         } => {
             crate::log_debug(&format!(
                 "DEBUG [Event]: Invalidating directory: folder={} path={}",
@@ -112,17 +114,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 folder_id: folder_id.clone(),
             });
 
-            // Update last change info for this folder
-            // RemoteIndexUpdated sends empty dir_path, so show a generic message
-            let display_path = if dir_path.is_empty() {
-                "(remote changes)".to_string()
-            } else {
-                dir_path.clone()
-            };
-            app.model.syncthing.last_folder_updates.insert(
-                folder_id.clone(),
-                (std::time::SystemTime::now(), display_path),
-            );
+            // Don't update last_folder_updates here - Directory events (RemoteIndexUpdated)
+            // don't have specific file paths. We get accurate file paths from:
+            // 1. /rest/stats/folder on startup (all files, local and remote)
+            // 2. File events with exact paths: LocalIndexUpdated, ItemFinished, LocalChangeDetected, RemoteChangeDetected
 
             // Clear in-memory state for all files in this directory and trigger refresh if viewing
             if !app.model.navigation.breadcrumb_trail.is_empty()
@@ -197,6 +192,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
         CacheInvalidation::ItemStarted {
             folder_id,
             file_path,
+            timestamp: _,
         } => {
             // Skip ItemStarted processing entirely during bulk syncs
             // The Syncing state adds visual feedback but isn't essential
@@ -211,6 +207,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
         CacheInvalidation::ItemFinished {
             folder_id,
             file_path,
+            timestamp: _,
         } => {
             crate::log_debug(&format!(
                 "DEBUG [Event]: ItemFinished: folder={} path={}",

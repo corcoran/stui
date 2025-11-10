@@ -113,6 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-blocking operations keep UI responsive during network issues
 - Efficient cache validation for offline browsing
 - Out-of-sync data cached for instant subsequent views
+- Event parsing optimization: reverse processing with early termination (500-event fetch, stops after finding all folders)
+- Startup API call pre-populates folder updates for instant display
 
 ### 🐛 Bug Fixes
 
@@ -135,6 +137,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserved need_category when updating sync states
 - Out-of-sync filter activates only when data is cached (prevents empty results)
 
+**Last Update Timestamps**
+- Fixed "Last Update" showing incorrect timestamps - now uses actual event time instead of processing time
+- Fixed 1-minute startup delay - folder updates now appear instantly using `/rest/stats/folder` endpoint (matches Syncthing web GUI exactly)
+- Fixed missing folders on startup - now shows "Last Update" for all folders, including those where last operation was a deletion (matches web GUI behavior)
+- Removed "(remote changes)" placeholder - event stream now only updates when specific file paths are available (RemoteIndexUpdated events don't have file paths)
+- Real-time updates continue for all file events: LocalIndexUpdated, ItemFinished, LocalChangeDetected, RemoteChangeDetected
+
 ### 📚 Documentation
 
 **Test-Driven Development**
@@ -152,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **549 total tests passing** (499 binary + 25 integration + 25 doc tests)
+- **556 total tests passing** (507 binary + 25 integration + 24 doc tests)
 - Added tests for out-of-sync filter and summary modal functionality
 - Added tests for search and filter mutual exclusivity
 - Added tests for non-destructive filtering (filtered_items field)
@@ -160,6 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added 22 new tests for pure logic functions (TDD methodology)
 - Added 10 comprehensive reconnection flow tests
 - Added 6 tests for unified confirmation dialogs
+- Added 5 tests for timestamp parsing and event processing (RFC3339 parsing, early termination, reverse processing)
 - Fixed status_bar tests for out-of-sync filter parameter
 - Fixed FolderStatus doctest after field additions
 - All refactoring covered by existing test suite

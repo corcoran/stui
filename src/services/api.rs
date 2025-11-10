@@ -221,7 +221,7 @@ pub struct ApiService {
 }
 
 impl ApiService {
-    pub fn new(
+    pub(crate) fn new(
         client: SyncthingClient,
         response_tx: mpsc::UnboundedSender<ApiResponse>,
         completion_tx: mpsc::UnboundedSender<InternalMessage>,

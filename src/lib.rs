@@ -8,6 +8,7 @@ pub mod api;
 pub mod cache;
 pub mod model;
 pub mod logic;
+pub mod services;
 
 // DEBUG_MODE for cache logging (defaults to false in tests)
 pub(crate) static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
