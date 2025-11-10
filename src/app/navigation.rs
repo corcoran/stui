@@ -341,15 +341,7 @@ impl App {
         };
 
         if should_clear_search {
-            self.model.ui.search_mode = false;
-            self.model.ui.search_query.clear();
-            self.model.ui.search_origin_level = None;
-            self.model.performance.discovered_dirs.clear();
-
-            // Clear filtered items for ALL levels in the breadcrumb trail
-            for level in &mut self.model.navigation.breadcrumb_trail {
-                level.filtered_items = None;
-            }
+            self.clear_search(None);  // No toast, contextual clearing
         }
 
         if self.model.navigation.focus_level > 1 {
@@ -387,12 +379,7 @@ impl App {
 
             // Clear out-of-sync filter when backing out to folder list
             if self.model.ui.out_of_sync_filter.is_some() {
-                self.model.ui.out_of_sync_filter = None;
-
-                // Clear filtered items for ALL levels
-                for level in &mut self.model.navigation.breadcrumb_trail {
-                    level.filtered_items = None;
-                }
+                self.clear_out_of_sync_filter(false, None);  // Don't preserve (leaving breadcrumbs), no toast
             }
 
             self.model.navigation.focus_level = 0;
