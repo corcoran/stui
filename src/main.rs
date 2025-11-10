@@ -108,16 +108,9 @@ impl std::fmt::Debug for ImagePreviewState {
     }
 }
 
-// Old types moved to model module:
-// - BreadcrumbLevel (now uses Option<usize> instead of ListState)
-// - model::FileInfoPopupState (without image_state field)
-// - PendingDeleteInfo
-
 pub struct App {
-    // ✅ Pure application state (Elm Architecture Model)
     pub model: model::Model,
 
-    // 🔧 Services (Runtime) - NOT part of Model
     client: SyncthingClient,
     cache: CacheDb,
     api_tx: tokio::sync::mpsc::UnboundedSender<services::api::ApiRequest>,
@@ -129,13 +122,11 @@ pub struct App {
     image_update_tx: tokio::sync::mpsc::UnboundedSender<(String, ImagePreviewState)>,
     image_update_rx: tokio::sync::mpsc::UnboundedReceiver<(String, ImagePreviewState)>,
 
-    // ⚙️ Config (Runtime)
     path_map: HashMap<String, String>,
     open_command: Option<String>,
     clipboard_command: Option<String>,
     base_url: String,
 
-    // ⏱️ Timing (Runtime)
     last_status_update: Instant,
     last_system_status_update: Instant,
     last_connection_stats_fetch: Instant,
@@ -144,11 +135,9 @@ pub struct App {
     last_reconnect_attempt: Instant,
     reconnect_delay: Duration,
 
-    // 📊 Performance Optimizations (Runtime)
     pending_sync_state_writes: Vec<(String, String, SyncState, u64)>,
 
-    // 🖼️ Image State (Runtime - not cloneable)
-    /// Maps file paths to their image preview states (ImagePreviewState is not Clone, so kept separate from Model)
+    /// Maps file paths to their image preview states
     image_state_map: std::collections::HashMap<String, ImagePreviewState>,
 }
 
@@ -299,17 +288,10 @@ impl App {
         // Try to fetch folders from API, fall back to cache on error
         let (folders, initial_connection_state) = match client.get_folders().await {
             Ok(folders) => {
-                // Success! Cache them for next time
-                log_debug(&format!("Successfully fetched {} folders from API", folders.len()));
-                if let Err(e) = cache.save_folders(&folders) {
-                    log_debug(&format!("Failed to cache folders: {}", e));
-                } else {
-                    log_debug("Successfully cached folders");
-                }
+                let _ = cache.save_folders(&folders);
                 (folders, model::syncthing::ConnectionState::Connected)
             }
             Err(e) => {
-                // Failed to fetch - try cache
                 log_debug(&format!("Failed to fetch folders from API: {}", e));
                 let cached_folders = cache.get_all_folders().unwrap_or_else(|cache_err| {
                     log_debug(&format!("Failed to load folders from cache: {}", cache_err));
@@ -317,8 +299,6 @@ impl App {
                 });
 
                 if cached_folders.is_empty() {
-                    // No cache - need to show setup help
-                    log_debug("No cached folders available - will show setup help dialog");
                     (
                         vec![],
                         model::syncthing::ConnectionState::Disconnected {
@@ -327,8 +307,7 @@ impl App {
                         },
                     )
                 } else {
-                    // Use cache, will auto-retry in background
-                    log_debug(&format!("Using {} cached folders, will auto-retry connection", cached_folders.len()));
+                    log_debug(&format!("Using {} cached folders, will auto-retry", cached_folders.len()));
                     (
                         cached_folders,
                         model::syncthing::ConnectionState::Connecting {
@@ -594,38 +573,15 @@ impl App {
             return local_item_names;
         }
 
-        log_debug(&format!(
-            "DEBUG [merge_local_only_files]: Fetching local items for folder={} prefix={:?}",
-            folder_id, prefix
-        ));
-
         // Fetch local-only items for this directory
         if let Ok(local_items) = self.client.get_local_changed_items(folder_id, prefix).await {
-            log_debug(&format!(
-                "DEBUG [merge_local_only_files]: Got {} local items",
-                local_items.len()
-            ));
-
             // Add local-only items that aren't already in the browse results
             for local_item in local_items {
                 if !items.iter().any(|i| i.name == local_item.name) {
-                    log_debug(&format!(
-                        "DEBUG [merge_local_only_files]: Adding local item: {}",
-                        local_item.name
-                    ));
                     local_item_names.push(local_item.name.clone());
                     items.push(local_item);
-                } else {
-                    log_debug(&format!(
-                        "DEBUG [merge_local_only_files]: Skipping duplicate item: {}",
-                        local_item.name
-                    ));
                 }
             }
-        } else {
-            log_debug(&format!(
-                "DEBUG [merge_local_only_files]: Failed to fetch local items"
-            ));
         }
 
         local_item_names
@@ -637,75 +593,23 @@ impl App {
         items: &[BrowseItem],
         prefix: Option<&str>,
     ) -> HashMap<String, SyncState> {
-        log_debug(&format!(
-            "DEBUG [load_sync_states_from_cache]: START folder={} prefix={:?} item_count={}",
-            folder_id,
-            prefix,
-            items.len()
-        ));
         let mut sync_states = HashMap::new();
 
         for item in items {
-            // Build the file path
             let file_path = if let Some(prefix) = prefix {
                 format!("{}{}", prefix, item.name)
             } else {
                 item.name.clone()
             };
 
-            log_debug(&format!(
-                "DEBUG [load_sync_states_from_cache]: Querying cache for file_path={}",
-                file_path
-            ));
-
             // Load from cache without validation (will be validated on next fetch if needed)
-            match self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
-                Ok(Some(state)) => {
-                    log_debug(&format!(
-                        "DEBUG [load_sync_states_from_cache]: FOUND state={:?} for file_path={}",
-                        state, file_path
-                    ));
-                    sync_states.insert(item.name.clone(), state);
-                }
-                Ok(None) => {
-                    log_debug(&format!(
-                        "DEBUG [load_sync_states_from_cache]: NOT FOUND in cache for file_path={}",
-                        file_path
-                    ));
-                }
-                Err(e) => {
-                    log_debug(&format!("DEBUG [load_sync_states_from_cache]: ERROR querying cache for file_path={}: {}", file_path, e));
-                }
+            if let Ok(Some(state)) = self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
+                sync_states.insert(item.name.clone(), state);
             }
         }
 
-        log_debug(&format!(
-            "DEBUG [load_sync_states_from_cache]: END returning {} states",
-            sync_states.len()
-        ));
         sync_states
     }
-
-    /// Update directory states based on their children's states
-    /// Directories should reflect the "worst" state of their children (Syncing > RemoteOnly > OutOfSync > Synced)
-    /// Throttled to run at most once every 2 seconds to prevent excessive cache queries
-
-
-    // Recursively discover and fetch states for subdirectories when hovering over a directory
-    // This ensures we have complete subdirectory information for deep trees
-
-    // Helper to recursively discover subdirectories (browse only, no state fetching)
-    // This is synchronous and only uses cached data - no blocking API calls
-
-    // Fetch directory-level sync states for subdirectories (their own metadata, not children)
-    // This is cheap and gives immediate feedback for navigation (ignored/deleted/out-of-sync dirs)
-
-
-    /// Check which ignored files exist on disk (done once on directory load, not per-frame)
-
-    /// Update ignored_exists status for a single file in a breadcrumb level
-
-    /// Sort a specific breadcrumb level by its index
 
     /// Recursively prefetch all subdirectories for search
     ///
@@ -739,11 +643,6 @@ impl App {
                     if self.model.performance.discovered_dirs.contains(&prefetch_key) {
                         continue; // Already queued, skip
                     }
-
-                    crate::log_debug(&format!(
-                        "DEBUG [prefetch]: Queuing browse for '{}'",
-                        subdir_prefix
-                    ));
 
                     // Mark as queued BEFORE sending request
                     self.model.performance.discovered_dirs.insert(prefetch_key);
@@ -799,25 +698,10 @@ impl App {
                 .unwrap_or(0);
 
             // Get ALL cached items in the folder recursively
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Calling get_all_browse_items for folder={}, sequence={}",
-                folder_id,
-                folder_sequence
-            ));
             let all_items = match self.cache.get_all_browse_items(&folder_id, folder_sequence) {
-                Ok(items) => {
-                    crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Got {} total cached items for folder {}",
-                        items.len(),
-                        folder_id
-                    ));
-                    items
-                }
+                Ok(items) => items,
                 Err(e) => {
-                    crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Failed to get all items: {:?}",
-                        e
-                    ));
+                    log_debug(&format!("Failed to get cached items for search: {:?}", e));
                     // Fallback to simple filtering of current level.items only
                     let filtered = logic::search::filter_items(
                         &level.items,
@@ -840,13 +724,6 @@ impl App {
             let current_path = prefix.as_deref().unwrap_or("");
 
             // Filter current level items: show items that match OR have matching descendants
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Filtering {} items at path '{}' with query '{}'",
-                current_items.len(),
-                current_path,
-                query
-            ));
-
             let filtered_items: Vec<api::BrowseItem> = current_items
                 .into_iter()
                 .filter(|item| {
@@ -857,76 +734,25 @@ impl App {
                         format!("{}{}", current_path, item.name)
                     };
 
-                    crate::log_debug(&format!(
-                        "DEBUG [apply_search_filter]: Processing item '{}' (type: {}), all_items.len()={}",
-                        item_path,
-                        item.item_type,
-                        all_items.len()
-                    ));
-
                     // Check if item itself matches
                     if logic::search::search_matches(&query, &item_path) {
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: MATCH - Item '{}' matches query",
-                            item_path
-                        ));
                         return true;
                     }
 
                     // For directories, check if any descendant (at any depth) matches
                     if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
                         let descendant_prefix = format!("{}/", item_path);
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: Checking directory '{}' for descendants matching '{}'",
-                            item_path,
-                            query
-                        ));
 
                         // Check if ANY file/folder inside this directory tree matches the query
-                        let has_matching_descendant = all_items.iter().any(|(full_path, _)| {
-                            // If this item is a descendant of our directory
-                            if full_path.starts_with(&descendant_prefix) {
-                                let matches = logic::search::search_matches(&query, full_path);
-                                if matches {
-                                    crate::log_debug(&format!(
-                                        "DEBUG [apply_search_filter]: Found matching descendant '{}' in directory '{}'",
-                                        full_path,
-                                        item_path
-                                    ));
-                                }
-                                matches
-                            } else {
-                                false
-                            }
-                        });
-
-                        if has_matching_descendant {
-                            crate::log_debug(&format!(
-                                "DEBUG [apply_search_filter]: MATCH - Directory '{}' has matching descendants",
-                                item_path
-                            ));
-                        } else {
-                            crate::log_debug(&format!(
-                                "DEBUG [apply_search_filter]: NO MATCH - Directory '{}' has no matching descendants",
-                                item_path
-                            ));
-                        }
-
-                        has_matching_descendant
+                        all_items.iter().any(|(full_path, _)| {
+                            full_path.starts_with(&descendant_prefix)
+                                && logic::search::search_matches(&query, full_path)
+                        })
                     } else {
-                        crate::log_debug(&format!(
-                            "DEBUG [apply_search_filter]: NO MATCH - File '{}' does not match query",
-                            item_path
-                        ));
                         false
                     }
                 })
                 .collect();
-
-            crate::log_debug(&format!(
-                "DEBUG [apply_search_filter]: Filtered to {} items",
-                filtered_items.len()
-            ));
 
             // Store filtered results (non-destructive)
             // IMPORTANT: Use Some(vec![]) for zero matches, not None
@@ -979,11 +805,7 @@ impl App {
         let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
             Ok(items) => items,
             Err(e) => {
-                // Cache query failed - clear all filters
-                crate::log_debug(&format!(
-                    "DEBUG [Filter]: Cache query failed, clearing all filters: {}",
-                    e
-                ));
+                log_debug(&format!("Cache query failed for out-of-sync items: {}", e));
                 for level in &mut self.model.navigation.breadcrumb_trail {
                     level.filtered_items = None;
                 }
@@ -994,13 +816,7 @@ impl App {
         // Get local changed items from cache (once for entire folder)
         let local_changed_items = match self.cache.get_local_changed_items(&folder_id) {
             Ok(items) => items.into_iter().collect::<std::collections::HashSet<_>>(),
-            Err(e) => {
-                crate::log_debug(&format!(
-                    "DEBUG [Filter]: Failed to get local changed items: {}",
-                    e
-                ));
-                std::collections::HashSet::new()
-            }
+            Err(_) => std::collections::HashSet::new(),
         };
 
         // If no out-of-sync items and no local changed items in cache, handle based on current filter state
@@ -1010,7 +826,6 @@ impl App {
             if any_filtered {
                 // Filter already active but cache is empty (likely just invalidated)
                 // Queue fresh NeededFiles request to refresh cache
-                crate::log_debug("DEBUG [Filter]: Cache empty but filter active, queuing NeededFiles refresh");
                 let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
                     folder_id: folder_id.clone(),
                     page: None,
@@ -1028,7 +843,6 @@ impl App {
                     .unwrap_or(false);
 
                 if is_receive_only {
-                    crate::log_debug("DEBUG [Filter]: Also queuing GetLocalChanged for receive-only folder");
                     let _ = self.api_tx.send(services::api::ApiRequest::GetLocalChanged {
                         folder_id: folder_id.clone(),
                     });
@@ -1037,8 +851,7 @@ impl App {
                 // Keep existing filtered_items until fresh data arrives
                 return;
             } else {
-                // No filter active and no out-of-sync items - don't activate filter
-                crate::log_debug("DEBUG [Filter]: No out-of-sync items, not activating filter");
+                // No out-of-sync items - don't activate filter
                 return;
             }
         }
@@ -1105,12 +918,6 @@ impl App {
             if filtered.is_empty() {
                 level.filtered_items = None;
             } else {
-                crate::log_debug(&format!(
-                    "DEBUG [Filter]: Level {} filtered {} → {} items",
-                    level_idx,
-                    current_items.len(),
-                    filtered.len()
-                ));
                 level.filtered_items = Some(filtered);
             }
 
@@ -1667,32 +1474,24 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         // Check if we need to fetch folders after reconnection
         if app.model.ui.needs_folder_refresh {
-            crate::log_debug(&format!(
-                "DEBUG [Main Loop]: needs_folder_refresh flag set, fetching folders (show_setup_help={})",
-                app.model.ui.show_setup_help
-            ));
             app.model.ui.needs_folder_refresh = false;
             match app.client.get_folders().await {
                 Ok(folders) => {
-                    crate::log_debug(&format!("DEBUG [Main Loop]: Successfully fetched {} folders", folders.len()));
                     let _ = app.cache.save_folders(&folders);
                     app.model.syncthing.folders = folders;
 
                     // If we now have folders, load their statuses and select first one
                     if !app.model.syncthing.folders.is_empty() {
-                        crate::log_debug("DEBUG [Main Loop]: Loading folder statuses and selecting first folder");
                         app.model.navigation.folders_state_selection = Some(0);
                         app.load_folder_statuses().await;
                         let _ = app.load_root_level(true).await;
-                        // Dismiss setup help dialog since we now have folders
                         app.model.ui.show_setup_help = false;
-                        crate::log_debug("DEBUG [Main Loop]: Folders loaded and setup help dismissed");
                     } else {
-                        crate::log_debug("DEBUG [Main Loop]: WARNING - fetched 0 folders!");
+                        log_debug("WARNING: Fetched 0 folders after reconnection");
                     }
                 }
                 Err(e) => {
-                    crate::log_debug(&format!("DEBUG [Main Loop]: Failed to fetch folders: {}", e));
+                    log_debug(&format!("Failed to fetch folders after reconnection: {}", e));
                 }
             }
         }
@@ -1767,7 +1566,6 @@ async fn run_app<B: ratatui::backend::Backend>(
                 && app.model.ui.search_query.len() >= 2
                 && app.model.performance.last_search_filter_update.elapsed().as_millis() >= 300
             {
-                crate::log_debug("DEBUG [idle]: Doing final search filter update after prefetch");
                 app.model.performance.last_search_filter_update = std::time::Instant::now();
                 app.apply_search_filter();
             }
