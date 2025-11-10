@@ -1,10 +1,11 @@
 use anyhow::Result;
+use chrono::DateTime;
 use reqwest::Client;
 use serde::Deserialize;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 
 fn log_debug(msg: &str) {
@@ -19,6 +20,25 @@ fn log_debug(msg: &str) {
         .open("/tmp/synctui-debug.log")
     {
         let _ = writeln!(file, "{}", msg);
+    }
+}
+
+/// Parse RFC3339 timestamp from Syncthing event into SystemTime
+/// Falls back to current time if parsing fails
+fn parse_event_time(time_str: &str) -> SystemTime {
+    parse_event_time_public(time_str)
+}
+
+/// Public version of parse_event_time for use in other modules
+pub fn parse_event_time_public(time_str: &str) -> SystemTime {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(time_str) {
+        SystemTime::from(dt)
+    } else {
+        log_debug(&format!(
+            "DEBUG [EVENT]: Failed to parse timestamp '{}', using current time",
+            time_str
+        ));
+        SystemTime::now()
     }
 }
 
@@ -40,18 +60,28 @@ pub enum CacheInvalidation {
     File {
         folder_id: String,
         file_path: String,
+        timestamp: std::time::SystemTime,
     },
     /// Invalidate an entire directory
-    Directory { folder_id: String, dir_path: String },
+    Directory {
+        folder_id: String,
+        dir_path: String,
+        #[allow(dead_code)]
+        timestamp: std::time::SystemTime,
+    },
     /// Item started syncing
     ItemStarted {
         folder_id: String,
         file_path: String,
+        #[allow(dead_code)]
+        timestamp: std::time::SystemTime,
     },
     /// Item finished syncing
     ItemFinished {
         folder_id: String,
         file_path: String,
+        #[allow(dead_code)]
+        timestamp: std::time::SystemTime,
     },
 }
 
@@ -76,6 +106,70 @@ pub fn spawn_event_listener(
             eprintln!("Event listener fatal error: {}", e);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_event_time_valid_rfc3339() {
+        // Test parsing a valid RFC3339 timestamp from Syncthing
+        let timestamp_str = "2025-11-09T23:38:41.765733116Z";
+        let parsed = parse_event_time(timestamp_str);
+
+        // Verify it's not the fallback (current time) by checking it's in the past
+        let now = SystemTime::now();
+        assert!(
+            parsed < now,
+            "Parsed timestamp should be in the past, not current time"
+        );
+
+        // Verify the time is reasonable (within last 24 hours for this test)
+        let duration_since = now.duration_since(parsed).unwrap();
+        assert!(
+            duration_since.as_secs() < 86400,
+            "Timestamp should be recent (within 24 hours for test)"
+        );
+    }
+
+    #[test]
+    fn test_parse_event_time_invalid_falls_back() {
+        // Test that invalid timestamps fall back to current time
+        let invalid_str = "not-a-timestamp";
+        let parsed = parse_event_time(invalid_str);
+
+        // Should be very close to now (within 1 second)
+        let now = SystemTime::now();
+        let diff = now.duration_since(parsed).unwrap_or(Duration::from_secs(0));
+        assert!(
+            diff.as_secs() < 1,
+            "Invalid timestamp should fall back to current time"
+        );
+    }
+
+    #[test]
+    fn test_parse_event_time_preserves_timestamp_accuracy() {
+        // Test that we preserve the exact timestamp from the event
+        // Use a specific timestamp from 2025-01-01
+        let timestamp_str = "2025-01-01T12:00:00.123456789Z";
+        let parsed = parse_event_time(timestamp_str);
+
+        // Convert back to check it matches
+        use chrono::DateTime;
+        let dt: chrono::DateTime<chrono::FixedOffset> =
+            DateTime::parse_from_rfc3339(timestamp_str).unwrap();
+        let expected = SystemTime::from(dt);
+
+        // Should be identical (within nanosecond precision)
+        let diff = parsed
+            .duration_since(expected)
+            .unwrap_or_else(|e| e.duration());
+        assert!(
+            diff.as_nanos() == 0,
+            "Timestamp should be parsed with full precision"
+        );
+    }
 }
 
 async fn event_listener_loop(
@@ -150,11 +244,13 @@ async fn event_listener_loop(
                                         if let Some(filenames) =
                                             event.data.get("filenames").and_then(|v| v.as_array())
                                         {
+                                            let timestamp = parse_event_time(&event.time);
                                             for filename in filenames {
                                                 if let Some(file_path) = filename.as_str() {
                                                     let invalidation = CacheInvalidation::File {
                                                         folder_id: folder_id.to_string(),
                                                         file_path: file_path.to_string(),
+                                                        timestamp,
                                                     };
 
                                                     log_debug(&format!(
@@ -174,9 +270,11 @@ async fn event_listener_loop(
                                         if let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
                                         {
+                                            let timestamp = parse_event_time(&event.time);
                                             let invalidation = CacheInvalidation::ItemStarted {
                                                 folder_id: folder_id.to_string(),
                                                 file_path: item_path.to_string(),
+                                                timestamp,
                                             };
                                             log_debug(&format!(
                                                 "DEBUG [EVENT]: ItemStarted: {:?}",
@@ -193,11 +291,14 @@ async fn event_listener_loop(
                                         if let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
                                         {
+                                            let timestamp = parse_event_time(&event.time);
+
                                             // Send ItemFinished notification
                                             let finished_invalidation =
                                                 CacheInvalidation::ItemFinished {
                                                     folder_id: folder_id.to_string(),
                                                     file_path: item_path.to_string(),
+                                                    timestamp,
                                                 };
                                             log_debug(&format!(
                                                 "DEBUG [EVENT]: ItemFinished: {:?}",
@@ -214,11 +315,13 @@ async fn event_listener_loop(
                                                 CacheInvalidation::Directory {
                                                     folder_id: folder_id.to_string(),
                                                     dir_path: item_path.to_string(),
+                                                    timestamp,
                                                 }
                                             } else {
                                                 CacheInvalidation::File {
                                                     folder_id: folder_id.to_string(),
                                                     file_path: item_path.to_string(),
+                                                    timestamp,
                                                 }
                                             };
                                             log_debug(&format!(
@@ -236,6 +339,7 @@ async fn event_listener_loop(
                                         if let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
                                         {
+                                            let timestamp = parse_event_time(&event.time);
                                             // Check if it's a directory
                                             let item_type =
                                                 event.data.get("type").and_then(|v| v.as_str());
@@ -247,12 +351,14 @@ async fn event_listener_loop(
                                                 CacheInvalidation::Directory {
                                                     folder_id: folder_id.to_string(),
                                                     dir_path: item_path.to_string(),
+                                                    timestamp,
                                                 }
                                             } else {
                                                 // File change - invalidate single file
                                                 CacheInvalidation::File {
                                                     folder_id: folder_id.to_string(),
                                                     file_path: item_path.to_string(),
+                                                    timestamp,
                                                 }
                                             };
 
@@ -270,9 +376,11 @@ async fn event_listener_loop(
                                     if let Some(folder_id) =
                                         event.data.get("folder").and_then(|v| v.as_str())
                                     {
+                                        let timestamp = parse_event_time(&event.time);
                                         let invalidation = CacheInvalidation::Directory {
                                             folder_id: folder_id.to_string(),
                                             dir_path: String::new(), // Empty = entire folder
+                                            timestamp,
                                         };
 
                                         log_debug(&format!(

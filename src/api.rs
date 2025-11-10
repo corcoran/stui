@@ -224,6 +224,24 @@ pub struct ConnectionStats {
     pub total: ConnectionTotal,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LastFileInfo {
+    pub at: String,
+    pub filename: String,
+    /// Whether the last operation was a deletion (we still show these in "Last Update")
+    #[allow(dead_code)]
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderStats {
+    pub last_file: LastFileInfo,
+    /// Last scan timestamp (not currently used)
+    #[allow(dead_code)]
+    pub last_scan: String,
+}
+
 #[derive(Clone)]
 pub struct SyncthingClient {
     base_url: String,
@@ -598,6 +616,41 @@ impl SyncthingClient {
         Ok(stats)
     }
 
+    /// Fetch folder statistics to get last updated file per folder
+    ///
+    /// Returns HashMap of folder_id -> (timestamp, filename)
+    /// Uses /rest/stats/folder which matches what Syncthing web GUI displays
+    pub async fn get_folder_stats(&self) -> Result<std::collections::HashMap<String, (std::time::SystemTime, String)>> {
+        use std::collections::HashMap;
+
+        let url = format!("{}/rest/stats/folder", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch folder stats")?;
+
+        let stats: HashMap<String, FolderStats> = response
+            .json()
+            .await
+            .context("Failed to parse folder stats")?;
+
+        let mut updates: HashMap<String, (std::time::SystemTime, String)> = HashMap::new();
+
+        for (folder_id, folder_stats) in stats {
+            // Parse the timestamp
+            let timestamp = crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
+
+            // Include all files, even deleted ones - matches Syncthing web GUI behavior
+            // The "deleted" flag just indicates the last operation was a deletion
+            updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
+        }
+
+        Ok(updates)
+    }
+
     /// Pause or resume a folder
     ///
     /// Uses PATCH /rest/config/folders/{id} to set the paused state
@@ -725,6 +778,70 @@ mod tests {
         // We can't actually call the API without a real instance,
         // but we can verify the method exists and accepts correct params
         // Real testing will happen in integration tests
+    }
+
+    #[test]
+    fn test_folder_stats_parsing() {
+        // Test parsing /rest/stats/folder response
+        let stats_json = r#"{
+            "folder-abc-123": {
+                "lastFile": {
+                    "at": "2025-11-09T23:24:15Z",
+                    "filename": ".thumbnails/7726.jpg",
+                    "deleted": false
+                },
+                "lastScan": "2025-11-10T04:29:36Z"
+            },
+            "folder-xyz-456": {
+                "lastFile": {
+                    "at": "2025-11-09T23:24:39Z",
+                    "filename": "worduel-staging/main.dart.js",
+                    "deleted": false
+                },
+                "lastScan": "2025-11-10T04:46:57Z"
+            },
+            "folder-deleted-789": {
+                "lastFile": {
+                    "at": "2025-11-09T20:00:00Z",
+                    "filename": "deleted-file.txt",
+                    "deleted": true
+                },
+                "lastScan": "2025-11-10T04:00:00Z"
+            }
+        }"#;
+
+        use std::collections::HashMap;
+        let stats: HashMap<String, FolderStats> =
+            serde_json::from_str(stats_json).expect("Failed to parse folder stats");
+
+        // Verify structure
+        assert_eq!(stats.len(), 3, "Should have 3 folders");
+
+        let folder_abc = stats.get("folder-abc-123").expect("Should have folder-abc-123");
+        assert_eq!(folder_abc.last_file.filename, ".thumbnails/7726.jpg");
+        assert_eq!(folder_abc.last_file.at, "2025-11-09T23:24:15Z");
+        assert_eq!(folder_abc.last_file.deleted, false);
+
+        let folder_deleted = stats.get("folder-deleted-789").expect("Should have folder-deleted-789");
+        assert_eq!(folder_deleted.last_file.deleted, true, "Deleted flag should be true");
+
+        // Test conversion to HashMap (simulating what get_folder_stats does)
+        let mut updates: HashMap<String, (std::time::SystemTime, String)> = HashMap::new();
+        for (folder_id, folder_stats) in stats {
+            // Include all files, even deleted ones - matches Syncthing web GUI behavior
+            let timestamp = crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
+            updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
+        }
+
+        // Should have all 3 folders (including deleted one - matches web GUI behavior)
+        assert_eq!(updates.len(), 3, "Should include all files, even deleted ones");
+        assert!(updates.contains_key("folder-abc-123"));
+        assert!(updates.contains_key("folder-xyz-456"));
+        assert!(updates.contains_key("folder-deleted-789"), "Should include deleted file");
+
+        // Verify file paths
+        let abc_update = updates.get("folder-abc-123").expect("Should have folder-abc-123");
+        assert_eq!(abc_update.1, ".thumbnails/7726.jpg");
     }
 
     #[test]
