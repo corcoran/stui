@@ -17,3 +17,4 @@ pub(crate) mod ignore;
 pub(crate) mod sorting;
 pub(crate) mod file_ops;
 pub(crate) mod preview;
+pub(crate) mod filters;
