@@ -4,14 +4,6 @@
 
 Building a Rust Ratatui CLI that manages Syncthing via its REST API — listing folders, showing contents, adding .stignore rules, and deleting directories safely with Docker path-mapping support.
 
-**What makes this app unique:**
-- **Advanced file management**: Breadcrumb navigation, selective ignore, and visibility of ignored files that still exist on disk
-- **Terminal image preview**: High-performance image rendering (40-200ms) with adaptive quality using Kitty/iTerm2/Sixel/Halfblocks protocols
-- **ANSI art rendering**: Full-featured ANSI/ASCII art viewer with CP437 encoding, 80-column wrapping, and proper color support
-- **Real-time sync monitoring**: Event-driven cache invalidation with granular file-level updates
-
-The file management, image preview, and ANSI art rendering features are core differentiators and should be modified with care.
-
 ## claude instructions
 
 ### CRITICAL: Test-Driven Development is MANDATORY
@@ -272,201 +264,19 @@ pub fn get_path() { // missing return type
 
 #### Clippy Linting
 
-**Before committing, also run:**
-```bash
-cargo clippy -- -D warnings
-```
+**Before committing, run:** `cargo clippy -- -D warnings` (failures block CI/CD)
 
-This checks for common mistakes and code improvements. Failures block CI/CD.
-
-**Common Clippy Patterns - Quick Reference:**
-
-**Option/Result Patterns:**
-```rust
-// ✅ Use is_some_and/is_none_or for cleaner Option checks
-if cached_seq.is_some_and(|seq| seq != expected) { }
-if cached_seq.is_none_or(|seq| seq != expected) { }
-
-// ❌ Avoid map_or with boolean literals
-if cached_seq.map_or(false, |seq| seq != expected) { }  // Use is_some_and
-if cached_seq.map_or(true, |seq| seq != expected) { }   // Use is_none_or
-
-// ✅ Use pattern matching instead of unwrap_err after check
-match result.as_ref() {
-    Ok(val) => val,
-    Err(err) => { handle_error(err); return; }
-}
-
-// ❌ Avoid unwrap after is_some/is_err check
-if result.is_err() {
-    let err = result.unwrap_err();  // Clippy warns about this
-}
-```
-
-**Collection Access:**
-```rust
-// ✅ Use .first() for first element
-let first = items.first();
-
-// ❌ Avoid .get(0)
-let first = items.get(0);
-
-// ✅ Use array literals for const data
-let types = [("A", 1), ("B", 2)];
-
-// ❌ Avoid vec! for const data
-let types = vec![("A", 1), ("B", 2)];
-
-// ✅ Use contains_key for HashMaps
-if !map.contains_key(&key) { }
-
-// ❌ Avoid .get().is_none()
-if map.get(&key).is_none() { }
-```
-
-**Iterator Patterns:**
-```rust
-// ✅ Iterate directly when index unused
-for item in items.iter() { }
-
-// ❌ Avoid enumerate when not using index
-for (_idx, item) in items.iter().enumerate() { }
-
-// ✅ Use .iter().take() instead of range indexing
-for item in buffer.iter().take(max) { }
-
-// ❌ Avoid range loops that only index
-for i in 0..max {
-    let item = buffer[i];
-}
-```
-
-**Arithmetic Patterns:**
-```rust
-// ✅ Use saturating_sub for safe subtraction
-let result = a.saturating_sub(b);
-
-// ❌ Avoid manual subtraction with zero check
-let result = if a > b { a - b } else { 0 };
-```
-
-**Control Flow:**
-```rust
-// ✅ Collapse nested ifs with &&
-if condition1 && condition2 {
-    do_something();
-}
-
-// ❌ Avoid unnecessary nesting
-if condition1 {
-    if condition2 {
-        do_something();
-    }
-}
-
-// ✅ Use if let for single pattern match
-if let Some(value) = option {
-    use_value(value);
-}
-
-// ❌ Avoid match for single pattern
-match option {
-    Some(value) => use_value(value),
-    _ => {}
-}
-
-// ✅ Simplify identical if branches
-if condition1 || condition2 {
-    do_same_thing();
-}
-
-// ❌ Avoid duplicate code in branches
-if condition1 {
-    do_same_thing();
-} else if condition2 {
-    do_same_thing();
-}
-```
-
-**String Formatting:**
-```rust
-// ✅ Use string literals directly
-log_debug("Message");
-
-// ❌ Avoid format! with no formatting
-log_debug(&format!("Message"));
-
-// ✅ Use .to_string() for static strings
-"text".to_string()
-
-// ❌ Avoid format! for static strings
-format!("text")
-```
-
-**Type Patterns:**
-```rust
-// ✅ Add Default impl for types with new()
-impl Default for MyStruct {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ❌ Clippy warns about new() without Default
-impl MyStruct {
-    pub fn new() -> Self { /* ... */ }
-}
-
-// ✅ Box large enum variants
-enum Response {
-    Small(u32),
-    Large(Box<HugeStruct>),  // Box if >3x size difference
-}
-
-// ❌ Avoid large size differences between variants
-enum Response {
-    Small(u32),        // 4 bytes
-    Large(HugeStruct), // 648 bytes - clippy warns
-}
-```
-
-**Error Handling:**
-```rust
-// ✅ Use ? for error propagation
-fn load_file(path: &str) -> Result<String> {
-    std::fs::read_to_string(path).context("Failed to read file")
-}
-
-// ❌ Avoid unwrap in library code
-fn load_file(path: &str) -> String {
-    std::fs::read_to_string(path).unwrap()
-}
-```
-
-**When to Use #[allow]:**
-```rust
-// ✅ Allow too_many_arguments for UI rendering functions
-// (Ratatui pattern - passing many render parameters is idiomatic)
-#[allow(clippy::too_many_arguments)]
-pub fn render_status_bar(
-    f: &mut Frame,
-    area: Rect,
-    // ... 10+ parameters for rendering state
-) { }
-
-// ✅ Allow complexity for one-time initialization
-#[allow(clippy::cognitive_complexity)]
-fn initialize_app() -> Result<App> {
-    // Complex but necessary startup logic
-}
-```
-
-**Other Common Issues:**
-- Unused variables → remove or prefix with `_`
-- Redundant closures → simplify when possible
-- Incorrect naming → use `snake_case` for functions/variables, `PascalCase` for types
-- Needless borrows → remove `&` when compiler can infer
-- Explicit `return` in final expression → remove `return` keyword
+**Key patterns:**
+- Use `is_some_and`/`is_none_or` instead of `map_or` with booleans
+- Use `.first()` not `.get(0)`, `contains_key()` not `.get().is_none()`
+- Use pattern matching instead of unwrap after is_ok/is_err checks
+- Collapse nested ifs with `&&`, use `if let` for single pattern matches
+- Use `saturating_sub()` for safe subtraction
+- Avoid `format!()` for static strings, use string literals or `.to_string()`
+- Add `Default` impl for types with `new()`
+- Box large enum variants (>3x size difference)
+- Prefix unused variables with `_`
+- Use `#[allow(clippy::too_many_arguments)]` for Ratatui render functions (idiomatic pattern)
 
 #### GitHub Actions Checks
 
@@ -508,7 +318,7 @@ The CI pipeline runs these checks automatically:
 - ✅ `item.item_type == "FILE_INFO_TYPE_DIRECTORY"` for checking directories
 - ✅ `item.item_type != "FILE_INFO_TYPE_DIRECTORY"` for checking files
 
-See `src/api.rs:31` for `BrowseItem` struct definition.
+See `src/api.rs:43` for `BrowseItem` struct definition.
 
 
 ## Architecture Context
@@ -565,25 +375,11 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### User Actions
 
-- `?` or `Enter` (on files): Show detailed file info popup with metadata (sync state, permissions, device availability) and preview:
+- `?` or `Enter` (on files): Show detailed file info popup with metadata and preview:
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
-  - **ANSI art files**: Full-featured ANSI/ASCII art rendering with auto-detection
-    - Auto-detects ANSI codes in any file (ESC[ sequences), not just .ans/.asc extensions
-    - CP437 encoding support (original IBM PC character set with box-drawing characters)
-    - 80-column automatic wrapping (matching PabloDraw and other ANSI art viewers)
-    - Line buffer rendering with proper cursor positioning (CSI `[nC` codes)
-    - Full SGR color support (foreground colors 30-37, 90-97; background colors 40-47, 100-107)
-    - SAUCE metadata stripping (Ctrl-Z delimiter)
-    - Multiple line ending formats (\r\n, \n, \r)
-    - Background color stripping from spaces to prevent bleeding
-    - Fixed 80-character width container with text wrapping enabled
-  - **Image files**: Terminal image rendering with Kitty/iTerm2/Sixel/Halfblocks protocols
-    - Auto-detects terminal capabilities and font size
-    - Non-blocking background loading (popup appears immediately)
-    - Adaptive quality/performance (40-200ms load times)
-    - Smart centering and aspect ratio preservation
-    - Shows resolution in metadata column
-  - **Binary files**: Shows extracted text or metadata
+  - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors
+  - **Image files**: Terminal rendering (Kitty/iTerm2/Sixel/Halfblocks), non-blocking load
+  - **Binary files**: Extracted text or metadata
 - `c`: **Context-aware action**:
   - **Folder view** (focus_level == 0): Change folder type (Send Only, Send & Receive, Receive Only) with selection menu
   - **Breadcrumb view** (focus_level > 0): Copy file/directory path to clipboard (uses mapped host paths)
@@ -604,115 +400,40 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Search Feature
 
-**Real-time recursive file search** with wildcard support and intelligent filtering:
-
-- **Trigger**: `Ctrl-F` (normal mode) or `/` (vim mode) in breadcrumb view
-- **Search Scope**: Recursively searches all cached files/directories in current folder, including deeply nested subdirectories
-- **Search Input**:
-  - Appears above hotkey legend with `Match: ` prompt and blinking cursor
-  - Cyan border when active, gray when inactive
-  - Shows match count in title: `Search (3 matches) - Esc to cancel`
-- **Real-Time Filtering**: Items filter as you type (no debouncing needed - fast!)
-- **Pattern Matching**:
-  - Case-insensitive substring matching
-  - Wildcard support: `*` matches any sequence of characters
-  - Examples: `*jeff*`, `*.txt`, `photo*`
-  - Matches file names and path components
-- **Intelligent Display**:
-  - Shows parent directories if they contain matching descendants
-  - Example: Searching "jeff" in root shows "Movies/" if "Movies/Photos/jeff-1.txt" exists
-  - Drilling into "Movies/" shows "Photos/" breadcrumb
-  - Drilling into "Photos/" shows actual "jeff-1.txt" file
-- **Search Persistence**:
-  - Query persists when navigating into subdirectories
-  - Search automatically applies to new directories
-  - **Context-aware clearing**: Only clears when backing out past the directory where search was initiated
-    - Start search in `Foo/` → navigate to `Foo/Bar/` → search persists
-    - Back out to `Foo/` → search still active
-    - Back out to folder list → search clears automatically
-- **Exit Options**:
-  - `Esc`: Clear search and restore all items
-  - `Enter`: Accept search (keep filtering, deactivate input)
-  - `Backspace` to empty: Auto-exit and restore all items
-- **Performance**: Optimized for speed - handles 1000+ files instantly with recursive search
-- **UI Integration**:
-  - Search box appears between main content and legend
-  - Legend shows mode-specific hotkey: `^F:Search` or `/:Search`
-  - During search: `Esc:Exit Search` or `Esc:Clear Search`
-
-**Implementation Details**:
-- Uses SQLite cache for fast recursive queries across all subdirectories
-- Prefetch system ensures all subdirectories are cached for instant search
-- State tracking prevents duplicate API requests with `discovered_dirs` HashSet
-- Search origin level tracking (`search_origin_level`) enables context-aware clearing
+**Real-time recursive search** with wildcards (`*`), case-insensitive, shows parent dirs with matching descendants. Trigger with `Ctrl-F` or `/` (vim mode). Search persists when drilling down, context-aware clearing when backing out past origin. SQLite cache enables instant recursive queries across all subdirectories.
 
 ### Status Bar & UI Elements
 
-**UI Layout (top to bottom):**
-- **System Bar** (full width): Device name, uptime, local state summary, transfer rates
-- **Main Content**: Folders pane + Breadcrumb panels (horizontal split with smart sizing)
-- **Hotkey Legend** (full width): Context-aware key display with text wrapping
-- **Status Bar** (full width): Folder state, folder type, data sizes, sync progress, sort mode
+**UI Layout:** System bar → Main content (folders + breadcrumb panels with smart sizing) → Hotkey legend → Status bar
 
-**Breadcrumb Layout:**
-- Current folder gets 50-60% of screen width for better visibility
-- Parent folders share remaining 40-50% equally
-- All ancestor breadcrumbs remain highlighted (blue border) when drilling deeper
-- Current breadcrumb has cyan border + `> ` arrow
-
-**Other UI Features:**
-- **Last Update Display**: Shows timestamp and filename of most recent change per folder
-- **File Info Display**: Three-state toggle showing timestamp and/or size (human-readable: `1.2K`, `5.3M`, etc.)
-  - Off: No info displayed
-  - TimestampOnly: Shows modification time (e.g., `2025-10-26 20:58`)
-  - TimestampAndSize: Shows size + timestamp for files (e.g., `1.2M 2025-10-26 20:58`), timestamp only for directories
-- **Smart Hotkey Legend**: Context-aware display
-  - Folder view: Shows navigation, Change Type, Pause/Resume, Rescan, Quit
-  - Breadcrumb view: Shows all keys including file operations (Copy, Sort, Info, Ignore, Delete)
-  - Restore only appears when folder has local changes (receive_only_total_items > 0)
-  - Text wrapping enabled (wraps within fixed 3-line height on narrow terminals)
-  - Scrollbar indicators: Automatically appear on breadcrumb panels when content exceeds viewport height
-- **Folder Type Display**: Status bar shows folder type (Send Only, Send & Receive, Receive Only) before state field
-- **Confirmation Dialogs**: For destructive operations (delete, revert, ignore+delete)
-- **Sorting**: Multi-mode sorting (Sync State/A-Z/Timestamp/Size) with visual indicators in status bar and toast notifications, directories always sorted first
+**Key UI features:**
+- Context-aware hotkey legend (folder view vs breadcrumb view)
+- Three-state file info toggle (Off/TimestampOnly/TimestampAndSize)
+- Multi-mode sorting (Sync State/A-Z/Timestamp/Size) with visual indicators
+- Scrollbar indicators on breadcrumb panels when content exceeds viewport
+- Confirmation dialogs for destructive operations
 
 ### Configuration
 
-YAML config file at platform-specific location (Linux: `~/.config/stui/config.yaml`, macOS: `~/Library/Application Support/stui/config.yaml`, Windows: `%APPDATA%\stui\config.yaml`) containing:
-- API key
-- Base URL
-- `path_map` (container-to-host path translations)
-- `vim_mode` (optional, boolean to enable vim keybindings)
-- `icon_mode` (optional, string): Icon rendering mode - `"nerdfont"` or `"emoji"` (default: `"nerdfont"`)
-- `open_command` (optional, string): Command to execute for opening files/directories (e.g., `xdg-open`, `code`, `vim`)
-- `clipboard_command` (optional, string): Command to copy text to clipboard via stdin (e.g., `wl-copy`, `xclip`, `pbcopy`)
-- **Image Preview Settings**:
-  - `image_preview_enabled` (boolean, default: `true`): Enable/disable image preview
-  - `image_protocol` (string, default: `"auto"`): Terminal graphics protocol - `"auto"`, `"kitty"`, `"iterm2"`, `"sixel"`, or `"halfblocks"`
+YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, image preview settings
 
-CLI flags:
-- `--debug`: Enable debug logging to `/tmp/stui-debug.log` (includes image loading performance metrics)
-- `--vim`: Enable vim keybindings (overrides config file setting)
-- `--config <path>`: Specify custom config file path
-
-### Safety Features
-
-- Confirmation prompts for destructive actions
-- Optional folder pause before deletions
-- Path mapping validation
+CLI flags: `--debug`, `--vim`, `--config <path>`
 
 ## Syncthing REST API Endpoints
 
 ```
 /rest/system/config                           # Get folders and devices
-/rest/config/folders/<id>                     # PATCH to modify folder config (e.g., pause/resume)
+/rest/config/folders/<id>                     # PATCH to modify folder config (e.g., pause/resume, folder type)
 /rest/db/status?folder=<id>                   # Folder sync status (with sequence numbers)
 /rest/db/browse?folder=<id>[&prefix=subdir/]  # Browse contents
 /rest/db/file?folder=<id>&file=<path>         # Get file sync details
-/rest/db/ignores?folder=<id>                  # Get/set .stignore rules
+/rest/db/ignores?folder=<id>                  # GET/PUT .stignore rules
 /rest/db/scan?folder=<id>                     # Trigger folder rescan
 /rest/db/revert?folder=<id>                   # Revert receive-only folder
-/rest/events?since=<id>&timeout=60            # Event stream (long-polling, IMPLEMENTED)
+/rest/db/localchanged?folder=<id>             # Get local changes (receive-only)
+/rest/db/need?folder=<id>                     # Get files needed from remote
+/rest/stats/folder                            # Folder statistics (matches web GUI)
+/rest/events?since=<id>&timeout=60            # Event stream (long-polling)
 /rest/system/status                           # System status (device info, uptime)
 /rest/system/connections                      # Connection/transfer statistics
 ```
@@ -721,82 +442,42 @@ CLI flags:
 
 ### Code Organization
 
-**Main Application Structure:**
-- `src/main.rs` (~3,300 lines) - App struct, main event loop, orchestration methods
-- `src/handlers/` - Event handlers (keyboard, API responses, cache events)
-  - `keyboard.rs` - All keyboard input handling with confirmation dialogs
-  - `api.rs` - API response processing and state updates
-  - `events.rs` - Event stream processing and cache invalidation
-- `src/services/` - Background services (API queue, event listener)
-  - `api.rs` - Async API service with priority queue and request deduplication
-  - `events.rs` - Long-polling event listener for real-time updates
-- `src/model/` - Pure application state (Elm Architecture)
-  - `mod.rs` - Main Model struct with helper methods
-  - `syncthing.rs` - Syncthing data (folders, devices, statuses)
-  - `navigation.rs` - Breadcrumb trail and focus state
-  - `ui.rs` - UI preferences, dialogs, popups
-  - `performance.rs` - Loading tracking, metrics, pending operations
-  - `types.rs` - Shared types (BreadcrumbLevel, FileInfoPopupState, etc.)
-- `src/logic/` - Pure business logic functions (18 functions, 110+ tests)
-  - `file.rs` - File type detection, binary detection, ANSI art parsing with CP437 encoding
-  - `folder.rs` - Folder validation and state checking
-  - `formatting.rs` - Data formatting (uptime, file sizes)
-  - `ignore.rs` - Pattern matching for .stignore
-  - `layout.rs` - UI layout calculations
-  - `navigation.rs` - Selection navigation logic
-  - `path.rs` - Path translation (container ↔ host)
-  - `performance.rs` - Batching and throttling logic
-  - `search.rs` - Search pattern matching (wildcards, case-insensitive)
-  - `sync_states.rs` - Sync state priority and validation
-  - `ui.rs` - UI state transitions (display modes, sort, vim commands)
-- `src/ui/` - Rendering components (12 modules)
-  - `render.rs` - Main render coordinator
-  - `folder_list.rs` - Folder list panel with status icons
-  - `breadcrumb.rs` - Breadcrumb navigation panels with scrollbars
-  - `dialogs.rs` - Confirmation dialogs and popups
-  - `icons.rs` - Icon rendering (emoji/nerdfont) with color themes
-  - `legend.rs` - Context-aware hotkey legend
-  - `search.rs` - Search input box with real-time filtering
-  - `status_bar.rs` - Bottom status bar with sync info
-  - `system_bar.rs` - Top system bar with device info
-  - `layout.rs` - Panel layout calculations
-- `src/api.rs` - Syncthing API client (all REST endpoints)
-- `src/cache.rs` - SQLite cache for browse results and sync states
-- `src/state.rs` - Legacy state types (being phased out)
+**Main modules:**
+- `src/main.rs` (~1,180 lines) - App struct, main event loop (starts ~line 909)
+- `src/app/` - App orchestration: file_ops, filters, ignore, navigation, preview, sorting, sync_states
+- `src/handlers/` - Event handlers: keyboard, api, events
+- `src/services/` - Background: api (async queue), events (long-polling)
+- `src/model/` - Pure state (Elm): syncthing, navigation, ui, performance, types
+- `src/logic/` - Pure business logic (15 modules): file, folder, formatting, ignore, layout, navigation, path, performance, platform, search, sorting, sync_states, ui, errors
+- `src/ui/` - Rendering (13 modules): render, folder_list, breadcrumb, dialogs, icons, legend, search, status_bar, system_bar, out_of_sync_summary, toast, layout
+- `src/api.rs`, `src/cache.rs`, `src/config.rs`, `src/utils.rs` - Core utilities
 
-**Additional Documentation:**
-- See [RATATUI_NOTES.md](RATATUI_NOTES.md) for comprehensive Ratatui UI implementation patterns, constraint system behavior, dynamic height calculations, and best practices
-
-**Key Application Patterns:**
-- **App initialization** (`main.rs:361-480`): `App::new()` loads folders via `client.get_folders()`, spawns API service and event listener
-- **Main event loop** (`main.rs:2973-3150`): Always-render pattern, processes API responses, keyboard input, cache events, image updates
-- **Keyboard handling** (`handlers/keyboard.rs`): Top-level match statement with confirmation dialogs processed first
-- **State updates**: `model.syncthing.folders` updated via `client.get_folders()` after mutations (pause/resume, etc.)
+**Key patterns:** App initialization loads folders, spawns services. Main event loop (~line 909) processes API responses, keyboard, cache events. Keyboard handler has confirmation dialogs first.
 
 **CRITICAL Architecture Rules:**
 1. **UI Side Effects (toasts, dialogs) MUST be in `handlers/keyboard.rs`**
-   - ❌ WRONG: Calling `show_toast()` in helper methods in `main.rs`
+   - ❌ WRONG: Calling `show_toast()` in helper methods in `main.rs` or `src/app/`
    - ✅ CORRECT: Calling `show_toast()` in keyboard handler where user action happens
-   - Helper methods in `main.rs` should only do business logic (update state, call APIs)
+   - Helper methods in `main.rs` and `src/app/` should only do business logic (update state, call APIs)
    - All user feedback (toasts, error messages) belongs at the call site in keyboard handler
 
 2. **Separation of Concerns:**
    - `src/api.rs`: Pure API client methods (no UI, no state mutation beyond return values)
    - `src/handlers/keyboard.rs`: Keyboard events → business logic → UI feedback (toasts, dialogs)
-   - `src/main.rs`: Orchestration methods (pure business logic, no UI side effects)
+   - `src/main.rs` + `src/app/`: Orchestration methods (pure business logic, no UI side effects)
    - `src/model/`: Pure state (cloneable, no side effects, no I/O)
    - `src/logic/`: Pure functions (testable, no state mutation, no I/O)
    - `src/ui/`: Pure rendering (takes state, returns widgets, no mutation)
 
 3. **Adding UI Feedback Pattern:**
    ```rust
-   // ❌ WRONG - toast in helper method
+   // ❌ WRONG - toast in helper method (main.rs or src/app/)
    fn cycle_sort_mode(&mut self) {
        self.model.ui.sort_mode = new_mode;
        self.model.ui.show_toast("Sort changed"); // WRONG!
    }
 
-   // ✅ CORRECT - toast at call site
+   // ✅ CORRECT - toast at call site in keyboard handler
    KeyCode::Char('s') => {
        app.cycle_sort_mode(); // Pure business logic
        app.model.ui.show_toast(format!("Sort: {}", app.model.ui.sort_mode.as_str())); // UI feedback here
@@ -804,85 +485,23 @@ CLI flags:
    ```
 
 ### Event-Driven Cache Invalidation
-- Long-polling `/rest/events` endpoint for real-time updates
-- Granular invalidation: file-level, directory-level, folder-level
-- Event types handled:
-  - `LocalIndexUpdated` (local changes with `filenames` array)
-  - `ItemStarted` (sync begins - shows Syncing state)
-  - `ItemFinished` (sync completion)
-  - `LocalChangeDetected`, `RemoteChangeDetected`
-- Persistent event ID across app restarts
-- Auto-recovery from stale event IDs (resets to 0 if high ID returns nothing)
+Long-polling `/rest/events` for real-time updates. Granular invalidation (file/dir/folder). Handles LocalIndexUpdated, ItemStarted, ItemFinished. Persistent event ID, auto-recovery.
 
 ### Performance Optimizations
-- **Async API Service**: Channel-based request queue with priority levels (High/Medium/Low)
-- **Cache-First Rendering**: SQLite cache for instant display, background updates
-- **Sequence-Based Validation**: Only invalidates cache when Syncthing data changes
-- **Non-Blocking Operations**: All background tasks run async without freezing UI
-- **Request Deduplication**: Prevents duplicate in-flight API calls
-- **Idle Detection & Non-Blocking UI**: 300ms idle threshold ensures keyboard input is never blocked by background prefetch operations; main event loop uses 250ms poll timeout to minimize CPU wakeups (~<1-2% CPU when idle)
+Async API service with priority queue, cache-first rendering, sequence-based validation, request deduplication, 300ms idle threshold, 250ms poll timeout (~1-2% CPU idle).
 
 ### Caching Strategy
-- **SQLite database**: `~/.cache/stui/cache.db` (Linux) or `/tmp/stui-cache` (fallback)
-- **Browse cache**: Directory listings with folder sequence validation, includes `mod_time` and `size` fields
-- **Sync state cache**: Per-file sync states with file sequence validation
-- **Folder status cache**: Status with sequence, displayed stats (in_sync/total items)
-- **Event ID persistence**: Survives app restarts
-- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/stui/cache.db`)
+SQLite at `~/.cache/stui/cache.db` with browse, sync state, folder status caches. Event ID persists. Manual clear on schema changes: `rm ~/.cache/stui/cache.db`
 
 ### ANSI Art Rendering
-- **Auto-Detection**: Content-based detection of ANSI escape codes (ESC[ sequences) in addition to .ans/.asc extensions
-  - `contains_ansi_codes()` function scans file bytes for ESC[ followed by valid ANSI parameters
-  - Enables ANSI rendering for any file containing ANSI codes, regardless of extension
-- **CP437 Encoding**: Uses `codepage-437` crate to decode original IBM PC character set (box-drawing, extended ASCII)
-- **80-Column Wrapping**: Standard ANSI art format - automatically wraps at column 80 (matching PabloDraw, Ansilove)
-- **Line Buffer Algorithm**: Fixed-width buffer (80 chars) with cursor positioning support
-  - Characters written at absolute column positions
-  - Cursor forward (`ESC[nC`) moves position without inserting characters
-  - When buffer reaches 80 chars, flushes as new line and resets
-  - Later content can overwrite earlier content at same position
-- **SGR Color Support**: Full ANSI color codes
-  - Foreground: 30-37 (standard), 90-97 (bright)
-  - Background: 40-47 (standard), 100-107 (bright)
-  - Modifiers: bold (1), italic (3), underline (4)
-- **SAUCE Metadata**: Strips binary metadata block after Ctrl-Z character (0x1A)
-- **Line Endings**: Normalizes \r\n, \n, and \r to uniform format
-- **Background Stripping**: Removes background colors from spacing characters to prevent bleeding
-- **Fixed-Width Container**: 83 columns (80 + 3 for borders/padding), centered horizontally
-- **Text Wrapping**: Enabled to handle lines that exceed 80 characters
+Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, line buffer with cursor positioning, SGR colors (fg 30-37/90-97, bg 40-47/100-107), SAUCE stripping.
 
 ### State Transition Validation
-- **Logic-Based Protection**: Validates state transitions based on user actions, not arbitrary timeouts
-- **Action Tracking**: `ManualStateChange` struct tracks what action was performed (SetIgnored/SetUnignored) with timestamp
-- **Transition Rules**:
-  - After **SetIgnored**: Only accept `Ignored` state (reject stale Synced/RemoteOnly/etc)
-  - After **SetUnignored**: Accept any state except `Ignored` (reject stale Ignored state)
-- **Safety Valve**: 10-second timeout prevents permanent blocking in edge cases
-- **No Race Conditions**: Works regardless of network latency or event timing
-- **Syncing State Tracking**: `syncing_files` HashSet tracks actively syncing files between ItemStarted/ItemFinished events
+`ManualStateChange` tracks SetIgnored/SetUnignored. After SetIgnored → only accept Ignored. After SetUnignored → accept any except Ignored. 10s safety timeout. `syncing_files` HashSet tracks ItemStarted/ItemFinished.
 
-## Current State & Test Coverage
+## Current State
 
-**Architecture Quality:**
-- ✅ Clean separation: Model (pure state) vs Runtime (services)
-- ✅ Pure business logic extracted (18 functions, 110+ tests)
-- ✅ 169 total tests passing (110+ logic + 43+ model + 16 misc)
-- ✅ Zero warnings, production-ready code
-- ✅ Comprehensive refactoring complete (see ELM_REWRITE_PREP.md)
-- ✅ Full ANSI art support with CP437 encoding and 80-column wrapping
-
-### Known Limitations
-- No async loading spinners (planned)
-- No batch operations for multi-select
-- Error handling and timeout management needs improvement
-
-### Planned Features
-- File type filtering and ignored-only view
-- Event history viewer with persistent logging
-- Optional filesystem diff view
-- Batch operations (multi-select for ignore/delete/rescan)
-- Cross-platform packaging (Linux, macOS, Windows)
-- Better error states, handling, and timeout management
+**569 tests passing**, zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.9.1.
 
 ## Development Guidelines
 
@@ -988,7 +607,7 @@ CLI flags:
 - Selection Menu:
   - Uses `List` widget with ↑↓ navigation, Enter to select, Esc to cancel
   - Current type highlighted in cyan/italic
-  - Handler at top of keyboard.rs (lines 317-384)
+  - Handler near top of keyboard.rs (check for `folder_type_selection` match)
 - Execution: Call API, reload folders, update `model.syncthing.folders`, show toast
 - Dialog: `render_folder_type_selection()` shows 3 options with user-friendly names
 - Legend: Shows "c:Change Type" only in folder view
