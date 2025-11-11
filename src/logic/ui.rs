@@ -192,6 +192,10 @@ pub fn should_dismiss_toast(elapsed_millis: u128) -> bool {
 mod tests {
     use super::*;
 
+    // ========================================
+    // CYCLE DISPLAY MODE
+    // ========================================
+
     #[test]
     fn test_cycle_display_mode_from_off() {
         assert_eq!(cycle_display_mode(DisplayMode::Off), DisplayMode::TimestampOnly);
@@ -206,6 +210,10 @@ mod tests {
     fn test_cycle_display_mode_from_timestamp_and_size() {
         assert_eq!(cycle_display_mode(DisplayMode::TimestampAndSize), DisplayMode::Off);
     }
+
+    // ========================================
+    // CYCLE SORT MODE
+    // ========================================
 
     #[test]
     fn test_cycle_sort_mode_in_breadcrumb_view() {
@@ -229,6 +237,10 @@ mod tests {
         assert_eq!(cycle_sort_mode(SortMode::FileSize, 0), None);
     }
 
+    // ========================================
+    // TOGGLE SORT REVERSE
+    // ========================================
+
     #[test]
     fn test_toggle_sort_reverse_in_breadcrumb_view() {
         // Toggle in breadcrumb view (focus_level > 0)
@@ -244,6 +256,10 @@ mod tests {
         assert_eq!(toggle_sort_reverse(false, 0), None);
         assert_eq!(toggle_sort_reverse(true, 0), None);
     }
+
+    // ========================================
+    // VIM COMMAND STATE
+    // ========================================
 
     #[test]
     fn test_next_vim_command_state_first_g_press() {
@@ -290,6 +306,10 @@ mod tests {
         assert_eq!(state, VimCommandState::None);
         assert!(should_jump);
     }
+
+    // ========================================
+    // TOAST DISMISSAL
+    // ========================================
 
     #[test]
     fn test_should_dismiss_toast_before_timeout() {

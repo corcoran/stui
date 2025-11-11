@@ -167,6 +167,10 @@ impl UiModel {
 mod tests {
     use super::*;
 
+    // ========================================
+    // UI MODEL CREATION
+    // ========================================
+
     #[test]
     fn test_ui_model_creation() {
         let model = UiModel::new(false);
@@ -219,6 +223,10 @@ mod tests {
         let _cloned = model.clone();
     }
 
+    // ========================================
+    // SEARCH MODE
+    // ========================================
+
     #[test]
     fn test_has_modal_includes_search() {
         let mut model = UiModel::new(false);
@@ -238,6 +246,36 @@ mod tests {
         assert!(!model.search_mode);
         assert!(model.search_query.is_empty());
     }
+
+    #[test]
+    fn test_search_mode_lifecycle() {
+        let mut model = UiModel::new(false);
+
+        // Start in non-search mode
+        assert!(!model.search_mode);
+        assert!(model.search_query.is_empty());
+
+        // Enter search mode
+        model.search_mode = true;
+        assert!(model.search_mode);
+
+        // Type query
+        model.search_query = "test".to_string();
+        assert_eq!(model.search_query, "test");
+
+        // Accept search (Enter key - exit search mode but keep query)
+        model.search_mode = false;
+        assert!(!model.search_mode);
+        assert_eq!(model.search_query, "test"); // Query persists
+
+        // Clear search (Esc key - clear both)
+        model.search_query.clear();
+        assert!(model.search_query.is_empty());
+    }
+
+    // ========================================
+    // SEARCH QUERY OPERATIONS
+    // ========================================
 
     #[test]
     fn test_search_query_can_be_built_incrementally() {
@@ -273,32 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_mode_lifecycle() {
-        let mut model = UiModel::new(false);
-
-        // Start in non-search mode
-        assert!(!model.search_mode);
-        assert!(model.search_query.is_empty());
-
-        // Enter search mode
-        model.search_mode = true;
-        assert!(model.search_mode);
-
-        // Type query
-        model.search_query = "test".to_string();
-        assert_eq!(model.search_query, "test");
-
-        // Accept search (Enter key - exit search mode but keep query)
-        model.search_mode = false;
-        assert!(!model.search_mode);
-        assert_eq!(model.search_query, "test"); // Query persists
-
-        // Clear search (Esc key - clear both)
-        model.search_query.clear();
-        assert!(model.search_query.is_empty());
-    }
-
-    #[test]
     fn test_search_minimum_length_enforced() {
         let mut model = UiModel::new(false);
         model.search_mode = true;
@@ -312,6 +324,10 @@ mod tests {
         assert_eq!(model.search_query.len(), 2);
         assert!(model.search_query.len() >= 2);
     }
+
+    // ========================================
+    // SEARCH ORIGIN LEVEL
+    // ========================================
 
     #[test]
     fn test_search_origin_level_set_on_start() {

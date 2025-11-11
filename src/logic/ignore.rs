@@ -160,6 +160,10 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    // ========================================
+    // PATTERN MATCHING
+    // ========================================
+
     #[test]
     fn test_exact_match() {
         assert!(pattern_matches("/foo/bar.txt", "/foo/bar.txt"));
@@ -196,6 +200,10 @@ mod tests {
         assert!(pattern_matches("test?.txt", "/foo/test1.txt"));
     }
 
+    // ========================================
+    // FIND MATCHING PATTERNS
+    // ========================================
+
     #[test]
     fn test_find_matching_patterns() {
         let patterns = vec![
@@ -231,6 +239,10 @@ mod tests {
         assert!(matches.contains(&"/foo/bar.tmp".to_string()));
     }
 
+    // ========================================
+    // PATTERN VALIDATION - VALID
+    // ========================================
+
     #[test]
     fn test_validate_pattern_valid() {
         // Valid simple patterns
@@ -254,6 +266,10 @@ mod tests {
         assert!(validate_pattern("/cache/**/*.tmp").is_ok());
         assert!(validate_pattern("**/node_modules/**").is_ok());
     }
+
+    // ========================================
+    // PATTERN VALIDATION - INVALID
+    // ========================================
 
     #[test]
     fn test_validate_pattern_empty() {
@@ -299,6 +315,10 @@ mod tests {
             assert!(msg.contains("brace"));
         }
     }
+
+    // ========================================
+    // PATTERN VALIDATION - EDGE CASES
+    // ========================================
 
     #[test]
     fn test_validate_pattern_edge_cases() {

@@ -82,6 +82,10 @@ pub fn filter_items(
 mod tests {
     use super::*;
 
+    // ========================================
+    // SEARCH MATCHING
+    // ========================================
+
     #[test]
     fn test_empty_query_matches_all() {
         assert!(search_matches("", "any-file.txt"));
@@ -132,6 +136,24 @@ mod tests {
         // If glob pattern fails, fall back to substring
         assert!(search_matches("jeff", "my-jeff-file.txt"));
     }
+
+    #[test]
+    fn test_wildcard_multiple_stars() {
+        assert!(search_matches("*jeff*.txt", "my-jeff-file.txt"));
+        assert!(search_matches("*jeff*.txt", "jeff.txt"));
+        assert!(!search_matches("*jeff*.txt", "jeff.md"));
+    }
+
+    #[test]
+    fn test_single_char_name() {
+        assert!(search_matches("a", "a"));
+        assert!(search_matches("*a*", "a"));
+        assert!(search_matches("a*", "abc"));
+    }
+
+    // ========================================
+    // FILTER ITEMS
+    // ========================================
 
     #[test]
     fn test_filter_items_empty_query() {
@@ -203,20 +225,5 @@ mod tests {
         let filtered = filter_items(&items, "photos", Some("Movies"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "Photos");
-    }
-
-
-    #[test]
-    fn test_wildcard_multiple_stars() {
-        assert!(search_matches("*jeff*.txt", "my-jeff-file.txt"));
-        assert!(search_matches("*jeff*.txt", "jeff.txt"));
-        assert!(!search_matches("*jeff*.txt", "jeff.md"));
-    }
-
-    #[test]
-    fn test_single_char_name() {
-        assert!(search_matches("a", "a"));
-        assert!(search_matches("*a*", "a"));
-        assert!(search_matches("a*", "abc"));
     }
 }

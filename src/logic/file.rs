@@ -428,6 +428,10 @@ pub fn extract_text_from_binary(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    // ========================================
+    // IMAGE FILE DETECTION
+    // ========================================
+
     #[test]
     fn test_is_image_file_png() {
         assert!(is_image_file("photo.png"));
@@ -476,6 +480,10 @@ mod tests {
         assert!(!is_image_file("png"));  // No extension dot
     }
 
+    // ========================================
+    // BINARY CONTENT DETECTION
+    // ========================================
+
     #[test]
     fn test_is_binary_content_text() {
         // Plain ASCII text
@@ -511,6 +519,10 @@ mod tests {
         // Null byte at end
         assert!(is_binary_content(b"text before null\x00"));
     }
+
+    // ========================================
+    // ANSI CODE DETECTION
+    // ========================================
 
     #[test]
     fn test_contains_ansi_codes_with_color() {
@@ -587,6 +599,10 @@ mod tests {
         // Very long parameter string (should still detect within 20 byte limit)
         assert!(contains_ansi_codes(b"\x1b[1;2;3;4;5mText"));
     }
+
+    // ========================================
+    // ANSI TEXT PARSING
+    // ========================================
 
     #[test]
     fn test_parse_ansi_to_text_plain() {
@@ -711,7 +727,9 @@ mod tests {
         assert!(full_text.len() <= 80);
     }
 
-    // Tests for extract_text_from_binary (TDD - written before implementation)
+    // ========================================
+    // BINARY TEXT EXTRACTION
+    // ========================================
 
     #[test]
     fn test_extract_text_from_binary_with_readable_strings() {
