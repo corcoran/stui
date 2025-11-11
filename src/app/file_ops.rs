@@ -185,17 +185,16 @@ impl App {
 
         let level = &self.model.navigation.breadcrumb_trail[level_idx];
 
-        // Get selected item
-        let selected = match level.selected_index {
+        // Get selected item (respects filtered view if active)
+        let selected_idx = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
 
-        if selected >= level.items.len() {
-            return Ok(());
-        }
-
-        let item = &level.items[selected];
+        let item = match level.display_items().get(selected_idx) {
+            Some(item) => item,
+            None => return Ok(()),
+        };
 
         // Build the full host path
         // Note: translated_base_path already includes full directory path (with prefix),
@@ -246,17 +245,16 @@ impl App {
 
         let level = &self.model.navigation.breadcrumb_trail[level_idx];
 
-        // Get selected item
-        let selected = match level.selected_index {
+        // Get selected item (respects filtered view if active)
+        let selected_idx = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
 
-        if selected >= level.items.len() {
-            return Ok(());
-        }
-
-        let item = &level.items[selected];
+        let item = match level.display_items().get(selected_idx) {
+            Some(item) => item,
+            None => return Ok(()),
+        };
 
         // Build the full host path
         // Note: translated_base_path already includes the full path to this directory level
@@ -360,17 +358,16 @@ impl App {
 
             let level = &self.model.navigation.breadcrumb_trail[level_idx];
 
-            // Get selected item
-            let selected = match level.selected_index {
+            // Get selected item (respects filtered view if active)
+            let selected_idx = match level.selected_index {
                 Some(idx) => idx,
                 None => return Ok(()),
             };
 
-            if selected >= level.items.len() {
-                return Ok(());
-            }
-
-            let item = &level.items[selected];
+            let item = match level.display_items().get(selected_idx) {
+                Some(item) => item,
+                None => return Ok(()),
+            };
 
             // Build the full host path
             // Note: translated_base_path already includes the full path to this directory level

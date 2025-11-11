@@ -160,18 +160,23 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
                                         // Immediately remove from current view (mutable borrow)
                                         if let Some(level) = app.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                                            // Remove from items
-                                            if idx < level.items.len() {
-                                                level.items.remove(idx);
+                                            // Remove from items by name (not by index, which is relative to filtered list)
+                                            level.items.retain(|item| item.name != item_name);
+
+                                            // Remove from filtered_items by name (if filter is active)
+                                            if let Some(ref mut filtered) = level.filtered_items {
+                                                filtered.retain(|item| item.name != item_name);
                                             }
+
                                             // Remove from sync states
                                             level.file_sync_states.remove(&item_name);
 
-                                            // Adjust selection
-                                            let new_selection = if level.items.is_empty() {
+                                            // Adjust selection based on display_items() (respects filter)
+                                            let display_len = level.display_items().len();
+                                            let new_selection = if display_len == 0 {
                                                 None
-                                            } else if idx >= level.items.len() {
-                                                Some(level.items.len() - 1)
+                                            } else if idx >= display_len {
+                                                Some(display_len - 1)
                                             } else {
                                                 Some(idx)
                                             };

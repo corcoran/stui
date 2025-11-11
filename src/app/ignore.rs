@@ -26,17 +26,16 @@ impl App {
         let folder_id = level.folder_id.clone();
         let prefix = level.prefix.clone();
 
-        // Get selected item
-        let selected = match level.selected_index {
+        // Get selected item (respects filtered view if active)
+        let selected_idx = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
 
-        if selected >= level.items.len() {
-            return Ok(());
-        }
-
-        let item = &level.items[selected];
+        let item = match level.display_items().get(selected_idx) {
+            Some(item) => item,
+            None => return Ok(()),
+        };
         let item_name = item.name.clone(); // Clone for later use
         let sync_state = level
             .file_sync_states
@@ -208,17 +207,16 @@ impl App {
         let level = &self.model.navigation.breadcrumb_trail[level_idx];
         let folder_id = level.folder_id.clone();
 
-        // Get selected item
-        let selected = match level.selected_index {
+        // Get selected item (respects filtered view if active)
+        let selected_idx = match level.selected_index {
             Some(idx) => idx,
             None => return Ok(()),
         };
 
-        if selected >= level.items.len() {
-            return Ok(());
-        }
-
-        let item = &level.items[selected];
+        let item = match level.display_items().get(selected_idx) {
+            Some(item) => item,
+            None => return Ok(()),
+        };
         let item_name = item.name.clone(); // Clone for later use
 
         // Build paths
