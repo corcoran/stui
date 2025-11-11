@@ -65,7 +65,7 @@ fn log_debug(msg: &str) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/synctui-debug.log")
+        .open(utils::get_debug_log_path())
     {
         let _ = writeln!(file, "{}", msg);
     }

@@ -7,6 +7,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
+use crate::utils;
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -17,7 +18,7 @@ fn log_debug(msg: &str) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/synctui-debug.log")
+        .open(utils::get_debug_log_path())
     {
         let _ = writeln!(file, "{}", msg);
     }

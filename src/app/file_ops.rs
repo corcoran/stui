@@ -384,7 +384,7 @@ impl App {
         if let Some(text) = text_to_copy {
             // Always log clipboard operations (not just in debug mode) since they can fail silently
             use std::io::Write;
-            let log_file = std::path::Path::new("/tmp/synctui-debug.log");
+            let log_file = crate::utils::get_debug_log_path();
 
             if let Some(ref clipboard_cmd) = self.clipboard_command {
                 // Use user-configured clipboard command (text sent via stdin)

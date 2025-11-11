@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::api::{BrowseItem, FolderStatus, NeedResponse, SyncState};
 use crate::model::types::FolderSyncBreakdown;
+use crate::utils;
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
@@ -18,7 +19,7 @@ fn log_debug(msg: &str) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/synctui-debug.log")
+        .open(utils::get_debug_log_path())
     {
         let _ = writeln!(file, "{}", msg);
     }
@@ -63,8 +64,8 @@ impl CacheDb {
         if let Some(cache_dir) = dirs::cache_dir() {
             Ok(cache_dir.join("synctui"))
         } else {
-            // Fallback to /tmp if no cache dir available
-            Ok(PathBuf::from("/tmp/synctui-cache"))
+            // Fallback to platform-specific temp dir if no cache dir available
+            Ok(utils::get_cache_fallback_path())
         }
     }
 

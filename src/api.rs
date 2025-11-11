@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
+use crate::utils;
 
 fn log_debug(msg: &str) {
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/synctui-debug.log")
+        .open(utils::get_debug_log_path())
     {
         let _ = writeln!(file, "{}", msg);
     }
