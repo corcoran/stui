@@ -125,6 +125,10 @@ pub fn find_item_index_by_name(items: &[crate::api::BrowseItem], name: &str) -> 
 mod tests {
     use super::*;
 
+    // ========================================
+    // NEXT SELECTION
+    // ========================================
+
     #[test]
     fn test_next_selection_empty_list() {
         // Empty list should return None
@@ -157,6 +161,10 @@ mod tests {
         assert_eq!(next_selection(Some(4), 5), Some(0));
         assert_eq!(next_selection(Some(0), 1), Some(0)); // Single item wraps to itself
     }
+
+    // ========================================
+    // PREV SELECTION
+    // ========================================
 
     #[test]
     fn test_prev_selection_empty_list() {
@@ -191,6 +199,10 @@ mod tests {
         assert_eq!(prev_selection(Some(0), 1), Some(0)); // Single item wraps to itself
     }
 
+    // ========================================
+    // SELECTION EDGE CASES
+    // ========================================
+
     #[test]
     fn test_selection_single_item() {
         // Single item list behavior
@@ -221,6 +233,10 @@ mod find_item_tests {
             item_type: "FILE_INFO_TYPE_FILE".to_string(),
         }
     }
+
+    // ========================================
+    // FIND ITEM BY NAME
+    // ========================================
 
     #[test]
     fn test_find_item_index_by_name_found() {

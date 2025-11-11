@@ -559,6 +559,25 @@ CLI flags:
     - Model state transitions should have tests in corresponding test modules
     - Run `cargo test` before committing to ensure all 184+ tests pass
     - Aim for zero compiler warnings (`cargo build` should be clean)
+  - **Test Organization Standards:**
+    - **Keep tests inline** using `#[cfg(test)] mod tests` at the bottom of each module
+    - **Use section headers** for visual organization when files have >10 tests:
+      ```rust
+      // ========================================
+      // SECTION NAME
+      // ========================================
+      ```
+    - **Group tests logically** by feature/function being tested
+    - **When to reorganize:**
+      - File has >20 tests and they're randomly ordered → Major reorganization
+      - File has >10 tests but well-ordered → Add section headers only
+      - File has <10 tests → No changes needed
+    - **Examples of well-organized test modules:**
+      - `src/logic/file.rs` - 35 tests in 5 sections (Image Detection, Binary Detection, ANSI Code Detection, ANSI Parsing, Binary Text Extraction)
+      - `src/logic/ignore.rs` - 13 tests in 4 sections (Pattern Matching, Find Matching, Validation Valid/Invalid/Edge Cases)
+      - `src/model/ui.rs` - 16 tests in 4 sections (UI Model Creation, Search Mode, Search Query Operations, Search Origin Level)
+      - `src/logic/navigation.rs` - 14 tests in 4 sections (Next Selection, Prev Selection, Edge Cases, Find Item By Name)
+    - **Benefits:** Tests can be collapsed by section in IDEs, clear grouping makes finding related tests easy, maintains locality with implementation code
 - **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
 
 ### Adding New Features - Common Patterns

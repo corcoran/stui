@@ -113,6 +113,10 @@ pub fn format_human_size(size: u64) -> String {
 mod tests {
     use super::*;
 
+    // ========================================
+    // FORMAT UPTIME
+    // ========================================
+
     #[test]
     fn test_format_uptime_zero() {
         assert_eq!(format_uptime(0), "0m");
@@ -162,6 +166,10 @@ mod tests {
         // 1 day, 2 hours, 30 minutes - shows days+hours, drops minutes
         assert_eq!(format_uptime(95400), "1d 2h");
     }
+
+    // ========================================
+    // FORMAT HUMAN SIZE
+    // ========================================
 
     #[test]
     fn test_format_human_size_zero() {

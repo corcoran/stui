@@ -158,6 +158,10 @@ pub struct OutOfSyncSummaryState {
 mod tests {
     use super::*;
 
+    // ========================================
+    // CONFIRM ACTION
+    // ========================================
+
     #[test]
     fn test_confirm_action_revert() {
         let action = ConfirmAction::Revert {
@@ -257,6 +261,10 @@ mod tests {
         assert_eq!(action1, action2);
         assert_ne!(action1, action3);
     }
+
+    // ========================================
+    // BREADCRUMB LEVEL
+    // ========================================
 
     #[test]
     fn test_breadcrumb_level_filtered_items() {
@@ -419,6 +427,10 @@ mod tests {
             "No filter (None) should show all items"
         );
     }
+
+    // ========================================
+    // CONFIRM ACTION - RESCAN VARIANT
+    // ========================================
 
     #[test]
     fn test_confirm_action_rescan() {
