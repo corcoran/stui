@@ -16,9 +16,9 @@ use std::{
 
 /// Syncthing TUI Manager
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = VERSION, about, long_about = None)]
 struct Args {
-    /// Enable debug logging to /tmp/synctui-debug.log
+    /// Enable debug logging to platform-specific temp directory
     #[arg(short, long)]
     debug: bool,
 
@@ -53,6 +53,15 @@ use cache::CacheDb;
 use config::Config;
 use synctui::{DisplayMode, SortMode};
 use ui::icons::{IconMode, IconRenderer, IconTheme};
+
+// Build version string with git hash and build date
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("GIT_HASH"),
+    ") - ",
+    env!("BUILD_DATE")
+);
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled
