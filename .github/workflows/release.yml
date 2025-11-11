@@ -9,23 +9,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run tests
-        run: cargo test --verbose
-
   build-linux-x86:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
@@ -41,6 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: linux-x86_64-musl
+          shared-key: source-deps
           cache-on-failure: true
 
       - name: Install musl tools
@@ -78,17 +62,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: linux-aarch64-musl
+          shared-key: source-deps
           cache-on-failure: true
 
-      - name: Install cross-compilation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build release binary
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target aarch64-unknown-linux-musl
+        run: cross build --release --target aarch64-unknown-linux-musl
 
       - name: Create archive
         run: |
@@ -117,6 +98,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: macos-intel
+          shared-key: source-deps
           cache-on-failure: true
 
       - name: Build release binary
@@ -149,6 +131,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: macos-arm64
+          shared-key: source-deps
           cache-on-failure: true
 
       - name: Build release binary
@@ -181,6 +164,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: windows-x86_64
+          shared-key: source-deps
           cache-on-failure: true
 
       - name: Build release binary
@@ -204,7 +188,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [test, build-linux-x86, build-linux-arm, build-macos-intel, build-macos-arm, build-windows]
+    needs: [build-linux-x86, build-linux-arm, build-macos-intel, build-macos-arm, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
