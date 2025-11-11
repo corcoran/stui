@@ -770,7 +770,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_needed_files_builds_correct_url() {
         // This is a basic smoke test - full integration test requires real Syncthing
-        let client = SyncthingClient::new(
+        let _client = SyncthingClient::new(
             "http://localhost:8384".to_string(),
             "test-key".to_string(),
         );

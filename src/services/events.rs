@@ -115,8 +115,12 @@ mod tests {
     #[test]
     fn test_parse_event_time_valid_rfc3339() {
         // Test parsing a valid RFC3339 timestamp from Syncthing
-        let timestamp_str = "2025-11-09T23:38:41.765733116Z";
-        let parsed = parse_event_time(timestamp_str);
+        // Use a dynamically generated timestamp that's always 1 hour in the past
+        use chrono::Utc;
+        let one_hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let timestamp_str = one_hour_ago.to_rfc3339();
+
+        let parsed = parse_event_time(&timestamp_str);
 
         // Verify it's not the fallback (current time) by checking it's in the past
         let now = SystemTime::now();
@@ -125,11 +129,15 @@ mod tests {
             "Parsed timestamp should be in the past, not current time"
         );
 
-        // Verify the time is reasonable (within last 24 hours for this test)
+        // Verify the time is reasonable (should be about 1 hour ago, within 2 hours tolerance)
         let duration_since = now.duration_since(parsed).unwrap();
         assert!(
-            duration_since.as_secs() < 86400,
-            "Timestamp should be recent (within 24 hours for test)"
+            duration_since.as_secs() > 3000, // At least 50 minutes
+            "Timestamp should be at least 50 minutes old"
+        );
+        assert!(
+            duration_since.as_secs() < 7200, // Less than 2 hours
+            "Timestamp should be less than 2 hours old"
         );
     }
 
