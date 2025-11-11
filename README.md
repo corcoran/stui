@@ -146,7 +146,7 @@ synctui --debug
 | `I` | Ignore AND delete from disk | No (immediate) |
 | `o` | **Context-aware**: Open Syncthing web UI (folder view) OR Open file/directory with configured command (breadcrumb view) | No |
 | `d` | Delete file/directory from disk | Yes |
-| `r` | Rescan folder (refresh from disk) | No |
+| `r` | Rescan folder (refresh from disk) | Yes |
 | `R` | Restore deleted files (revert receive-only folder) | Yes |
 | `s` | Cycle sort mode (Sync State → A-Z → Timestamp → Size) | No |
 | `S` | Reverse current sort order | No |
