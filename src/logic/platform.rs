@@ -5,4 +5,3 @@
 // This module was created as part of the network error handling implementation
 // but the helper functions ended up not being needed since equivalent logic
 // already existed in the codebase.
-

@@ -4,16 +4,17 @@
 //! - Toggle ignore state (add/remove patterns)
 //! - Ignore and delete (immediate action)
 
-use crate::{App, SyncState, model, services, logic, log_debug};
+use crate::{log_debug, logic, model, services, App, SyncState};
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;
 
 impl App {
     pub(crate) async fn toggle_ignore(&mut self) -> Result<()> {
-
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return Ok(());
         }
 
@@ -71,7 +72,10 @@ impl App {
                     pending_path.display()
                 );
                 self.model.ui.toast_message = Some((message, Instant::now()));
-                log_debug(&format!("Blocked un-ignore: path {:?} is pending deletion", pending_path));
+                log_debug(&format!(
+                    "Blocked un-ignore: path {:?} is pending deletion",
+                    pending_path
+                ));
                 return Ok(());
             }
 
@@ -195,7 +199,9 @@ impl App {
 
     pub(crate) async fn ignore_and_delete(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return Ok(());
         }
 
@@ -296,7 +302,10 @@ impl App {
             Ok(()) => {
                 // Verify file is actually gone
                 if std::path::Path::new(&host_path).exists() {
-                    log_debug(&format!("Warning: File still exists after deletion: {}", host_path));
+                    log_debug(&format!(
+                        "Warning: File still exists after deletion: {}",
+                        host_path
+                    ));
                     // Keep in pending set for safety
                 } else {
                     log_debug(&format!("Successfully deleted file: {}", host_path));
@@ -312,7 +321,12 @@ impl App {
                 }
 
                 // Mark that rescan has been triggered for this folder
-                if let Some(pending_info) = self.model.performance.pending_ignore_deletes.get_mut(&folder_id) {
+                if let Some(pending_info) = self
+                    .model
+                    .performance
+                    .pending_ignore_deletes
+                    .get_mut(&folder_id)
+                {
                     pending_info.rescan_triggered = true;
                 }
 

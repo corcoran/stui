@@ -43,23 +43,21 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             });
 
             // Update last change info for this folder (use event timestamp, not current time)
-            app.model.syncthing.last_folder_updates.insert(
-                folder_id.clone(),
-                (timestamp, file_path.clone()),
-            );
+            app.model
+                .syncthing
+                .last_folder_updates
+                .insert(folder_id.clone(), (timestamp, file_path.clone()));
 
             // Extract parent directory path
-            let parent_dir = if let Some(last_slash) = file_path.rfind('/') {
-                Some(&file_path[..last_slash + 1])
-            } else {
-                None // File is in root directory
-            };
+            let parent_dir = file_path
+                .rfind('/')
+                .map(|last_slash| &file_path[..last_slash + 1]);
 
             // Check if we're currently viewing this directory - if so, trigger refresh
             if !app.model.navigation.breadcrumb_trail.is_empty()
                 && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate() {
+                for level in app.model.navigation.breadcrumb_trail.iter_mut() {
                     if level.folder_id == folder_id {
                         // Don't clear state immediately - causes flicker to Unknown
                         // The Browse response will naturally update the state with fresh data
@@ -70,17 +68,15 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                         if level_prefix == parent_dir {
                             // This level is showing the directory containing the changed file
                             // Trigger a fresh browse request
-                            let browse_key =
-                                format!("{}:{}", folder_id, parent_dir.unwrap_or(""));
+                            let browse_key = format!("{}:{}", folder_id, parent_dir.unwrap_or(""));
                             if !app.model.performance.loading_browse.contains(&browse_key) {
                                 app.model.performance.loading_browse.insert(browse_key);
 
-                                let _ =
-                                    app.api_tx.send(ApiRequest::BrowseFolder {
-                                        folder_id: folder_id.clone(),
-                                        prefix: parent_dir.map(|s| s.to_string()),
-                                        priority: Priority::High,
-                                    });
+                                let _ = app.api_tx.send(ApiRequest::BrowseFolder {
+                                    folder_id: folder_id.clone(),
+                                    prefix: parent_dir.map(|s| s.to_string()),
+                                    priority: Priority::High,
+                                });
 
                                 crate::log_debug(&format!("DEBUG [Event]: Triggered refresh for currently viewed directory: {:?}", parent_dir));
                             }
@@ -123,7 +119,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             if !app.model.navigation.breadcrumb_trail.is_empty()
                 && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
             {
-                for (_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate() {
+                for level in app.model.navigation.breadcrumb_trail.iter_mut() {
                     if level.folder_id == folder_id {
                         // Remove all states that start with this directory path
                         let dir_prefix = if dir_path.is_empty() {
@@ -170,12 +166,11 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                             if !app.model.performance.loading_browse.contains(&browse_key) {
                                 app.model.performance.loading_browse.insert(browse_key);
 
-                                let _ =
-                                    app.api_tx.send(ApiRequest::BrowseFolder {
-                                        folder_id: folder_id.clone(),
-                                        prefix: level_prefix.map(|s| s.to_string()),
-                                        priority: Priority::High,
-                                    });
+                                let _ = app.api_tx.send(ApiRequest::BrowseFolder {
+                                    folder_id: folder_id.clone(),
+                                    prefix: level_prefix.map(|s| s.to_string()),
+                                    priority: Priority::High,
+                                });
 
                                 crate::log_debug(&format!("DEBUG [Event]: Triggered refresh for directory: {:?} (dir_path={:?})", level_prefix, dir_path));
                             }
@@ -186,7 +181,9 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
 
             // Clear discovered directories cache for this path
             let dir_key_prefix = format!("{}:{}", folder_id, dir_path);
-            app.model.performance.discovered_dirs
+            app.model
+                .performance
+                .discovered_dirs
                 .retain(|key| !key.starts_with(&dir_key_prefix));
         }
         CacheInvalidation::ItemStarted {

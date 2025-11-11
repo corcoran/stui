@@ -5,7 +5,7 @@
 //! - Going back to parent directories
 //! - Moving selection up/down/page/jump
 
-use crate::{App, SyncState, model, services, logic, log_debug};
+use crate::{log_debug, logic, model, services, App, SyncState};
 use anyhow::Result;
 use std::time::Instant;
 
@@ -24,7 +24,9 @@ impl App {
 
                 // Get folder sequence for cache validation
                 let folder_sequence = self
-                    .model.syncthing.folder_statuses
+                    .model
+                    .syncthing
+                    .folder_statuses
                     .get(&folder.id)
                     .map(|s| s.sequence)
                     .unwrap_or(0);
@@ -54,7 +56,10 @@ impl App {
                     (items, local_items)
                 } else {
                     // Mark as loading
-                    self.model.performance.loading_browse.insert(browse_key.clone());
+                    self.model
+                        .performance
+                        .loading_browse
+                        .insert(browse_key.clone());
 
                     // Cache miss - fetch from API
                     self.model.performance.cache_hit = Some(false);
@@ -65,10 +70,12 @@ impl App {
                                 .merge_local_only_files(&folder.id, &mut items, None)
                                 .await;
 
-                            if let Err(e) =
-                                self.cache
-                                    .save_browse_items(&folder.id, None, &items, folder_sequence)
-                            {
+                            if let Err(e) = self.cache.save_browse_items(
+                                &folder.id,
+                                None,
+                                &items,
+                                folder_sequence,
+                            ) {
                                 log_debug(&format!("ERROR saving root cache: {}", e));
                             }
 
@@ -79,8 +86,10 @@ impl App {
                         }
                         Err(e) => {
                             self.model.performance.loading_browse.remove(&browse_key);
-                            log_debug(&format!("Failed to browse folder root: {}",
-                                crate::logic::errors::format_error_message(&e)));
+                            log_debug(&format!(
+                                "Failed to browse folder root: {}",
+                                crate::logic::errors::format_error_message(&e)
+                            ));
                             return Ok(());
                         }
                     }
@@ -90,7 +99,8 @@ impl App {
                 self.model.performance.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
                 // Compute translated base path once
-                let translated_base_path = logic::path::translate_path(&folder.path, "", &self.path_map);
+                let translated_base_path =
+                    logic::path::translate_path(&folder.path, "", &self.path_map);
 
                 // Load cached sync states for items
                 let mut file_sync_states =
@@ -143,7 +153,9 @@ impl App {
     }
 
     pub(crate) async fn enter_directory(&mut self) -> Result<()> {
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return Ok(());
         }
 
@@ -176,7 +188,9 @@ impl App {
 
                 // Get folder sequence for cache validation
                 let folder_sequence = self
-                    .model.syncthing.folder_statuses
+                    .model
+                    .syncthing
+                    .folder_statuses
                     .get(&folder_id)
                     .map(|s| s.sequence)
                     .unwrap_or(0);
@@ -201,7 +215,10 @@ impl App {
                     (items, local_items)
                 } else {
                     // Mark as loading
-                    self.model.performance.loading_browse.insert(browse_key.clone());
+                    self.model
+                        .performance
+                        .loading_browse
+                        .insert(browse_key.clone());
                     self.model.performance.cache_hit = Some(false);
 
                     // Cache miss - fetch from API (BLOCKING)
@@ -229,8 +246,10 @@ impl App {
                             (items, local_items)
                         }
                         Err(e) => {
-                            self.model.ui.show_toast(format!("Unable to browse: {}",
-                                crate::logic::errors::format_error_message(&e)));
+                            self.model.ui.show_toast(format!(
+                                "Unable to browse: {}",
+                                crate::logic::errors::format_error_message(&e)
+                            ));
                             self.model.performance.loading_browse.remove(&browse_key);
                             return Ok(());
                         }
@@ -262,7 +281,10 @@ impl App {
                     .unwrap_or(container_path);
 
                 // Truncate breadcrumb trail to current level + 1
-                self.model.navigation.breadcrumb_trail.truncate(level_idx + 1);
+                self.model
+                    .navigation
+                    .breadcrumb_trail
+                    .truncate(level_idx + 1);
 
                 // Load cached sync states for items
                 let mut file_sync_states =
@@ -298,18 +320,21 @@ impl App {
                 );
 
                 // Add new level
-                self.model.navigation.breadcrumb_trail.push(model::BreadcrumbLevel {
-                    folder_id,
-                    folder_label,
-                    folder_path,
-                    prefix: Some(new_prefix),
-                    items,
-                    selected_index: None, // sort_current_level will set selection
-                    translated_base_path,
-                    file_sync_states,
-                    ignored_exists,
-                    filtered_items: None,
-                });
+                self.model
+                    .navigation
+                    .breadcrumb_trail
+                    .push(model::BreadcrumbLevel {
+                        folder_id,
+                        folder_label,
+                        folder_path,
+                        prefix: Some(new_prefix),
+                        items,
+                        selected_index: None, // sort_current_level will set selection
+                        translated_base_path,
+                        file_sync_states,
+                        ignored_exists,
+                        filtered_items: None,
+                    });
 
                 self.model.navigation.focus_level += 1;
 
@@ -341,7 +366,7 @@ impl App {
         };
 
         if should_clear_search {
-            self.clear_search(None);  // No toast, contextual clearing
+            self.clear_search(None); // No toast, contextual clearing
         }
 
         if self.model.navigation.focus_level > 1 {
@@ -379,7 +404,7 @@ impl App {
 
             // Clear out-of-sync filter when backing out to folder list
             if self.model.ui.out_of_sync_filter.is_some() {
-                self.clear_out_of_sync_filter(false, None);  // Don't preserve (leaving breadcrumbs), no toast
+                self.clear_out_of_sync_filter(false, None); // Don't preserve (leaving breadcrumbs), no toast
             }
 
             self.model.navigation.focus_level = 0;
@@ -448,7 +473,8 @@ impl App {
     pub(crate) async fn jump_to_last(&mut self) {
         if self.model.navigation.focus_level == 0 {
             if !self.model.syncthing.folders.is_empty() {
-                self.model.navigation.folders_state_selection = Some(self.model.syncthing.folders.len() - 1);
+                self.model.navigation.folders_state_selection =
+                    Some(self.model.syncthing.folders.len() - 1);
                 // Auto-load the selected folder's root directory as preview (don't change focus)
                 let _ = self.load_root_level(true).await;
             }

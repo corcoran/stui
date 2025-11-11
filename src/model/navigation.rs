@@ -43,6 +43,12 @@ impl NavigationModel {
     }
 }
 
+impl Default for NavigationModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

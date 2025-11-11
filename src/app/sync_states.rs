@@ -6,7 +6,7 @@
 //! - Prefetching subdirectory states
 //! - Tracking ignored file existence
 
-use crate::{App, SyncState, logic, services, log_debug};
+use crate::{log_debug, logic, services, App, SyncState};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -71,9 +71,9 @@ impl App {
                 });
 
             // Try to get cached browse items for this directory
-            if let Ok(Some(children)) = self
-                .cache
-                .get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence)
+            if let Ok(Some(children)) =
+                self.cache
+                    .get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence)
             {
                 // Collect all child states
                 let child_states: Vec<SyncState> = children
@@ -88,10 +88,8 @@ impl App {
                     .collect();
 
                 // Use pure function to determine aggregate state
-                let aggregate_state = logic::sync_states::aggregate_directory_state(
-                    direct_state,
-                    &child_states,
-                );
+                let aggregate_state =
+                    logic::sync_states::aggregate_directory_state(direct_state, &child_states);
                 dir_states.insert(dir_name.clone(), aggregate_state);
             } else {
                 // No cached children, use direct state
@@ -115,7 +113,9 @@ impl App {
     }
 
     pub(crate) fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return;
         }
 
@@ -125,8 +125,12 @@ impl App {
         }
 
         // Get items that need fetching (don't have sync state and aren't loading)
-        let folder_id = self.model.navigation.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.model.navigation.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.navigation.breadcrumb_trail[level_idx]
+            .folder_id
+            .clone();
+        let prefix = self.model.navigation.breadcrumb_trail[level_idx]
+            .prefix
+            .clone();
 
         let items_to_fetch: Vec<String> = self.model.navigation.breadcrumb_trail[level_idx]
             .items
@@ -148,7 +152,11 @@ impl App {
                 };
                 let sync_key = format!("{}:{}", folder_id, file_path);
 
-                !self.model.performance.loading_sync_states.contains(&sync_key)
+                !self
+                    .model
+                    .performance
+                    .loading_sync_states
+                    .contains(&sync_key)
             })
             .take(max_concurrent) // Limit how many we fetch at once
             .map(|item| item.name.clone())
@@ -165,12 +173,20 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, file_path);
 
             // Skip if already loading
-            if self.model.performance.loading_sync_states.contains(&sync_key) {
+            if self
+                .model
+                .performance
+                .loading_sync_states
+                .contains(&sync_key)
+            {
                 continue;
             }
 
             // Mark as loading
-            self.model.performance.loading_sync_states.insert(sync_key.clone());
+            self.model
+                .performance
+                .loading_sync_states
+                .insert(sync_key.clone());
 
             log_debug(&format!(
                 "DEBUG [batch_fetch]: Requesting file_path={} for folder={}",
@@ -188,17 +204,24 @@ impl App {
 
     // Recursively discover and fetch states for subdirectories when hovering over a directory
     // This ensures we have complete subdirectory information for deep trees
-    pub(crate) fn prefetch_hovered_subdirectories(&mut self, max_depth: usize, max_dirs_per_frame: usize) {
+    pub(crate) fn prefetch_hovered_subdirectories(
+        &mut self,
+        max_depth: usize,
+        max_dirs_per_frame: usize,
+    ) {
         if !self.model.performance.prefetch_enabled {
             return;
         }
 
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return;
         }
 
         // Only run if system isn't too busy
-        let total_in_flight = self.model.performance.loading_browse.len() + self.model.performance.loading_sync_states.len();
+        let total_in_flight = self.model.performance.loading_browse.len()
+            + self.model.performance.loading_sync_states.len();
         if total_in_flight > 15 {
             return;
         }
@@ -228,10 +251,16 @@ impl App {
             return;
         }
 
-        let folder_id = self.model.navigation.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.model.navigation.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.navigation.breadcrumb_trail[level_idx]
+            .folder_id
+            .clone();
+        let prefix = self.model.navigation.breadcrumb_trail[level_idx]
+            .prefix
+            .clone();
         let folder_sequence = self
-            .model.syncthing.folder_statuses
+            .model
+            .syncthing
+            .folder_statuses
             .get(&folder_id)
             .map(|s| s.sequence)
             .unwrap_or(0);
@@ -259,7 +288,12 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, dir_path);
 
             // Skip if already loading or cached
-            if self.model.performance.loading_sync_states.contains(&sync_key) {
+            if self
+                .model
+                .performance
+                .loading_sync_states
+                .contains(&sync_key)
+            {
                 continue;
             }
 
@@ -269,7 +303,10 @@ impl App {
             }
 
             // Mark as loading
-            self.model.performance.loading_sync_states.insert(sync_key.clone());
+            self.model
+                .performance
+                .loading_sync_states
+                .insert(sync_key.clone());
 
             // Send non-blocking request for directory's sync state
             let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
@@ -286,7 +323,7 @@ impl App {
         &mut self,
         folder_id: &str,
         dir_path: &str,
-        folder_sequence: u64,
+        _folder_sequence: u64,
         current_depth: usize,
         max_depth: usize,
         result: &mut Vec<String>,
@@ -310,18 +347,23 @@ impl App {
         // Try to get from cache first (accept any cached value, even if sequence is old)
         // For prefetch, we prioritize speed over perfect accuracy
         // Use sequence=0 to accept any cached value regardless of sequence number
-        let items = if let Ok(Some(cached_items)) = self
-            .cache
-            .get_browse_items(folder_id, Some(dir_path), 0)
+        let items = if let Ok(Some(cached_items)) =
+            self.cache.get_browse_items(folder_id, Some(dir_path), 0)
         {
             cached_items
         } else {
             // Not cached - request it non-blocking and mark as discovered to prevent re-requesting
             if !self.model.performance.loading_browse.contains(&browse_key) {
-                self.model.performance.loading_browse.insert(browse_key.clone());
+                self.model
+                    .performance
+                    .loading_browse
+                    .insert(browse_key.clone());
 
                 // Mark as discovered immediately to prevent repeated requests
-                self.model.performance.discovered_dirs.insert(browse_key.clone());
+                self.model
+                    .performance
+                    .discovered_dirs
+                    .insert(browse_key.clone());
 
                 // Send non-blocking browse request
                 let _ = self.api_tx.send(services::api::ApiRequest::BrowseFolder {
@@ -347,7 +389,7 @@ impl App {
                 self.discover_subdirectories_sync(
                     folder_id,
                     &nested_path,
-                    folder_sequence,
+                    _folder_sequence,
                     current_depth + 1,
                     max_depth,
                     result,
@@ -363,12 +405,15 @@ impl App {
             return;
         }
 
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return;
         }
 
         // Only run if system isn't too busy
-        let total_in_flight = self.model.performance.loading_browse.len() + self.model.performance.loading_sync_states.len();
+        let total_in_flight = self.model.performance.loading_browse.len()
+            + self.model.performance.loading_sync_states.len();
         if total_in_flight > 10 {
             return;
         }
@@ -378,8 +423,12 @@ impl App {
             return;
         }
 
-        let folder_id = self.model.navigation.breadcrumb_trail[level_idx].folder_id.clone();
-        let prefix = self.model.navigation.breadcrumb_trail[level_idx].prefix.clone();
+        let folder_id = self.model.navigation.breadcrumb_trail[level_idx]
+            .folder_id
+            .clone();
+        let prefix = self.model.navigation.breadcrumb_trail[level_idx]
+            .prefix
+            .clone();
 
         // Find directories that don't have their own sync state cached
         let dirs_to_fetch: Vec<String> = self.model.navigation.breadcrumb_trail[level_idx]
@@ -392,10 +441,9 @@ impl App {
                 }
 
                 // Check if we already have this directory's state
-                self.model.navigation.breadcrumb_trail[level_idx]
+                !self.model.navigation.breadcrumb_trail[level_idx]
                     .file_sync_states
-                    .get(&item.name)
-                    .is_none()
+                    .contains_key(&item.name)
             })
             .take(max_concurrent)
             .map(|item| item.name.clone())
@@ -412,12 +460,20 @@ impl App {
             let sync_key = format!("{}:{}", folder_id, dir_path);
 
             // Skip if already loading
-            if self.model.performance.loading_sync_states.contains(&sync_key) {
+            if self
+                .model
+                .performance
+                .loading_sync_states
+                .contains(&sync_key)
+            {
                 continue;
             }
 
             // Mark as loading
-            self.model.performance.loading_sync_states.insert(sync_key.clone());
+            self.model
+                .performance
+                .loading_sync_states
+                .insert(sync_key.clone());
 
             // Send non-blocking request via API service
             // Response will be handled by handle_api_response
@@ -430,7 +486,9 @@ impl App {
     }
 
     pub(crate) fn fetch_selected_item_sync_state(&mut self) {
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return;
         }
 
@@ -454,12 +512,20 @@ impl App {
                     let sync_key = format!("{}:{}", level.folder_id, file_path);
 
                     // Skip if already loading
-                    if self.model.performance.loading_sync_states.contains(&sync_key) {
+                    if self
+                        .model
+                        .performance
+                        .loading_sync_states
+                        .contains(&sync_key)
+                    {
                         return;
                     }
 
                     // Mark as loading
-                    self.model.performance.loading_sync_states.insert(sync_key.clone());
+                    self.model
+                        .performance
+                        .loading_sync_states
+                        .insert(sync_key.clone());
 
                     // Send non-blocking request via API service
                     // Response will be handled by handle_api_response
@@ -472,8 +538,6 @@ impl App {
             }
         }
     }
-
-    /// Check which ignored files exist on disk (done once on directory load, not per-frame)
 
     /// Update ignored_exists status for a single file in a breadcrumb level
     pub(crate) fn update_ignored_exists_for_file(

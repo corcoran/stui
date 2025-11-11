@@ -35,7 +35,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             let Ok(mut items) = items else {
                 // API call failed - only update state if we're not already in Connecting mode
-                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                if !matches!(
+                    app.model.syncthing.connection_state,
+                    ConnectionState::Connecting { .. }
+                ) {
                     let error = items.unwrap_err();
                     app.model.syncthing.connection_state = ConnectionState::Disconnected {
                         error_type: crate::logic::errors::classify_error(&error),
@@ -56,13 +59,17 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             } else if app.model.navigation.focus_level == 0 {
                 // At folder list - only accept browse results that match a breadcrumb in the trail
                 // (e.g., when backing out from a folder with active search, we need to refresh the root)
-                app.model.navigation.breadcrumb_trail
+                app.model
+                    .navigation
+                    .breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id && level.prefix == prefix)
             } else {
                 // Check if this folder_id matches any level in our current breadcrumb trail
                 // This allows prefetching subdirectories that aren't yet open
-                app.model.navigation.breadcrumb_trail
+                app.model
+                    .navigation
+                    .breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id)
             };
@@ -74,7 +81,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // Get folder sequence for cache
             let folder_sequence = app
-                .model.syncthing.folder_statuses
+                .model
+                .syncthing
+                .folder_statuses
                 .get(&folder_id)
                 .map(|s| s.sequence)
                 .unwrap_or(0);
@@ -130,12 +139,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             ));
 
             // Save merged items to cache
-            if let Err(e) = app.cache.save_browse_items(
-                &folder_id,
-                prefix.as_deref(),
-                &items,
-                folder_sequence,
-            ) {
+            if let Err(e) =
+                app.cache
+                    .save_browse_items(&folder_id, prefix.as_deref(), &items, folder_sequence)
+            {
                 crate::log_debug(&format!(
                     "ERROR [BrowseResult]: Failed to save browse items to cache: {}",
                     e
@@ -146,12 +153,16 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Find matching breadcrumb level (works for both root and non-root)
             let matching_level_idx = if prefix.is_none() {
                 // Root level: match folder_id and no prefix
-                app.model.navigation.breadcrumb_trail
+                app.model
+                    .navigation
+                    .breadcrumb_trail
                     .iter()
                     .position(|level| level.folder_id == folder_id && level.prefix.is_none())
             } else {
                 // Non-root level: match folder_id and prefix
-                app.model.navigation.breadcrumb_trail
+                app.model
+                    .navigation
+                    .breadcrumb_trail
                     .iter()
                     .position(|level| level.folder_id == folder_id && level.prefix == prefix)
             };
@@ -170,7 +181,6 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Save currently selected item name BEFORE replacing items
                     let selected_name = level
                         .selected_index
-
                         .and_then(|sel_idx| level.display_items().get(sel_idx))
                         .map(|item| item.name.clone());
 
@@ -184,11 +194,13 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
                     crate::log_debug(&format!(
                         "DEBUG [BrowseResult]: Updating level {} with {} items (was {})",
-                        idx, items.len(), level.items.len()
+                        idx,
+                        items.len(),
+                        level.items.len()
                     ));
 
                     // Update level
-                    level.items = items.clone();  // Update unfiltered source
+                    level.items = items.clone(); // Update unfiltered source
                     level.file_sync_states = sync_states;
 
                     // DON'T touch filtered_items here - let the filter functions manage it
@@ -200,12 +212,15 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     app.sort_level_with_selection(idx, selected_name);
 
                     // Check if this is the current breadcrumb level
-                    let is_current_level = idx == app.model.navigation.focus_level.saturating_sub(1);
+                    let is_current_level =
+                        idx == app.model.navigation.focus_level.saturating_sub(1);
 
                     // Check if this BrowseResult is for the same folder as current level
                     // GUARD: Only check if we have a valid focus_level (not 0)
                     let current_level_folder = if app.model.navigation.focus_level > 0 {
-                        app.model.navigation.breadcrumb_trail
+                        app.model
+                            .navigation
+                            .breadcrumb_trail
                             .get(app.model.navigation.focus_level - 1)
                             .map(|l| l.folder_id.as_str())
                     } else {
@@ -234,7 +249,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         };
 
                         let sync_key = format!("{}:{}", folder_id, file_path);
-                        if !app.model.performance.loading_sync_states.contains(&sync_key) {
+                        if !app
+                            .model
+                            .performance
+                            .loading_sync_states
+                            .contains(&sync_key)
+                        {
                             app.model.performance.loading_sync_states.insert(sync_key);
                             let _ = app.api_tx.send(ApiRequest::GetFileInfo {
                                 folder_id: folder_id.clone(),
@@ -247,8 +267,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             } else {
                 // No matching breadcrumb level - this is a prefetch response
                 // Browse items are already saved to cache, skip UI update
-                crate::log_debug(&format!("DEBUG [BrowseResult]: No matching level for folder={} prefix={:?} (prefetch)",
-                                   folder_id, prefix));
+                crate::log_debug(&format!(
+                    "DEBUG [BrowseResult]: No matching level for folder={} prefix={:?} (prefetch)",
+                    folder_id, prefix
+                ));
 
                 // Continue prefetch if search is active (>= 2 chars)
                 if !app.model.ui.search_query.is_empty() && app.model.ui.search_query.len() >= 2 {
@@ -288,39 +310,49 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             let sync_key = format!("{}:{}", folder_id, file_path);
             app.model.performance.loading_sync_states.remove(&sync_key);
 
-            let Ok(file_details) = details else {
-                // API call failed - only update state if we're not already in Connecting mode
-                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
-                    let error = details.unwrap_err();
-                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
-                        error_type: crate::logic::errors::classify_error(&error),
-                        message: crate::logic::errors::format_error_message(&error),
-                    };
-                    crate::log_debug(&format!(
-                        "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
-                        folder_id, file_path, error
-                    ));
+            let file_details = match details.as_ref() {
+                Ok(details) => details,
+                Err(error) => {
+                    // API call failed - only update state if we're not already in Connecting mode
+                    if !matches!(
+                        app.model.syncthing.connection_state,
+                        ConnectionState::Connecting { .. }
+                    ) {
+                        app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                            error_type: crate::logic::errors::classify_error(error),
+                            message: crate::logic::errors::format_error_message(error),
+                        };
+                        crate::log_debug(&format!(
+                            "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
+                            folder_id, file_path, error
+                        ));
+                    }
+                    return;
                 }
-                return;
             };
 
             // Successful API call - mark as connected
             app.model.syncthing.connection_state = ConnectionState::Connected;
 
             // Check if this response is still relevant to current navigation
-            let is_relevant = if app.model.navigation.focus_level == 0 {
-                false // At folder list, no file info is relevant
-            } else if app.model.navigation.breadcrumb_trail.is_empty() {
-                false // No breadcrumb trail, nothing is relevant
-            } else {
+            let is_relevant = if app.model.navigation.focus_level != 0
+                && !app.model.navigation.breadcrumb_trail.is_empty()
+            {
                 // Check if this folder_id matches any level in our current breadcrumb trail
-                app.model.navigation.breadcrumb_trail
+                app.model
+                    .navigation
+                    .breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id)
+            } else {
+                false
             };
 
             if !is_relevant {
-                crate::log_debug(&format!("DEBUG [FileInfoResult]: Skipping irrelevant response for folder={} path={}", folder_id, file_path));
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult]: Skipping irrelevant response for folder={} path={}",
+                    folder_id, file_path
+                ));
                 return; // Skip saving and UI updates for irrelevant responses
             }
 
@@ -347,7 +379,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // Update UI if this file is visible in current level
             let mut updated = false;
-            for (_level_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate() {
+            for level in app.model.navigation.breadcrumb_trail.iter_mut() {
                 if level.folder_id == folder_id {
                     // Check if this file path belongs to this level
                     let level_prefix = level.prefix.as_deref().unwrap_or("");
@@ -356,8 +388,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         level_prefix
                     ));
                     if file_path.starts_with(level_prefix) {
-                        let item_name =
-                            file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
+                        let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
 
                         // Get current state for tracking changes
                         let current_state = level.file_sync_states.get(item_name).copied();
@@ -400,7 +431,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             let Ok(status) = status else {
                 // API call failed - only update state if we're not already in Connecting mode
                 // (Background reconnection manages the Connecting state)
-                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
+                if !matches!(
+                    app.model.syncthing.connection_state,
+                    ConnectionState::Connecting { .. }
+                ) {
                     let error = status.unwrap_err();
                     let error_type = crate::logic::errors::classify_error(&error);
                     let message = crate::logic::errors::format_error_message(&error);
@@ -431,7 +465,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 let start = std::time::Instant::now();
                 crate::log_debug("DEBUG [FolderStatusResult]: Just reconnected, requesting immediate system status");
                 let _ = app.api_tx.send(ApiRequest::GetSystemStatus);
-                crate::log_debug(&format!("DEBUG [FolderStatusResult]: GetSystemStatus sent in {:?}", start.elapsed()));
+                crate::log_debug(&format!(
+                    "DEBUG [FolderStatusResult]: GetSystemStatus sent in {:?}",
+                    start.elapsed()
+                ));
             }
 
             let sequence = status.sequence;
@@ -451,7 +488,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             // Check if receive-only item count changed (indicates local-only files added/removed)
-            if let Some(&last_count) = app.model.performance.last_known_receive_only_counts.get(&folder_id) {
+            if let Some(&last_count) = app
+                .model
+                .performance
+                .last_known_receive_only_counts
+                .get(&folder_id)
+            {
                 if last_count != receive_only_count {
                     crate::log_debug(&format!("DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}", last_count, receive_only_count, folder_id));
 
@@ -484,14 +526,21 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
 
             // Update last known values
-            app.model.performance.last_known_sequences
+            app.model
+                .performance
+                .last_known_sequences
                 .insert(folder_id.clone(), sequence);
-            app.model.performance.last_known_receive_only_counts
+            app.model
+                .performance
+                .last_known_receive_only_counts
                 .insert(folder_id.clone(), receive_only_count);
 
             // Save and use fresh status
             let _ = app.cache.save_folder_status(&folder_id, &status, sequence);
-            app.model.syncthing.folder_statuses.insert(folder_id, status);
+            app.model
+                .syncthing
+                .folder_statuses
+                .insert(folder_id, status);
         }
 
         ApiResponse::RescanResult {
@@ -504,9 +553,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
                 // Immediately request folder status to detect sequence changes
                 // This makes the rescan feel more responsive
-                let _ = app
-                    .api_tx
-                    .send(ApiRequest::GetFolderStatus { folder_id });
+                let _ = app.api_tx.send(ApiRequest::GetFolderStatus { folder_id });
             } else {
                 crate::log_debug(&format!(
                     "DEBUG [RescanResult ERROR]: Failed to rescan folder={} error={:?}",
@@ -515,77 +562,84 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         }
 
-        ApiResponse::SystemStatusResult { status } => match status {
-            Ok(sys_status) => {
-                crate::log_debug(&format!(
-                    "DEBUG [SystemStatusResult]: Received system status, uptime={}",
-                    sys_status.uptime
-                ));
-
-                // Store system status first (needed for DevicesResult handler)
-                app.model.syncthing.system_status = Some(sys_status);
-
-                // Check if we just reconnected
-                let was_disconnected = !matches!(
-                    app.model.syncthing.connection_state,
-                    ConnectionState::Connected
-                );
-
-                // Always fetch devices list on successful system status (first poll after reconnection)
-                // This ensures we have fresh device list and update device name (in case it changed in GUI)
-                // Only fetch if we don't already have devices, to avoid unnecessary API calls
-                if app.model.syncthing.devices.is_empty() || app.model.syncthing.device_name.is_none() {
-                    crate::log_debug("DEBUG [SystemStatusResult]: Requesting devices list to update device name");
-                    let _ = app.api_tx.send(ApiRequest::GetDevices);
-                }
-
-                // If we're connected but have no folders, fetch them
-                // Note: We don't check was_disconnected because FolderStatus might have set
-                // connection state to Connected before SystemStatus arrives
-                // We also don't check show_setup_help because user might have dismissed it
-                if app.model.syncthing.folders.is_empty() {
+        ApiResponse::SystemStatusResult { status } => {
+            match status {
+                Ok(sys_status) => {
                     crate::log_debug(&format!(
+                        "DEBUG [SystemStatusResult]: Received system status, uptime={}",
+                        sys_status.uptime
+                    ));
+
+                    // Store system status first (needed for DevicesResult handler)
+                    app.model.syncthing.system_status = Some(sys_status);
+
+                    // Check if we just reconnected
+                    let was_disconnected = !matches!(
+                        app.model.syncthing.connection_state,
+                        ConnectionState::Connected
+                    );
+
+                    // Always fetch devices list on successful system status (first poll after reconnection)
+                    // This ensures we have fresh device list and update device name (in case it changed in GUI)
+                    // Only fetch if we don't already have devices, to avoid unnecessary API calls
+                    if app.model.syncthing.devices.is_empty()
+                        || app.model.syncthing.device_name.is_none()
+                    {
+                        crate::log_debug("DEBUG [SystemStatusResult]: Requesting devices list to update device name");
+                        let _ = app.api_tx.send(ApiRequest::GetDevices);
+                    }
+
+                    // If we're connected but have no folders, fetch them
+                    // Note: We don't check was_disconnected because FolderStatus might have set
+                    // connection state to Connected before SystemStatus arrives
+                    // We also don't check show_setup_help because user might have dismissed it
+                    if app.model.syncthing.folders.is_empty() {
+                        crate::log_debug(&format!(
                         "DEBUG [SystemStatusResult]: Connected with no folders, setting fetch flag (was_disconnected={} show_setup_help={})",
                         was_disconnected,
                         app.model.ui.show_setup_help
                     ));
-                    app.model.ui.needs_folder_refresh = true;
-                } else {
-                    crate::log_debug(&format!(
+                        app.model.ui.needs_folder_refresh = true;
+                    } else {
+                        crate::log_debug(&format!(
                         "DEBUG [SystemStatusResult]: NOT setting flag - folders.len()={} (was_disconnected={})",
                         app.model.syncthing.folders.len(),
                         was_disconnected
                     ));
+                    }
+
+                    // Successful API call - mark as connected
+                    app.model.syncthing.connection_state = ConnectionState::Connected;
                 }
+                Err(e) => {
+                    // SystemStatus is semi-critical: if we're idle and it fails, this likely indicates disconnection
+                    // However, if we're already in Connecting state (reconnection active), don't override it
+                    if !matches!(
+                        app.model.syncthing.connection_state,
+                        ConnectionState::Connecting { .. }
+                    ) {
+                        let error_type = crate::logic::errors::classify_error(&e);
+                        let message = crate::logic::errors::format_error_message(&e);
 
-                // Successful API call - mark as connected
-                app.model.syncthing.connection_state = ConnectionState::Connected;
-            }
-            Err(e) => {
-                // SystemStatus is semi-critical: if we're idle and it fails, this likely indicates disconnection
-                // However, if we're already in Connecting state (reconnection active), don't override it
-                if !matches!(app.model.syncthing.connection_state, ConnectionState::Connecting { .. }) {
-                    let error_type = crate::logic::errors::classify_error(&e);
-                    let message = crate::logic::errors::format_error_message(&e);
+                        app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                            error_type,
+                            message: message.clone(),
+                        };
 
-                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
-                        error_type,
-                        message: message.clone(),
-                    };
-
-                    crate::log_debug(&format!(
-                        "DEBUG [SystemStatusResult]: Connection lost - {}",
-                        message
-                    ));
-                } else {
-                    // Already reconnecting, don't override
-                    crate::log_debug(&format!(
+                        crate::log_debug(&format!(
+                            "DEBUG [SystemStatusResult]: Connection lost - {}",
+                            message
+                        ));
+                    } else {
+                        // Already reconnecting, don't override
+                        crate::log_debug(&format!(
                         "DEBUG [SystemStatusResult ERROR]: {} (reconnection active, state unchanged)",
                         e
                     ));
+                    }
                 }
             }
-        },
+        }
 
         ApiResponse::ConnectionStatsResult { stats } => match stats {
             Ok(conn_stats) => {
@@ -593,7 +647,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 app.model.syncthing.connection_stats = Some(conn_stats.clone());
 
                 // Calculate transfer rates if we have previous stats
-                if let Some((prev_stats, prev_instant)) = &app.model.syncthing.last_connection_stats {
+                if let Some((prev_stats, prev_instant)) = &app.model.syncthing.last_connection_stats
+                {
                     let elapsed = prev_instant.elapsed().as_secs_f64();
                     if elapsed > 0.0 {
                         let in_delta = (conn_stats.total.in_bytes_total as i64
@@ -611,7 +666,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
                     // Update baseline every ~10 seconds to prevent drift
                     if elapsed > 10.0 {
-                        app.model.syncthing.last_connection_stats = Some((conn_stats, Instant::now()));
+                        app.model.syncthing.last_connection_stats =
+                            Some((conn_stats, Instant::now()));
                     }
                 } else {
                     // First fetch, store as baseline
@@ -677,10 +733,16 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         },
 
-        ApiResponse::NeededFiles { folder_id, response } => {
+        ApiResponse::NeededFiles {
+            folder_id,
+            response,
+        } => {
             // Cache the response
             if let Err(e) = app.cache.cache_needed_files(&folder_id, &response) {
-                crate::log_debug(&format!("Failed to cache needed files for {}: {}", folder_id, e));
+                crate::log_debug(&format!(
+                    "Failed to cache needed files for {}: {}",
+                    folder_id, e
+                ));
             }
 
             // Get breakdown from cache
@@ -704,10 +766,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     if level.folder_id == folder_id {
                         if app.model.ui.out_of_sync_filter.is_none() {
                             // First time: activate filter
-                            app.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
-                                origin_level: app.model.navigation.focus_level,
-                                last_refresh: std::time::SystemTime::now(),
-                            });
+                            app.model.ui.out_of_sync_filter =
+                                Some(model::types::OutOfSyncFilterState {
+                                    origin_level: app.model.navigation.focus_level,
+                                    last_refresh: std::time::SystemTime::now(),
+                                });
 
                             // Apply filter
                             app.apply_out_of_sync_filter();
@@ -722,18 +785,27 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     }
                 }
             }
-        },
+        }
 
-        ApiResponse::LocalChanged { folder_id, file_paths } => {
+        ApiResponse::LocalChanged {
+            folder_id,
+            file_paths,
+        } => {
             // Cache the response
             if let Err(e) = app.cache.cache_local_changed_files(&folder_id, &file_paths) {
-                crate::log_debug(&format!("Failed to cache local changed files for {}: {}", folder_id, e));
+                crate::log_debug(&format!(
+                    "Failed to cache local changed files for {}: {}",
+                    folder_id, e
+                ));
             }
 
             // If filter is active for this folder, re-apply it with updated data
             if let Some(_filter_state) = &app.model.ui.out_of_sync_filter {
-                let current_folder_id = app.model.navigation.breadcrumb_trail
-                    .get(0)
+                let current_folder_id = app
+                    .model
+                    .navigation
+                    .breadcrumb_trail
+                    .first()
                     .map(|level| &level.folder_id);
 
                 if current_folder_id == Some(&folder_id) {

@@ -45,13 +45,10 @@ mod services;
 mod ui;
 mod utils;
 
-use api::{
-    BrowseItem, Folder, SyncState,
-    SyncthingClient,
-};
+use api::{BrowseItem, Folder, SyncState, SyncthingClient};
 use cache::CacheDb;
 use config::Config;
-use synctui::{DisplayMode, SortMode};
+use stui::{DisplayMode, SortMode};
 use ui::icons::{IconMode, IconRenderer, IconTheme};
 
 // Build version string with git hash and build date
@@ -102,17 +99,15 @@ impl std::fmt::Debug for ImagePreviewState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ImagePreviewState::Loading => write!(f, "ImagePreviewState::Loading"),
-            ImagePreviewState::Ready { metadata, .. } => {
-                f.debug_struct("ImagePreviewState::Ready")
-                    .field("metadata", metadata)
-                    .field("protocol", &"<StatefulProtocol>")
-                    .finish()
-            }
-            ImagePreviewState::Failed { metadata } => {
-                f.debug_struct("ImagePreviewState::Failed")
-                    .field("metadata", metadata)
-                    .finish()
-            }
+            ImagePreviewState::Ready { metadata, .. } => f
+                .debug_struct("ImagePreviewState::Ready")
+                .field("metadata", metadata)
+                .field("protocol", &"<StatefulProtocol>")
+                .finish(),
+            ImagePreviewState::Failed { metadata } => f
+                .debug_struct("ImagePreviewState::Failed")
+                .field("metadata", metadata)
+                .finish(),
         }
     }
 }
@@ -151,7 +146,6 @@ pub struct App {
 }
 
 impl App {
-
     /// Check if a path or any of its parent directories are pending deletion
     /// Returns Some(pending_path) if blocked, None if allowed
     fn is_path_or_parent_pending(&self, folder_id: &str, path: &PathBuf) -> Option<PathBuf> {
@@ -164,7 +158,10 @@ impl App {
 
     /// Add a path to pending deletions for a folder
     fn add_pending_delete(&mut self, folder_id: String, path: PathBuf) {
-        let pending_info = self.model.performance.pending_ignore_deletes
+        let pending_info = self
+            .model
+            .performance
+            .pending_ignore_deletes
             .entry(folder_id)
             .or_insert_with(|| model::PendingDeleteInfo {
                 paths: HashSet::new(),
@@ -178,14 +175,28 @@ impl App {
 
     /// Remove a path from pending deletions after verification
     fn remove_pending_delete(&mut self, folder_id: &str, path: &PathBuf) {
-        if let Some(pending_info) = self.model.performance.pending_ignore_deletes.get_mut(folder_id) {
+        if let Some(pending_info) = self
+            .model
+            .performance
+            .pending_ignore_deletes
+            .get_mut(folder_id)
+        {
             pending_info.paths.remove(path);
-            log_debug(&format!("Removed pending delete: {:?}, remaining: {:?}", path, pending_info.paths));
+            log_debug(&format!(
+                "Removed pending delete: {:?}, remaining: {:?}",
+                path, pending_info.paths
+            ));
 
             // Clean up empty folder entry
             if pending_info.paths.is_empty() {
-                self.model.performance.pending_ignore_deletes.remove(folder_id);
-                log_debug(&format!("Cleared pending deletes for folder: {}", folder_id));
+                self.model
+                    .performance
+                    .pending_ignore_deletes
+                    .remove(folder_id);
+                log_debug(&format!(
+                    "Cleared pending deletes for folder: {}",
+                    folder_id
+                ));
             }
         }
     }
@@ -194,14 +205,20 @@ impl App {
     fn cleanup_stale_pending_deletes(&mut self) {
         let now = Instant::now();
 
-        self.model.performance.pending_ignore_deletes.retain(|folder_id, info| {
-            if logic::performance::should_cleanup_stale_pending(info.initiated_at, now) {
-                log_debug(&format!("Cleaning up stale pending deletes for folder: {}", folder_id));
-                false // Remove this entry
-            } else {
-                true // Keep this entry
-            }
-        });
+        self.model
+            .performance
+            .pending_ignore_deletes
+            .retain(|folder_id, info| {
+                if logic::performance::should_cleanup_stale_pending(info.initiated_at, now) {
+                    log_debug(&format!(
+                        "Cleaning up stale pending deletes for folder: {}",
+                        folder_id
+                    ));
+                    false // Remove this entry
+                } else {
+                    true // Keep this entry
+                }
+            });
     }
 
     /// Verify and cleanup completed pending deletes
@@ -235,14 +252,20 @@ impl App {
         }
 
         // Clean up folders with no pending paths
-        self.model.performance.pending_ignore_deletes.retain(|folder_id, info| {
-            if info.paths.is_empty() {
-                log_debug(&format!("All pending deletes completed for folder: {}", folder_id));
-                false
-            } else {
-                true
-            }
-        });
+        self.model
+            .performance
+            .pending_ignore_deletes
+            .retain(|folder_id, info| {
+                if info.paths.is_empty() {
+                    log_debug(&format!(
+                        "All pending deletes completed for folder: {}",
+                        folder_id
+                    ));
+                    false
+                } else {
+                    true
+                }
+            });
     }
 
     pub fn get_local_state_summary(&self) -> (u64, u64, u64) {
@@ -272,7 +295,10 @@ impl App {
             self.pending_sync_state_writes.clear();
         } else {
             // Normal flush path
-            if let Err(e) = self.cache.save_sync_states_batch(&self.pending_sync_state_writes) {
+            if let Err(e) = self
+                .cache
+                .save_sync_states_batch(&self.pending_sync_state_writes)
+            {
                 log_debug(&format!("Failed to flush sync state batch: {}", e));
             }
             self.pending_sync_state_writes.clear();
@@ -288,7 +314,6 @@ impl App {
             self.last_db_flush.elapsed(),
         )
     }
-
 
     async fn new(config: Config, config_path: String) -> Result<Self> {
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
@@ -316,7 +341,10 @@ impl App {
                         },
                     )
                 } else {
-                    log_debug(&format!("Using {} cached folders, will auto-retry", cached_folders.len()));
+                    log_debug(&format!(
+                        "Using {} cached folders, will auto-retry",
+                        cached_folders.len()
+                    ));
                     (
                         cached_folders,
                         model::syncthing::ConnectionState::Connecting {
@@ -424,7 +452,12 @@ impl App {
         model.ui.image_font_size = image_font_size;
 
         // Show setup help if no folders and disconnected
-        if folders.is_empty() && matches!(initial_connection_state, model::syncthing::ConnectionState::Disconnected { .. }) {
+        if folders.is_empty()
+            && matches!(
+                initial_connection_state,
+                model::syncthing::ConnectionState::Disconnected { .. }
+            )
+        {
             model.ui.show_setup_help = true;
         }
 
@@ -514,7 +547,9 @@ impl App {
             // Try cache first - use it without validation on initial load
             if !self.model.syncthing.statuses_loaded {
                 if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
-                    self.model.syncthing.folder_statuses
+                    self.model
+                        .syncthing
+                        .folder_statuses
                         .insert(folder.id.clone(), cached_status);
                     continue;
                 }
@@ -525,7 +560,8 @@ impl App {
                 let sequence = status.sequence;
 
                 // Check if sequence changed from last known value
-                if let Some(&last_seq) = self.model.performance.last_known_sequences.get(&folder.id) {
+                if let Some(&last_seq) = self.model.performance.last_known_sequences.get(&folder.id)
+                {
                     if last_seq != sequence {
                         // Sequence changed! Invalidate cached data for this folder
                         let _ = self.cache.invalidate_folder(&folder.id);
@@ -545,12 +581,17 @@ impl App {
                 }
 
                 // Update last known sequence
-                self.model.performance.last_known_sequences
+                self.model
+                    .performance
+                    .last_known_sequences
                     .insert(folder.id.clone(), sequence);
 
                 // Save fresh status and use it
                 let _ = self.cache.save_folder_status(&folder.id, &status, sequence);
-                self.model.syncthing.folder_statuses.insert(folder.id.clone(), status);
+                self.model
+                    .syncthing
+                    .folder_statuses
+                    .insert(folder.id.clone(), status);
             }
         }
         self.model.syncthing.statuses_loaded = true;
@@ -565,9 +606,11 @@ impl App {
             let _ = self.api_tx.send(services::api::ApiRequest::GetSystemStatus);
         } else {
             for folder in &self.model.syncthing.folders {
-                let _ = self.api_tx.send(services::api::ApiRequest::GetFolderStatus {
-                    folder_id: folder.id.clone(),
-                });
+                let _ = self
+                    .api_tx
+                    .send(services::api::ApiRequest::GetFolderStatus {
+                        folder_id: folder.id.clone(),
+                    });
             }
         }
     }
@@ -595,9 +638,8 @@ impl App {
         let mut local_item_names = Vec::new();
 
         // Check if folder has local changes
-        let has_local_changes = logic::folder::has_local_changes(
-            self.model.syncthing.folder_statuses.get(folder_id)
-        );
+        let has_local_changes =
+            logic::folder::has_local_changes(self.model.syncthing.folder_statuses.get(folder_id));
 
         if !has_local_changes {
             return local_item_names;
@@ -699,8 +741,6 @@ impl App {
         Ok(())
     }
 
-
-
     /// Handle keyboard input
     /// Delegated to handlers::keyboard module
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -743,7 +783,9 @@ impl App {
 
                 if !has_needed && !has_local_changes {
                     // All synced - set empty breakdown
-                    summary_state.breakdowns.insert(folder_id, Default::default());
+                    summary_state
+                        .breakdowns
+                        .insert(folder_id, Default::default());
                 }
             }
         }
@@ -770,10 +812,10 @@ fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
         }
     }
 
-    // Try ~/.config/synctui/config.yaml
+    // Try ~/.config/stui/config.yaml
     if let Some(config_dir) = dirs::config_dir() {
-        let synctui_dir = config_dir.join("synctui");
-        let config_path = synctui_dir.join("config.yaml");
+        let stui_dir = config_dir.join("stui");
+        let config_path = stui_dir.join("config.yaml");
 
         if config_path.exists() {
             return Ok(config_path);
@@ -789,12 +831,12 @@ fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
     // No config found, provide helpful error
     let expected_path = if let Some(config_dir) = dirs::config_dir() {
         config_dir
-            .join("synctui")
+            .join("stui")
             .join("config.yaml")
             .display()
             .to_string()
     } else {
-        "~/.config/synctui/config.yaml".to_string()
+        "~/.config/stui/config.yaml".to_string()
     };
 
     anyhow::bail!(
@@ -939,7 +981,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     Ok("[Image preview - see right panel]".to_string());
                             }
                             ImagePreviewState::Failed { .. } => {
-                                popup_state.file_content = Err("Image preview unavailable".to_string());
+                                popup_state.file_content =
+                                    Err("Image preview unavailable".to_string());
                             }
                             _ => {}
                         }
@@ -967,29 +1010,31 @@ async fn run_app<B: ratatui::backend::Backend>(
                 ));
 
                 // Calculate next delay BEFORE updating state (so UI shows correct next retry time)
-                let next_delay = std::cmp::min(
-                    app.reconnect_delay * 2,
-                    Duration::from_secs(60)
-                );
+                let next_delay = std::cmp::min(app.reconnect_delay * 2, Duration::from_secs(60));
 
                 // Update state to show we're attempting
                 if let model::syncthing::ConnectionState::Disconnected { message, .. } =
                     &app.model.syncthing.connection_state
                 {
-                    app.model.syncthing.connection_state = model::syncthing::ConnectionState::Connecting {
-                        attempt: 1,
-                        last_error: Some(message.clone()),
-                        next_retry_secs: next_delay.as_secs(),
-                    };
-                } else if let model::syncthing::ConnectionState::Connecting { attempt, last_error, .. } =
-                    &app.model.syncthing.connection_state
+                    app.model.syncthing.connection_state =
+                        model::syncthing::ConnectionState::Connecting {
+                            attempt: 1,
+                            last_error: Some(message.clone()),
+                            next_retry_secs: next_delay.as_secs(),
+                        };
+                } else if let model::syncthing::ConnectionState::Connecting {
+                    attempt,
+                    last_error,
+                    ..
+                } = &app.model.syncthing.connection_state
                 {
                     let new_attempt = attempt + 1;
-                    app.model.syncthing.connection_state = model::syncthing::ConnectionState::Connecting {
-                        attempt: new_attempt,
-                        last_error: last_error.clone(),
-                        next_retry_secs: next_delay.as_secs(),
-                    };
+                    app.model.syncthing.connection_state =
+                        model::syncthing::ConnectionState::Connecting {
+                            attempt: new_attempt,
+                            last_error: last_error.clone(),
+                            next_retry_secs: next_delay.as_secs(),
+                        };
                 }
 
                 // Try to refresh folder statuses to test connection
@@ -1023,7 +1068,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                     }
                 }
                 Err(e) => {
-                    log_debug(&format!("Failed to fetch folders after reconnection: {}", e));
+                    log_debug(&format!(
+                        "Failed to fetch folders after reconnection: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -1036,7 +1084,9 @@ async fn run_app<B: ratatui::backend::Backend>(
         }
 
         if app.last_connection_stats_fetch.elapsed() >= std::time::Duration::from_millis(5000) {
-            let _ = app.api_tx.send(services::api::ApiRequest::GetConnectionStats);
+            let _ = app
+                .api_tx
+                .send(services::api::ApiRequest::GetConnectionStats);
             app.last_connection_stats_fetch = Instant::now();
         }
 
@@ -1096,14 +1146,22 @@ async fn run_app<B: ratatui::backend::Backend>(
             // This ensures results appear after prefetch completes
             if !app.model.ui.search_query.is_empty()
                 && app.model.ui.search_query.len() >= 2
-                && app.model.performance.last_search_filter_update.elapsed().as_millis() >= 300
+                && app
+                    .model
+                    .performance
+                    .last_search_filter_update
+                    .elapsed()
+                    .as_millis()
+                    >= 300
             {
                 app.model.performance.last_search_filter_update = std::time::Instant::now();
                 app.apply_search_filter();
             }
 
             // Update directory states based on their children (uses cache only, non-blocking)
-            if app.model.navigation.focus_level > 0 && !app.model.navigation.breadcrumb_trail.is_empty() {
+            if app.model.navigation.focus_level > 0
+                && !app.model.navigation.breadcrumb_trail.is_empty()
+            {
                 app.update_directory_states(app.model.navigation.focus_level - 1);
             }
         }

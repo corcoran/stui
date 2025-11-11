@@ -44,9 +44,16 @@ fn render_connection_status(state: &ConnectionState) -> Vec<Span<'_>> {
                 Span::raw(" | "),
             ]
         }
-        ConnectionState::Connecting { attempt, next_retry_secs, .. } => {
+        ConnectionState::Connecting {
+            attempt,
+            next_retry_secs,
+            ..
+        } => {
             let text = if *attempt > 1 {
-                format!("🟡 Connecting (attempt {}, next: {}s) ", attempt, next_retry_secs)
+                format!(
+                    "🟡 Connecting (attempt {}, next: {}s) ",
+                    attempt, next_retry_secs
+                )
             } else {
                 "🟡 Connecting... ".to_string()
             };
@@ -58,10 +65,7 @@ fn render_connection_status(state: &ConnectionState) -> Vec<Span<'_>> {
         ConnectionState::Disconnected { message, .. } => {
             // Show raw error message for tech-savvy audience
             vec![
-                Span::styled(
-                    format!("🔴 {} ", message),
-                    Style::default().fg(Color::Red),
-                ),
+                Span::styled(format!("🔴 {} ", message), Style::default().fg(Color::Red)),
                 Span::raw("| "),
             ]
         }
@@ -78,9 +82,11 @@ pub fn render_system_bar(
     local_state_summary: (u64, u64, u64), // (files, dirs, bytes)
     last_transfer_rates: Option<(f64, f64)>, // (download, upload) in bytes/sec
 ) {
-    let system_line = if matches!(connection_state, ConnectionState::Connected) && system_status.is_some() {
+    let system_line = if let (true, Some(sys_status)) = (
+        matches!(connection_state, ConnectionState::Connected),
+        system_status,
+    ) {
         // Only show full system info when connected AND have status
-        let sys_status = system_status.unwrap();
         let uptime_str = format_uptime(sys_status.uptime);
         let (total_files, total_dirs, total_bytes) = local_state_summary;
 
@@ -115,19 +121,24 @@ pub fn render_system_bar(
         let spans = match connection_state {
             ConnectionState::Disconnected { message, .. } => {
                 // Show error message (no device name since we're not connected)
-                vec![
-                    Span::styled(
-                        format!("🔴 {}", message),
-                        Style::default().fg(Color::Red),
-                    )
-                ]
+                vec![Span::styled(
+                    format!("🔴 {}", message),
+                    Style::default().fg(Color::Red),
+                )]
             }
-            ConnectionState::Connecting { attempt, last_error, next_retry_secs } => {
+            ConnectionState::Connecting {
+                attempt,
+                last_error,
+                next_retry_secs,
+            } => {
                 let mut spans = vec![];
 
                 // Show connecting status
                 let text = if *attempt > 1 {
-                    format!("🟡 Connecting (attempt {}, next: {}s)", attempt, next_retry_secs)
+                    format!(
+                        "🟡 Connecting (attempt {}, next: {}s)",
+                        attempt, next_retry_secs
+                    )
                 } else {
                     "🟡 Connecting...".to_string()
                 };
@@ -146,9 +157,10 @@ pub fn render_system_bar(
             }
             ConnectionState::Connected => {
                 // Connected but no system status - still loading
-                let mut spans = vec![
-                    Span::styled("🟢 Connected", Style::default().fg(Color::Green))
-                ];
+                let mut spans = vec![Span::styled(
+                    "🟢 Connected",
+                    Style::default().fg(Color::Green),
+                )];
 
                 if let Some(name) = device_name {
                     spans.push(Span::raw(" | "));

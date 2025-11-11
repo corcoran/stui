@@ -119,6 +119,12 @@ impl SyncthingModel {
     }
 }
 
+impl Default for SyncthingModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

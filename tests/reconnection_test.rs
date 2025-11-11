@@ -4,7 +4,7 @@
 //! 1. App starts with Syncthing down → shows setup help dialog
 //! 2. Syncthing comes back online → folders populate + dialog dismisses
 
-use synctui::model::{Model, syncthing::ConnectionState};
+use stui::model::{syncthing::ConnectionState, Model};
 
 /// Test: When app starts disconnected with no folders, setup help should be shown
 #[test]
@@ -13,7 +13,7 @@ fn test_initial_state_shows_setup_help() {
 
     // Simulate initial disconnection with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -33,7 +33,7 @@ fn test_reconnection_sets_folder_refresh_flag() {
 
     // Initial state: disconnected with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -41,10 +41,7 @@ fn test_reconnection_sets_folder_refresh_flag() {
     model.ui.needs_folder_refresh = false;
 
     // Simulate: API handler receives successful response and checks if we were disconnected
-    let was_disconnected = !matches!(
-        model.syncthing.connection_state,
-        ConnectionState::Connected
-    );
+    let was_disconnected = !matches!(model.syncthing.connection_state, ConnectionState::Connected);
 
     // Handler logic: if reconnecting with no folders, set flag
     if was_disconnected && model.syncthing.folders.is_empty() {
@@ -54,8 +51,14 @@ fn test_reconnection_sets_folder_refresh_flag() {
     model.syncthing.connection_state = ConnectionState::Connected;
 
     // Verify flag was set
-    assert!(model.ui.needs_folder_refresh, "Flag should be set when reconnecting with no folders");
-    assert!(model.ui.show_setup_help, "Dialog still visible until folders fetched");
+    assert!(
+        model.ui.needs_folder_refresh,
+        "Flag should be set when reconnecting with no folders"
+    );
+    assert!(
+        model.ui.show_setup_help,
+        "Dialog still visible until folders fetched"
+    );
 }
 
 /// Test: When folders are fetched and populated, setup help should be dismissed
@@ -72,14 +75,14 @@ fn test_folder_population_dismisses_setup_help() {
     // Simulate: main loop fetches folders (we'll just add them directly)
     model.ui.needs_folder_refresh = false; // Flag consumed
     model.syncthing.folders = vec![
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test-folder-1".to_string(),
             label: Some("Test Folder 1".to_string()),
             path: "/data/test1".to_string(),
             folder_type: "sendreceive".to_string(),
             paused: false,
         },
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test-folder-2".to_string(),
             label: Some("Test Folder 2".to_string()),
             path: "/data/test2".to_string(),
@@ -98,7 +101,11 @@ fn test_folder_population_dismisses_setup_help() {
     assert!(!model.ui.show_setup_help, "Setup help should be dismissed");
     assert!(!model.ui.needs_folder_refresh, "Flag should be consumed");
     assert_eq!(model.syncthing.folders.len(), 2, "Should have 2 folders");
-    assert_eq!(model.navigation.folders_state_selection, Some(0), "First folder should be selected");
+    assert_eq!(
+        model.navigation.folders_state_selection,
+        Some(0),
+        "First folder should be selected"
+    );
 }
 
 /// Test: Complete reconnection flow from start to finish
@@ -108,7 +115,7 @@ fn test_complete_reconnection_flow() {
 
     // STEP 1: Initial disconnection - show setup help
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -118,10 +125,7 @@ fn test_complete_reconnection_flow() {
     assert!(model.syncthing.folders.is_empty(), "Step 1: No folders");
 
     // STEP 2: Reconnection - set flag
-    let was_disconnected = !matches!(
-        model.syncthing.connection_state,
-        ConnectionState::Connected
-    );
+    let was_disconnected = !matches!(model.syncthing.connection_state, ConnectionState::Connected);
 
     if was_disconnected && model.syncthing.folders.is_empty() {
         model.ui.needs_folder_refresh = true;
@@ -133,15 +137,13 @@ fn test_complete_reconnection_flow() {
 
     // STEP 3: Fetch folders and dismiss dialog
     model.ui.needs_folder_refresh = false;
-    model.syncthing.folders = vec![
-        synctui::api::Folder {
-            id: "test".to_string(),
-            label: Some("Test".to_string()),
-            path: "/data/test".to_string(),
-            folder_type: "sendreceive".to_string(),
-            paused: false,
-        },
-    ];
+    model.syncthing.folders = vec![stui::api::Folder {
+        id: "test".to_string(),
+        label: Some("Test".to_string()),
+        path: "/data/test".to_string(),
+        folder_type: "sendreceive".to_string(),
+        paused: false,
+    }];
 
     if !model.syncthing.folders.is_empty() {
         model.navigation.folders_state_selection = Some(0);
@@ -150,8 +152,16 @@ fn test_complete_reconnection_flow() {
 
     assert!(!model.ui.show_setup_help, "Step 3: Dialog dismissed");
     assert!(!model.ui.needs_folder_refresh, "Step 3: Flag consumed");
-    assert_eq!(model.syncthing.folders.len(), 1, "Step 3: Folders populated");
-    assert_eq!(model.navigation.folders_state_selection, Some(0), "Step 3: Folder selected");
+    assert_eq!(
+        model.syncthing.folders.len(),
+        1,
+        "Step 3: Folders populated"
+    );
+    assert_eq!(
+        model.navigation.folders_state_selection,
+        Some(0),
+        "Step 3: Folder selected"
+    );
 }
 
 /// Test: Edge case - reconnection with folders already present (shouldn't happen, but defensive)
@@ -161,25 +171,20 @@ fn test_reconnection_with_existing_folders_no_flag() {
 
     // State: have folders but disconnected (edge case)
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
-    model.syncthing.folders = vec![
-        synctui::api::Folder {
-            id: "existing".to_string(),
-            label: Some("Existing".to_string()),
-            path: "/data/existing".to_string(),
-            folder_type: "sendreceive".to_string(),
-            paused: false,
-        },
-    ];
+    model.syncthing.folders = vec![stui::api::Folder {
+        id: "existing".to_string(),
+        label: Some("Existing".to_string()),
+        path: "/data/existing".to_string(),
+        folder_type: "sendreceive".to_string(),
+        paused: false,
+    }];
     model.ui.needs_folder_refresh = false;
 
     // Reconnect
-    let was_disconnected = !matches!(
-        model.syncthing.connection_state,
-        ConnectionState::Connected
-    );
+    let was_disconnected = !matches!(model.syncthing.connection_state, ConnectionState::Connected);
 
     if was_disconnected && model.syncthing.folders.is_empty() {
         model.ui.needs_folder_refresh = true;
@@ -187,7 +192,10 @@ fn test_reconnection_with_existing_folders_no_flag() {
     model.syncthing.connection_state = ConnectionState::Connected;
 
     // Flag should NOT be set because we already have folders
-    assert!(!model.ui.needs_folder_refresh, "Flag should not be set when folders exist");
+    assert!(
+        !model.ui.needs_folder_refresh,
+        "Flag should not be set when folders exist"
+    );
 }
 
 /// Test: Edge case - already connected, no need for flag
@@ -201,17 +209,17 @@ fn test_already_connected_no_flag() {
     model.ui.needs_folder_refresh = false;
 
     // Check was_disconnected
-    let was_disconnected = !matches!(
-        model.syncthing.connection_state,
-        ConnectionState::Connected
-    );
+    let was_disconnected = !matches!(model.syncthing.connection_state, ConnectionState::Connected);
 
     if was_disconnected && model.syncthing.folders.is_empty() {
         model.ui.needs_folder_refresh = true;
     }
 
     // Flag should NOT be set because we weren't disconnected
-    assert!(!model.ui.needs_folder_refresh, "Flag should not be set when already connected");
+    assert!(
+        !model.ui.needs_folder_refresh,
+        "Flag should not be set when already connected"
+    );
 }
 
 /// Test: BUG - SystemStatus might be called AFTER state already set to Connected
@@ -223,7 +231,7 @@ fn test_state_already_connected_before_system_status() {
 
     // Initial state: disconnected with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -235,13 +243,13 @@ fn test_state_already_connected_before_system_status() {
     model.syncthing.connection_state = ConnectionState::Connected;
 
     // Now SystemStatus arrives...
-    let was_disconnected = !matches!(
-        model.syncthing.connection_state,
-        ConnectionState::Connected
-    );
+    let was_disconnected = !matches!(model.syncthing.connection_state, ConnectionState::Connected);
 
     // BUG: was_disconnected is now false because state was already set!
-    assert!(!was_disconnected, "This is the bug - state already Connected");
+    assert!(
+        !was_disconnected,
+        "This is the bug - state already Connected"
+    );
 
     // So flag never gets set
     if was_disconnected && model.syncthing.folders.is_empty() {
@@ -249,7 +257,10 @@ fn test_state_already_connected_before_system_status() {
     }
 
     // BUG EXPOSED: Flag is NOT set even though we have no folders!
-    assert!(!model.ui.needs_folder_refresh, "BUG: Flag not set because state already Connected");
+    assert!(
+        !model.ui.needs_folder_refresh,
+        "BUG: Flag not set because state already Connected"
+    );
     assert!(model.syncthing.folders.is_empty(), "Still no folders");
     assert!(model.ui.show_setup_help, "Dialog still visible - STUCK!");
 }
@@ -274,7 +285,10 @@ fn test_solution_fetch_folders_when_connected_but_empty() {
     }
 
     // Flag should be set
-    assert!(model.ui.needs_folder_refresh, "Flag should be set when Connected but no folders");
+    assert!(
+        model.ui.needs_folder_refresh,
+        "Flag should be set when Connected but no folders"
+    );
 }
 
 /// Test: User dismisses setup help with Retry button, then reconnects
@@ -285,7 +299,7 @@ fn test_reconnect_after_user_dismissed_setup_help() {
 
     // Initial state: disconnected with no folders, setup help showing
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -309,7 +323,10 @@ fn test_reconnect_after_user_dismissed_setup_help() {
     }
 
     // Flag should be set even though dialog was dismissed
-    assert!(model.ui.needs_folder_refresh, "Flag should be set when Connected but no folders, regardless of dialog state");
+    assert!(
+        model.ui.needs_folder_refresh,
+        "Flag should be set when Connected but no folders, regardless of dialog state"
+    );
 }
 
 /// Test: Complete flow - user dismisses dialog, then folders populate
@@ -319,7 +336,7 @@ fn test_complete_flow_after_dismissed_dialog() {
 
     // Start disconnected, dialog showing
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -338,15 +355,13 @@ fn test_complete_flow_after_dismissed_dialog() {
 
     // Fetch folders
     model.ui.needs_folder_refresh = false;
-    model.syncthing.folders = vec![
-        synctui::api::Folder {
-            id: "test".to_string(),
-            label: Some("Test".to_string()),
-            path: "/data/test".to_string(),
-            folder_type: "sendreceive".to_string(),
-            paused: false,
-        },
-    ];
+    model.syncthing.folders = vec![stui::api::Folder {
+        id: "test".to_string(),
+        label: Some("Test".to_string()),
+        path: "/data/test".to_string(),
+        folder_type: "sendreceive".to_string(),
+        paused: false,
+    }];
 
     // Select first folder
     if !model.syncthing.folders.is_empty() {
@@ -354,6 +369,14 @@ fn test_complete_flow_after_dismissed_dialog() {
     }
 
     assert!(!model.ui.needs_folder_refresh, "Step 2: Flag consumed");
-    assert_eq!(model.syncthing.folders.len(), 1, "Step 2: Folders populated");
-    assert_eq!(model.navigation.folders_state_selection, Some(0), "Step 2: Folder selected");
+    assert_eq!(
+        model.syncthing.folders.len(),
+        1,
+        "Step 2: Folders populated"
+    );
+    assert_eq!(
+        model.navigation.folders_state_selection,
+        Some(0),
+        "Step 2: Folder selected"
+    );
 }

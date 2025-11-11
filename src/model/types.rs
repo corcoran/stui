@@ -30,7 +30,7 @@ pub struct PatternSelectionState {
 pub struct FolderTypeSelectionState {
     pub folder_id: String,
     pub folder_label: String,
-    pub current_type: String, // "sendonly", "sendreceive", "receiveonly"
+    pub current_type: String,  // "sendonly", "sendreceive", "receiveonly"
     pub selected_index: usize, // 0=Send Only, 1=Send & Receive, 2=Receive Only
 }
 
@@ -41,7 +41,7 @@ pub struct BreadcrumbLevel {
     pub folder_label: String,
     pub folder_path: String, // Container path for this folder
     pub prefix: Option<String>,
-    pub items: Vec<BrowseItem>,              // Source of truth (unfiltered)
+    pub items: Vec<BrowseItem>, // Source of truth (unfiltered)
     pub filtered_items: Option<Vec<BrowseItem>>, // Filtered view (if filter active)
     pub selected_index: Option<usize>,
     pub file_sync_states: HashMap<String, SyncState>,
@@ -57,7 +57,8 @@ impl BreadcrumbLevel {
 
     /// Get currently selected item (respects filtered items if active)
     pub fn selected_item(&self) -> Option<&BrowseItem> {
-        self.selected_index.and_then(|idx| self.display_items().get(idx))
+        self.selected_index
+            .and_then(|idx| self.display_items().get(idx))
     }
 
     /// Get sync state for a file/directory
@@ -170,7 +171,10 @@ mod tests {
         };
 
         match action {
-            ConfirmAction::Revert { folder_id, changed_files } => {
+            ConfirmAction::Revert {
+                folder_id,
+                changed_files,
+            } => {
                 assert_eq!(folder_id, "test-folder");
                 assert_eq!(changed_files.len(), 2);
             }
@@ -223,7 +227,11 @@ mod tests {
         };
 
         match action {
-            ConfirmAction::PauseResume { folder_id, label, is_paused } => {
+            ConfirmAction::PauseResume {
+                folder_id,
+                label,
+                is_paused,
+            } => {
                 assert_eq!(folder_id, "folder-123");
                 assert_eq!(label, "My Folder");
                 assert!(is_paused);
@@ -421,11 +429,7 @@ mod tests {
 
         // Should show all items
         let displayed = level.display_items();
-        assert_eq!(
-            displayed.len(),
-            2,
-            "No filter (None) should show all items"
-        );
+        assert_eq!(displayed.len(), 2, "No filter (None) should show all items");
     }
 
     // ========================================
@@ -440,7 +444,10 @@ mod tests {
         };
 
         match action {
-            ConfirmAction::Rescan { folder_id, folder_label } => {
+            ConfirmAction::Rescan {
+                folder_id,
+                folder_label,
+            } => {
                 assert_eq!(folder_id, "folder-abc");
                 assert_eq!(folder_label, "My Folder");
             }

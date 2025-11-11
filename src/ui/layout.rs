@@ -21,6 +21,7 @@ pub struct LayoutInfo {
 }
 
 /// Calculate the screen layout for all UI components
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_layout(
     terminal_size: Rect,
     num_breadcrumb_levels: usize,
@@ -50,8 +51,8 @@ pub fn calculate_layout(
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),            // System info bar (3 lines: top border, text, bottom border)
-            Constraint::Min(3),               // Content area (folders + breadcrumbs)
+            Constraint::Length(3), // System info bar (3 lines: top border, text, bottom border)
+            Constraint::Min(3),    // Content area (folders + breadcrumbs)
             Constraint::Length(search_height), // Search input (3 lines when visible, 0 when hidden)
             Constraint::Length(legend_height), // Legend area (dynamic height, exact fit for wrapped content)
             Constraint::Length(status_height), // Status bar (dynamic height, exact fit for wrapped content)

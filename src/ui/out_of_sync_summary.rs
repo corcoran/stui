@@ -38,12 +38,10 @@ pub fn render_out_of_sync_summary(
             let breakdown = summary_state.breakdowns.get(&folder.id);
             let is_loading = summary_state.loading.contains(&folder.id);
 
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::raw("📂 "),
-                    Span::styled(display_name, Style::default().add_modifier(Modifier::BOLD)),
-                ]),
-            ];
+            let mut lines = vec![Line::from(vec![
+                Span::raw("📂 "),
+                Span::styled(display_name, Style::default().add_modifier(Modifier::BOLD)),
+            ])];
 
             if is_loading {
                 lines.push(Line::from(Span::styled(

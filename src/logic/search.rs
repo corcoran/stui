@@ -14,7 +14,7 @@ use crate::api::BrowseItem;
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::search::search_matches;
+/// use stui::logic::search::search_matches;
 ///
 /// assert!(search_matches("jeff", "jeff-1.txt"));
 /// assert!(search_matches("*jeff*", "my-jeff-file.txt"));
@@ -56,11 +56,7 @@ pub fn search_matches(query: &str, file_path: &str) -> bool {
 ///
 /// # Returns
 /// Filtered list containing only matching items
-pub fn filter_items(
-    items: &[BrowseItem],
-    query: &str,
-    prefix: Option<&str>,
-) -> Vec<BrowseItem> {
+pub fn filter_items(items: &[BrowseItem], query: &str, prefix: Option<&str>) -> Vec<BrowseItem> {
     if query.is_empty() {
         return items.to_vec();
     }

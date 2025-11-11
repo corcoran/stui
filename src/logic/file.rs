@@ -14,7 +14,7 @@
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::is_image_file;
+/// use stui::logic::file::is_image_file;
 ///
 /// assert!(is_image_file("photo.jpg"));
 /// assert!(is_image_file("image.PNG"));  // Case insensitive
@@ -48,7 +48,7 @@ pub fn is_image_file(path: &str) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::is_binary_content;
+/// use stui::logic::file::is_binary_content;
 ///
 /// // Text content - no null bytes
 /// assert!(!is_binary_content(b"Hello, world!"));
@@ -77,7 +77,7 @@ pub fn is_binary_content(bytes: &[u8]) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::contains_ansi_codes;
+/// use stui::logic::file::contains_ansi_codes;
 ///
 /// // Text with ANSI color codes
 /// assert!(contains_ansi_codes(b"\x1b[31mRed text\x1b[0m"));
@@ -105,7 +105,8 @@ pub fn contains_ansi_codes(bytes: &[u8]) -> bool {
             // Found ESC[, this is likely an ANSI code
             // Verify it's followed by valid ANSI sequence (digits/semicolons then a letter)
             let mut j = i + 2;
-            while j < bytes.len() && j < i + 20 { // Check next 20 bytes max
+            while j < bytes.len() && j < i + 20 {
+                // Check next 20 bytes max
                 let ch = bytes[j];
                 if ch.is_ascii_alphabetic() {
                     // Valid ANSI sequence found (ends with letter)
@@ -308,14 +309,19 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
 }
 
 /// Helper function to build spans from entire line buffer
-fn build_spans_from_buffer(line_buffer: &[(char, ratatui::style::Style)]) -> Vec<ratatui::text::Span<'static>> {
+fn build_spans_from_buffer(
+    line_buffer: &[(char, ratatui::style::Style)],
+) -> Vec<ratatui::text::Span<'static>> {
     build_spans_from_buffer_upto(line_buffer, line_buffer.len())
 }
 
 /// Helper function to build spans from line buffer up to a certain column
-fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], max_col: usize) -> Vec<ratatui::text::Span<'static>> {
-    use ratatui::text::Span;
+fn build_spans_from_buffer_upto(
+    line_buffer: &[(char, ratatui::style::Style)],
+    max_col: usize,
+) -> Vec<ratatui::text::Span<'static>> {
     use ratatui::style::Style;
+    use ratatui::text::Span;
 
     let mut spans = Vec::new();
     if max_col == 0 {
@@ -326,9 +332,7 @@ fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], m
     let mut current_span_text = String::new();
     let mut current_span_style = line_buffer[0].1;
 
-    for i in 0..max_col {
-        let (ch, mut style) = line_buffer[i];
-
+    for (ch, mut style) in line_buffer.iter().take(max_col).copied() {
         // Strip background color from spaces to prevent unwanted background bleeding
         if ch == ' ' && style.bg.is_some() {
             style = Style {
@@ -385,7 +389,7 @@ fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], m
 ///
 /// # Example
 /// ```
-/// use synctui::logic::file::extract_text_from_binary;
+/// use stui::logic::file::extract_text_from_binary;
 ///
 /// let binary = b"Hello\x00World\x00\x01\x02Test\x00";
 /// let result = extract_text_from_binary(binary);
@@ -475,9 +479,9 @@ mod tests {
     #[test]
     fn test_is_image_file_edge_cases() {
         assert!(!is_image_file(""));
-        assert!(is_image_file(".png"));  // Just extension - technically valid image file
-        assert!(is_image_file("a.png"));  // Single character filename
-        assert!(!is_image_file("png"));  // No extension dot
+        assert!(is_image_file(".png")); // Just extension - technically valid image file
+        assert!(is_image_file("a.png")); // Single character filename
+        assert!(!is_image_file("png")); // No extension dot
     }
 
     // ========================================
@@ -489,7 +493,7 @@ mod tests {
         // Plain ASCII text
         assert!(!is_binary_content(b"Hello, world!"));
         assert!(!is_binary_content(b"Line 1\nLine 2\n"));
-        assert!(!is_binary_content(b""));  // Empty file is text
+        assert!(!is_binary_content(b"")); // Empty file is text
     }
 
     #[test]
@@ -505,7 +509,7 @@ mod tests {
         // Content with null bytes
         assert!(is_binary_content(b"Hello\x00World"));
         assert!(is_binary_content(b"\x00\x01\x02\x03"));
-        assert!(is_binary_content(b"\x00"));  // Just a null byte
+        assert!(is_binary_content(b"\x00")); // Just a null byte
     }
 
     #[test]
@@ -571,7 +575,9 @@ mod tests {
         // ANSI codes in middle of text
         assert!(contains_ansi_codes(b"Start \x1b[31mred\x1b[0m end"));
         // Multiple ANSI sequences
-        assert!(contains_ansi_codes(b"\x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m"));
+        assert!(contains_ansi_codes(
+            b"\x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m"
+        ));
     }
 
     #[test]
@@ -628,7 +634,11 @@ mod tests {
         let text = parse_ansi_to_text("A\x1b[5CB");
         assert_eq!(text.lines.len(), 1);
         // Should have "A" + 5 spaces + "B"
-        let full_text: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let full_text: String = text.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert_eq!(full_text, "A     B");
     }
 
@@ -652,7 +662,11 @@ mod tests {
         // SAUCE metadata starts with Ctrl-Z
         let text_with_sauce = "Content\x1ASAUCE00metadata";
         let text = parse_ansi_to_text(text_with_sauce);
-        let full_text: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let full_text: String = text.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert_eq!(full_text, "Content");
     }
 
@@ -737,11 +751,16 @@ mod tests {
         let binary = b"Hello\x00World\x00\x01\x02Test String\x00End";
         let result = extract_text_from_binary(binary);
 
-        assert!(result.contains("Binary file - extracted text"),
-            "Should indicate it's a binary file");
+        assert!(
+            result.contains("Binary file - extracted text"),
+            "Should indicate it's a binary file"
+        );
         assert!(result.contains("Hello"), "Should extract 'Hello' (5 chars)");
         assert!(result.contains("World"), "Should extract 'World' (5 chars)");
-        assert!(result.contains("Test String"), "Should extract 'Test String' (11 chars)");
+        assert!(
+            result.contains("Test String"),
+            "Should extract 'Test String' (11 chars)"
+        );
     }
 
     #[test]
@@ -750,8 +769,10 @@ mod tests {
         let binary = b"\x00\x01\x02\x03\xFF\xFE\xFD\xFC";
         let result = extract_text_from_binary(binary);
 
-        assert_eq!(result, "[Binary file - no readable text found]",
-            "Pure binary should show 'no readable text found' message");
+        assert_eq!(
+            result, "[Binary file - no readable text found]",
+            "Pure binary should show 'no readable text found' message"
+        );
     }
 
     #[test]
@@ -760,10 +781,19 @@ mod tests {
         let binary = b"\x00\x00Data\x00\x01Short\x00\x02AB\x00LongerString\x00\xFF";
         let result = extract_text_from_binary(binary);
 
-        assert!(result.contains("Data"), "Should extract 'Data' (4 chars - at threshold)");
+        assert!(
+            result.contains("Data"),
+            "Should extract 'Data' (4 chars - at threshold)"
+        );
         assert!(result.contains("Short"), "Should extract 'Short' (5 chars)");
-        assert!(!result.contains("AB"), "Should NOT extract 'AB' (2 chars - below threshold)");
-        assert!(result.contains("LongerString"), "Should extract 'LongerString' (12 chars)");
+        assert!(
+            !result.contains("AB"),
+            "Should NOT extract 'AB' (2 chars - below threshold)"
+        );
+        assert!(
+            result.contains("LongerString"),
+            "Should extract 'LongerString' (12 chars)"
+        );
     }
 
     #[test]
@@ -773,9 +803,18 @@ mod tests {
         let result = extract_text_from_binary(binary);
 
         assert!(!result.contains("A\n"), "Should NOT extract 1-char strings");
-        assert!(!result.contains("AB\n"), "Should NOT extract 2-char strings");
-        assert!(!result.contains("ABC\n"), "Should NOT extract 3-char strings");
-        assert!(result.contains("ABCD"), "Should extract 4-char strings (at threshold)");
+        assert!(
+            !result.contains("AB\n"),
+            "Should NOT extract 2-char strings"
+        );
+        assert!(
+            !result.contains("ABC\n"),
+            "Should NOT extract 3-char strings"
+        );
+        assert!(
+            result.contains("ABCD"),
+            "Should extract 4-char strings (at threshold)"
+        );
         assert!(result.contains("ABCDE"), "Should extract 5-char strings");
     }
 
@@ -786,11 +825,17 @@ mod tests {
         let result = extract_text_from_binary(binary);
 
         // Newlines and tabs should be preserved as part of strings
-        assert!(result.contains("Line1\nLine2"),
-            "Should preserve newlines within strings");
-        assert!(result.contains("Tab\tSeparated"),
-            "Should preserve tabs within strings");
-        assert!(result.contains("Normal Text"),
-            "Should extract normal printable ASCII");
+        assert!(
+            result.contains("Line1\nLine2"),
+            "Should preserve newlines within strings"
+        );
+        assert!(
+            result.contains("Tab\tSeparated"),
+            "Should preserve tabs within strings"
+        );
+        assert!(
+            result.contains("Normal Text"),
+            "Should extract normal printable ASCII"
+        );
     }
 }

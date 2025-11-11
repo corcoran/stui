@@ -19,8 +19,8 @@ use crate::{model::VimCommandState, DisplayMode, SortMode};
 ///
 /// # Examples
 /// ```
-/// use synctui::DisplayMode;
-/// use synctui::logic::ui::cycle_display_mode;
+/// use stui::DisplayMode;
+/// use stui::logic::ui::cycle_display_mode;
 ///
 /// assert_eq!(cycle_display_mode(DisplayMode::Off), DisplayMode::TimestampOnly);
 /// assert_eq!(cycle_display_mode(DisplayMode::TimestampOnly), DisplayMode::TimestampAndSize);
@@ -50,8 +50,8 @@ pub fn cycle_display_mode(current: DisplayMode) -> DisplayMode {
 ///
 /// # Examples
 /// ```
-/// use synctui::SortMode;
-/// use synctui::logic::ui::cycle_sort_mode;
+/// use stui::SortMode;
+/// use stui::logic::ui::cycle_sort_mode;
 ///
 /// // Cycling in breadcrumb view
 /// assert_eq!(cycle_sort_mode(SortMode::VisualIndicator, 1), Some(SortMode::Alphabetical));
@@ -90,7 +90,7 @@ pub fn cycle_sort_mode(current: SortMode, focus_level: usize) -> Option<SortMode
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::ui::toggle_sort_reverse;
+/// use stui::logic::ui::toggle_sort_reverse;
 ///
 /// // Toggling in breadcrumb view
 /// assert_eq!(toggle_sort_reverse(false, 1), Some(true));
@@ -125,8 +125,8 @@ pub fn toggle_sort_reverse(current: bool, focus_level: usize) -> Option<bool> {
 ///
 /// # Examples
 /// ```
-/// use synctui::model::VimCommandState;
-/// use synctui::logic::ui::next_vim_command_state;
+/// use stui::model::VimCommandState;
+/// use stui::logic::ui::next_vim_command_state;
 ///
 /// // First 'g' press - start sequence
 /// let (state, jump) = next_vim_command_state(VimCommandState::None, true);
@@ -178,7 +178,7 @@ pub fn next_vim_command_state(
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::ui::should_dismiss_toast;
+/// use stui::logic::ui::should_dismiss_toast;
 ///
 /// assert_eq!(should_dismiss_toast(500), false);   // 0.5 seconds - still showing
 /// assert_eq!(should_dismiss_toast(1000), true);   // 1 second - dismiss
@@ -198,17 +198,26 @@ mod tests {
 
     #[test]
     fn test_cycle_display_mode_from_off() {
-        assert_eq!(cycle_display_mode(DisplayMode::Off), DisplayMode::TimestampOnly);
+        assert_eq!(
+            cycle_display_mode(DisplayMode::Off),
+            DisplayMode::TimestampOnly
+        );
     }
 
     #[test]
     fn test_cycle_display_mode_from_timestamp_only() {
-        assert_eq!(cycle_display_mode(DisplayMode::TimestampOnly), DisplayMode::TimestampAndSize);
+        assert_eq!(
+            cycle_display_mode(DisplayMode::TimestampOnly),
+            DisplayMode::TimestampAndSize
+        );
     }
 
     #[test]
     fn test_cycle_display_mode_from_timestamp_and_size() {
-        assert_eq!(cycle_display_mode(DisplayMode::TimestampAndSize), DisplayMode::Off);
+        assert_eq!(
+            cycle_display_mode(DisplayMode::TimestampAndSize),
+            DisplayMode::Off
+        );
     }
 
     // ========================================
@@ -218,14 +227,32 @@ mod tests {
     #[test]
     fn test_cycle_sort_mode_in_breadcrumb_view() {
         // Normal cycling in breadcrumb view (focus_level > 0)
-        assert_eq!(cycle_sort_mode(SortMode::VisualIndicator, 1), Some(SortMode::Alphabetical));
-        assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 1), Some(SortMode::LastModified));
-        assert_eq!(cycle_sort_mode(SortMode::LastModified, 1), Some(SortMode::FileSize));
-        assert_eq!(cycle_sort_mode(SortMode::FileSize, 1), Some(SortMode::VisualIndicator));
+        assert_eq!(
+            cycle_sort_mode(SortMode::VisualIndicator, 1),
+            Some(SortMode::Alphabetical)
+        );
+        assert_eq!(
+            cycle_sort_mode(SortMode::Alphabetical, 1),
+            Some(SortMode::LastModified)
+        );
+        assert_eq!(
+            cycle_sort_mode(SortMode::LastModified, 1),
+            Some(SortMode::FileSize)
+        );
+        assert_eq!(
+            cycle_sort_mode(SortMode::FileSize, 1),
+            Some(SortMode::VisualIndicator)
+        );
 
         // Works at any breadcrumb level
-        assert_eq!(cycle_sort_mode(SortMode::Alphabetical, 2), Some(SortMode::LastModified));
-        assert_eq!(cycle_sort_mode(SortMode::FileSize, 5), Some(SortMode::VisualIndicator));
+        assert_eq!(
+            cycle_sort_mode(SortMode::Alphabetical, 2),
+            Some(SortMode::LastModified)
+        );
+        assert_eq!(
+            cycle_sort_mode(SortMode::FileSize, 5),
+            Some(SortMode::VisualIndicator)
+        );
     }
 
     #[test]
@@ -280,7 +307,8 @@ mod tests {
     #[test]
     fn test_next_vim_command_state_reset_on_other_key() {
         // Any non-g key resets state from waiting
-        let (state, should_jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, false);
+        let (state, should_jump) =
+            next_vim_command_state(VimCommandState::WaitingForSecondG, false);
         assert_eq!(state, VimCommandState::None);
         assert_eq!(should_jump, false);
 

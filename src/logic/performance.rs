@@ -22,7 +22,7 @@ use std::time::Duration;
 /// # Examples
 /// ```
 /// use std::time::Duration;
-/// use synctui::logic::performance::should_flush_batch;
+/// use stui::logic::performance::should_flush_batch;
 ///
 /// // Empty queue - no flush needed
 /// assert!(!should_flush_batch(0, Duration::from_millis(0)));
@@ -41,8 +41,7 @@ pub fn should_flush_batch(queue_len: usize, time_since_last_flush: Duration) -> 
         return false;
     }
 
-    queue_len >= MAX_BATCH_SIZE
-        || time_since_last_flush > Duration::from_millis(MAX_BATCH_AGE_MS)
+    queue_len >= MAX_BATCH_SIZE || time_since_last_flush > Duration::from_millis(MAX_BATCH_AGE_MS)
 }
 
 /// Check if a pending delete operation is stale and should be cleaned up
@@ -58,7 +57,10 @@ pub fn should_flush_batch(queue_len: usize, time_since_last_flush: Duration) -> 
 ///
 /// # Returns
 /// `true` if the operation should be removed (stale)
-pub fn should_cleanup_stale_pending(initiated_at: std::time::Instant, now: std::time::Instant) -> bool {
+pub fn should_cleanup_stale_pending(
+    initiated_at: std::time::Instant,
+    now: std::time::Instant,
+) -> bool {
     const STALE_TIMEOUT: Duration = Duration::from_secs(60);
     now.duration_since(initiated_at) > STALE_TIMEOUT
 }

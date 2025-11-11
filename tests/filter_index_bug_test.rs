@@ -19,8 +19,8 @@
 //! - ignore_and_delete() - src/app/ignore.rs:221
 //! - Delete confirmation handler - src/handlers/keyboard.rs:165
 
-use synctui::model::types::BreadcrumbLevel;
-use synctui::api::BrowseItem;
+use stui::api::BrowseItem;
+use stui::model::types::BreadcrumbLevel;
 
 /// Helper: Create a breadcrumb level with full list and filtered subset
 fn create_test_level_with_filter() -> BreadcrumbLevel {
@@ -96,8 +96,14 @@ fn test_display_items_returns_filtered_list() {
     let displayed = level.display_items();
 
     assert_eq!(displayed.len(), 2, "Should show 2 filtered items");
-    assert_eq!(displayed[0].name, "jeff-1.txt", "First item should be jeff-1.txt");
-    assert_eq!(displayed[1].name, "jeff-2.txt", "Second item should be jeff-2.txt");
+    assert_eq!(
+        displayed[0].name, "jeff-1.txt",
+        "First item should be jeff-1.txt"
+    );
+    assert_eq!(
+        displayed[1].name, "jeff-2.txt",
+        "Second item should be jeff-2.txt"
+    );
 }
 
 /// Test: display_items() should return full list when no filter is active
@@ -139,16 +145,14 @@ fn test_wrong_pattern_exposes_bug() {
     let wrong_item = &level.items[selected_idx]; // Index 1 in FULL list = "b.txt"
 
     assert_eq!(
-        wrong_item.name,
-        "b.txt",
+        wrong_item.name, "b.txt",
         "Bug: Using items[selected_index] returns wrong file!"
     );
 
     // CORRECT: This is what it should do
     let correct_item = level.display_items().get(selected_idx).unwrap();
     assert_eq!(
-        correct_item.name,
-        "jeff-2.txt",
+        correct_item.name, "jeff-2.txt",
         "Correct: Using display_items()[selected_index] returns right file"
     );
 }
@@ -165,7 +169,10 @@ fn test_index_zero_with_filter() {
 
     // CORRECT pattern (what code should do)
     let correct_item = level.display_items().get(0).unwrap();
-    assert_eq!(correct_item.name, "jeff-1.txt", "Correct: display_items()[0] = jeff-1.txt");
+    assert_eq!(
+        correct_item.name, "jeff-1.txt",
+        "Correct: display_items()[0] = jeff-1.txt"
+    );
 }
 
 /// Test: Out of bounds check - selected_index valid for filtered but not full list
@@ -209,7 +216,11 @@ fn test_delete_confirmation_by_name() {
     }
 
     // Verify: Other items should still exist
-    assert_eq!(level.items.len(), 4, "Should have 4 items left in full list");
+    assert_eq!(
+        level.items.len(),
+        4,
+        "Should have 4 items left in full list"
+    );
     assert_eq!(
         level.filtered_items.as_ref().unwrap().len(),
         1,
@@ -231,7 +242,10 @@ fn test_delete_confirmation_bug_removes_wrong_item() {
     level.items.remove(idx);
 
     // Verify the bug: "b.txt" was removed (wrong!), "jeff-2.txt" still exists
-    assert_eq!(wrong_item_name, "b.txt", "Bug removed b.txt instead of jeff-2.txt");
+    assert_eq!(
+        wrong_item_name, "b.txt",
+        "Bug removed b.txt instead of jeff-2.txt"
+    );
     assert!(
         level.items.iter().any(|item| item.name == "jeff-2.txt"),
         "Bug: jeff-2.txt still exists (should have been deleted)"

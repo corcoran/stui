@@ -76,4 +76,3 @@ pub fn render_search_input(
 
     f.render_widget(paragraph, area);
 }
-

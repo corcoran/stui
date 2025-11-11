@@ -7,7 +7,7 @@
 //! - Open files/directories with external commands
 //! - Copy paths to clipboard
 
-use crate::{App, services, logic, log_debug};
+use crate::{log_debug, logic, services, App};
 use anyhow::Result;
 use std::time::Instant;
 
@@ -19,7 +19,10 @@ impl App {
             // Folder list view - get selected folder
             let selected = self.model.navigation.folders_state_selection?;
             let folder = self.model.syncthing.folders.get(selected)?;
-            Some((folder.id.clone(), folder.label.clone().unwrap_or_else(|| folder.id.clone())))
+            Some((
+                folder.id.clone(),
+                folder.label.clone().unwrap_or_else(|| folder.id.clone()),
+            ))
         } else {
             // Breadcrumb view - get current folder from trail
             if self.model.navigation.breadcrumb_trail.is_empty() {
@@ -61,11 +64,9 @@ impl App {
         self.invalidate_and_refresh_folder(folder_id);
 
         // Step 2: Trigger Syncthing rescan
-        let _ = self
-            .api_tx
-            .send(services::api::ApiRequest::RescanFolder {
-                folder_id: folder_id.to_string(),
-            });
+        let _ = self.api_tx.send(services::api::ApiRequest::RescanFolder {
+            folder_id: folder_id.to_string(),
+        });
 
         Ok(())
     }
@@ -100,11 +101,8 @@ impl App {
 
             for (idx, level) in self.model.navigation.breadcrumb_trail.iter().enumerate() {
                 if level.folder_id == folder_id {
-                    let browse_key = format!(
-                        "{}:{}",
-                        folder_id,
-                        level.prefix.as_deref().unwrap_or("")
-                    );
+                    let browse_key =
+                        format!("{}:{}", folder_id, level.prefix.as_deref().unwrap_or(""));
 
                     log_debug(&format!(
                         "DEBUG [invalidate_and_refresh_folder]: Level {}: prefix={:?} loading_browse.contains={}",
@@ -132,7 +130,9 @@ impl App {
 
     pub(crate) async fn restore_selected_file(&mut self) -> Result<()> {
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return Ok(());
         }
 
@@ -141,7 +141,9 @@ impl App {
             return Ok(());
         }
 
-        let folder_id = self.model.navigation.breadcrumb_trail[level_idx].folder_id.clone();
+        let folder_id = self.model.navigation.breadcrumb_trail[level_idx]
+            .folder_id
+            .clone();
 
         // Check if this is a receive-only folder with local changes
         if logic::folder::has_local_changes(self.model.syncthing.folder_statuses.get(&folder_id)) {
@@ -234,7 +236,9 @@ impl App {
         };
 
         // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return Ok(());
         }
 
@@ -309,7 +313,9 @@ impl App {
     pub(crate) fn open_syncthing_web_ui(&mut self) -> Result<()> {
         // Check if open_command is configured
         let Some(ref open_cmd) = self.open_command else {
-            self.model.ui.show_toast("Error: open_command not configured".to_string());
+            self.model
+                .ui
+                .show_toast("Error: open_command not configured".to_string());
             return Ok(());
         };
 
@@ -323,7 +329,9 @@ impl App {
 
         match result {
             Ok(_child) => {
-                self.model.ui.show_toast(format!("Opening Syncthing: {}", self.base_url));
+                self.model
+                    .ui
+                    .show_toast(format!("Opening Syncthing: {}", self.base_url));
             }
             Err(e) => {
                 self.model.ui.show_toast(format!("Failed to open: {}", e));
@@ -336,15 +344,16 @@ impl App {
     pub(crate) fn copy_to_clipboard(&mut self) -> Result<()> {
         let text_to_copy = if self.model.navigation.focus_level == 0 {
             // In folder list - copy folder ID
-            if let Some(selected) = self.model.navigation.folders_state_selection {
-                if let Some(folder) = self.model.syncthing.folders.get(selected) {
-                    Some(folder.id.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            self.model
+                .navigation
+                .folders_state_selection
+                .and_then(|selected| {
+                    self.model
+                        .syncthing
+                        .folders
+                        .get(selected)
+                        .map(|folder| folder.id.clone())
+                })
         } else {
             // In breadcrumbs - copy file/directory path (mapped host path)
             if self.model.navigation.breadcrumb_trail.is_empty() {

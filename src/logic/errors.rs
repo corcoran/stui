@@ -4,10 +4,10 @@ use anyhow::Error;
 pub enum ErrorType {
     ConnectionRefused,
     Timeout,
-    Unauthorized,    // HTTP 401
-    NotFound,        // HTTP 404
-    ServerError,     // HTTP 500+
-    NetworkError,    // DNS, routing, etc.
+    Unauthorized, // HTTP 401
+    NotFound,     // HTTP 404
+    ServerError,  // HTTP 500+
+    NetworkError, // DNS, routing, etc.
     Other,
 }
 

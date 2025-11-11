@@ -161,6 +161,7 @@ pub fn build_legend_paragraph(
 }
 
 /// Render the hotkey legend (dynamically changes based on vim mode and focus level)
+#[allow(clippy::too_many_arguments)]
 pub fn render_legend(
     f: &mut Frame,
     area: Rect,
@@ -205,8 +206,8 @@ pub fn calculate_legend_height(
     let hotkey_line = Line::from(hotkey_spans);
 
     // Create paragraph WITHOUT block for accurate line counting
-    let paragraph_for_counting = Paragraph::new(vec![hotkey_line])
-        .wrap(ratatui::widgets::Wrap { trim: false });
+    let paragraph_for_counting =
+        Paragraph::new(vec![hotkey_line]).wrap(ratatui::widgets::Wrap { trim: false });
 
     // Calculate available width (subtract left + right borders)
     let available_width = terminal_width.saturating_sub(2);

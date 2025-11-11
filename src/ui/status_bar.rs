@@ -67,6 +67,7 @@ pub fn map_folder_state(
 }
 
 /// Build the status bar paragraph (reusable for both rendering and height calculation)
+#[allow(clippy::too_many_arguments)]
 pub fn build_status_paragraph(
     icon_renderer: &IconRenderer,
     focus_level: usize,
@@ -145,6 +146,7 @@ pub fn build_status_paragraph(
 }
 
 /// Build the status line string (extracted for reuse)
+#[allow(clippy::too_many_arguments)]
 fn build_status_line(
     icon_renderer: &IconRenderer,
     focus_level: usize,
@@ -177,11 +179,7 @@ fn build_status_line(
                 };
 
                 if folder.paused {
-                    format!(
-                        "Folder: {} | {} | Paused",
-                        folder_name,
-                        type_display
-                    )
+                    format!("Folder: {} | {} | Paused", folder_name, type_display)
                 } else if let Some(status) = folder_statuses.get(&folder.id) {
                     // Get API state (empty means paused)
                     let api_state = if status.state.is_empty() {
@@ -201,7 +199,8 @@ fn build_status_line(
                     let state_icon = icon_renderer.folder_with_status(folder_state);
                     let state_display = format!(
                         "{}{}",
-                        state_icon.iter()
+                        state_icon
+                            .iter()
                             .map(|s| s.content.as_ref())
                             .collect::<Vec<_>>()
                             .join(""),
@@ -257,11 +256,7 @@ fn build_status_line(
                         items_display,
                     )
                 } else {
-                    format!(
-                        "Folder: {} | {} | Loading...",
-                        folder_name,
-                        type_display
-                    )
+                    format!("Folder: {} | {} | Loading...", folder_name, type_display)
                 }
             } else {
                 "No folder selected".to_string()
@@ -310,7 +305,10 @@ fn build_status_line(
 
         // Show pending operations count if any
         if pending_operations_count > 0 {
-            metrics.push(format!("⏳ {} deletions processing", pending_operations_count));
+            metrics.push(format!(
+                "⏳ {} deletions processing",
+                pending_operations_count
+            ));
         }
 
         if let Some(load_time) = last_load_time_ms {
@@ -342,7 +340,8 @@ fn build_status_line(
                 let state_label = map_sync_state_label(state);
                 let state_display = format!(
                     "{}{}",
-                    state_icon.iter()
+                    state_icon
+                        .iter()
                         .map(|s| s.content.as_ref())
                         .collect::<Vec<_>>()
                         .join(""),
@@ -378,6 +377,7 @@ fn build_status_line(
 /// Render the bottom status bar
 /// - When focus_level == 0: Shows folder status (state, size, sync progress)
 /// - When focus_level > 0: Shows directory metrics (items, sort mode, load time, cache hit)
+#[allow(clippy::too_many_arguments)]
 pub fn render_status_bar(
     f: &mut Frame,
     area: Rect,
@@ -418,6 +418,7 @@ pub fn render_status_bar(
 }
 
 /// Calculate required height for status bar based on terminal width and content
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_status_height(
     terminal_width: u16,
     icon_renderer: &IconRenderer,
@@ -489,8 +490,8 @@ pub fn calculate_status_height(
     };
 
     // Create paragraph WITHOUT block for accurate line counting
-    let paragraph_for_counting = Paragraph::new(vec![Line::from(status_spans)])
-        .wrap(Wrap { trim: false });
+    let paragraph_for_counting =
+        Paragraph::new(vec![Line::from(status_spans)]).wrap(Wrap { trim: false });
 
     // Calculate available width (subtract left + right borders)
     let available_width = terminal_width.saturating_sub(2);
@@ -626,7 +627,12 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Synced), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::Synced),
+                None,
+            )),
             "A-Z",
             false,
             None,
@@ -653,7 +659,12 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::OutOfSync), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::OutOfSync),
+                None,
+            )),
             "A-Z",
             false,
             None,
@@ -680,12 +691,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::LocalOnly), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::LocalOnly),
+                None,
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄💻 Local Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -706,12 +723,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::RemoteOnly), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::RemoteOnly),
+                None,
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄☁️ Remote Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -732,12 +755,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Syncing), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::Syncing),
+                None,
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄🔄 Syncing"));
         assert!(status.contains("Selected: test.txt"));
@@ -759,12 +788,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("subdir".to_string(), "FILE_INFO_TYPE_DIRECTORY".to_string(), Some(SyncState::Synced), None)),
+            Some((
+                "subdir".to_string(),
+                "FILE_INFO_TYPE_DIRECTORY".to_string(),
+                Some(SyncState::Synced),
+                None,
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📁✅ Synced"));
         assert!(status.contains("Selected: subdir/"));
@@ -785,12 +820,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(true))),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::Ignored),
+                Some(true),
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄🔇 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -812,12 +853,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Ignored), Some(false))),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::Ignored),
+                Some(false),
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄🚫 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -840,12 +887,18 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), Some(SyncState::Unknown), None)),
+            Some((
+                "test.txt".to_string(),
+                "file".to_string(),
+                Some(SyncState::Unknown),
+                None,
+            )),
             "A-Z",
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(status.contains("📄❓ Unknown"));
         assert!(status.contains("Selected: test.txt"));
@@ -872,7 +925,8 @@ mod tests {
             false,
             None,
             None,
-            0, false,
+            0,
+            false,
         );
         assert!(!status.contains("Synced"));
         assert!(!status.contains("Out of Sync"));

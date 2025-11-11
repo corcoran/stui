@@ -164,7 +164,7 @@ impl IconRenderer {
                     Span::styled("🔇 ", Style::default().fg(self.theme.ignored_color))
                 }
                 IconMode::NerdFont => Span::styled(
-                    "\u{F070} ",  // eye-slash icon
+                    "\u{F070} ", // eye-slash icon
                     Style::default().fg(self.theme.ignored_color),
                 ),
             };

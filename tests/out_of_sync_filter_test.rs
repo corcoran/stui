@@ -9,8 +9,8 @@
 //! 2. Press Enter to drill into "Messages/" → ALL files in Messages/ are visible
 //! 3. Expected: Only "foo" should be visible (it's the only out-of-sync file)
 
-use synctui::model::{Model, types::OutOfSyncFilterState};
-use synctui::api::BrowseItem;
+use stui::api::BrowseItem;
+use stui::model::{types::OutOfSyncFilterState, Model};
 
 /// Test: Filter state should be tracked when activated
 #[test]
@@ -18,7 +18,10 @@ fn test_filter_activation_sets_state() {
     let mut model = Model::new(false);
 
     // Initial state: no filter active
-    assert!(model.ui.out_of_sync_filter.is_none(), "Filter should not be active initially");
+    assert!(
+        model.ui.out_of_sync_filter.is_none(),
+        "Filter should not be active initially"
+    );
 
     // Simulate pressing 'f' to activate filter
     model.ui.out_of_sync_filter = Some(OutOfSyncFilterState {
@@ -27,7 +30,10 @@ fn test_filter_activation_sets_state() {
     });
 
     // Verify filter is now active
-    assert!(model.ui.out_of_sync_filter.is_some(), "Filter should be active after toggle");
+    assert!(
+        model.ui.out_of_sync_filter.is_some(),
+        "Filter should be active after toggle"
+    );
 }
 
 /// Test: Filter state should persist when navigating into subdirectory
@@ -109,7 +115,10 @@ fn test_filter_only_shows_out_of_sync() {
         .collect();
 
     assert_eq!(filtered.len(), 1, "Should only have 1 out-of-sync item");
-    assert_eq!(filtered[0].name, "out-of-sync.txt", "Should be the out-of-sync file");
+    assert_eq!(
+        filtered[0].name, "out-of-sync.txt",
+        "Should be the out-of-sync file"
+    );
 }
 
 /// Test: Directory should be shown if ANY child is out-of-sync
@@ -216,8 +225,7 @@ fn test_subdirectory_filter_application() {
         "Should only show 1 file (foo) - the out-of-sync one"
     );
     assert_eq!(
-        filtered[0].name,
-        "foo",
+        filtered[0].name, "foo",
         "Only 'foo' should be visible as it's out-of-sync"
     );
 

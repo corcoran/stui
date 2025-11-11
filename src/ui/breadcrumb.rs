@@ -1,6 +1,6 @@
 use super::icons::IconRenderer;
 use crate::api::{BrowseItem, SyncState};
-use ::synctui::DisplayMode;
+use ::stui::DisplayMode;
 use ratatui::{
     layout::{Margin, Rect},
     style::{Color, Modifier, Style},
@@ -159,10 +159,11 @@ fn build_list_item<'a>(
 }
 
 /// Render a single breadcrumb level panel
+#[allow(clippy::too_many_arguments)]
 pub fn render_breadcrumb_panel(
     f: &mut Frame,
     area: Rect,
-    items: &[BrowseItem],              // Source items (unfiltered)
+    items: &[BrowseItem],                     // Source items (unfiltered)
     filtered_items: Option<&Vec<BrowseItem>>, // Filtered view
     file_sync_states: &std::collections::HashMap<String, SyncState>,
     ignored_exists: &std::collections::HashMap<String, bool>,
@@ -258,8 +259,8 @@ pub fn render_breadcrumb_panel(
         let offset = state.offset();
 
         // ScrollbarState needs total content length and current position
-        let mut scrollbar_state = ScrollbarState::new(total_items.saturating_sub(viewport_height))
-            .position(offset);
+        let mut scrollbar_state =
+            ScrollbarState::new(total_items.saturating_sub(viewport_height)).position(offset);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))

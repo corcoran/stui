@@ -1,7 +1,7 @@
+use crate::utils;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use crate::utils;
 
 fn log_debug(msg: &str) {
     use std::io::Write;
@@ -347,7 +347,9 @@ impl SyncthingClient {
 
         log_debug(&format!(
             "DEBUG [browse_folder API]: Received {} items for folder={} prefix={:?}",
-            items.len(), folder_id, prefix
+            items.len(),
+            folder_id,
+            prefix
         ));
 
         Ok(items)
@@ -621,7 +623,9 @@ impl SyncthingClient {
     ///
     /// Returns HashMap of folder_id -> (timestamp, filename)
     /// Uses /rest/stats/folder which matches what Syncthing web GUI displays
-    pub async fn get_folder_stats(&self) -> Result<std::collections::HashMap<String, (std::time::SystemTime, String)>> {
+    pub async fn get_folder_stats(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (std::time::SystemTime, String)>> {
         use std::collections::HashMap;
 
         let url = format!("{}/rest/stats/folder", self.base_url);
@@ -642,7 +646,8 @@ impl SyncthingClient {
 
         for (folder_id, folder_stats) in stats {
             // Parse the timestamp
-            let timestamp = crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
+            let timestamp =
+                crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
 
             // Include all files, even deleted ones - matches Syncthing web GUI behavior
             // The "deleted" flag just indicates the last operation was a deletion
@@ -656,7 +661,11 @@ impl SyncthingClient {
     ///
     /// Uses PATCH /rest/config/folders/{id} to set the paused state
     pub async fn set_folder_paused(&self, folder_id: &str, paused: bool) -> Result<()> {
-        let url = format!("{}/rest/config/folders/{}", self.base_url, urlencoding::encode(folder_id));
+        let url = format!(
+            "{}/rest/config/folders/{}",
+            self.base_url,
+            urlencoding::encode(folder_id)
+        );
 
         let payload = serde_json::json!({
             "paused": paused
@@ -675,7 +684,8 @@ impl SyncthingClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to {} folder: {} - {}",
+            anyhow::bail!(
+                "Failed to {} folder: {} - {}",
                 if paused { "pause" } else { "resume" },
                 status,
                 text
@@ -690,7 +700,11 @@ impl SyncthingClient {
     /// Uses PATCH /rest/config/folders/{id} to set the folder type
     /// Valid types: "sendonly", "sendreceive", "receiveonly"
     pub async fn set_folder_type(&self, folder_id: &str, folder_type: &str) -> Result<()> {
-        let url = format!("{}/rest/config/folders/{}", self.base_url, urlencoding::encode(folder_id));
+        let url = format!(
+            "{}/rest/config/folders/{}",
+            self.base_url,
+            urlencoding::encode(folder_id)
+        );
 
         let payload = serde_json::json!({
             "type": folder_type
@@ -771,10 +785,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_needed_files_builds_correct_url() {
         // This is a basic smoke test - full integration test requires real Syncthing
-        let _client = SyncthingClient::new(
-            "http://localhost:8384".to_string(),
-            "test-key".to_string(),
-        );
+        let _client =
+            SyncthingClient::new("http://localhost:8384".to_string(), "test-key".to_string());
 
         // We can't actually call the API without a real instance,
         // but we can verify the method exists and accepts correct params
@@ -818,30 +830,47 @@ mod tests {
         // Verify structure
         assert_eq!(stats.len(), 3, "Should have 3 folders");
 
-        let folder_abc = stats.get("folder-abc-123").expect("Should have folder-abc-123");
+        let folder_abc = stats
+            .get("folder-abc-123")
+            .expect("Should have folder-abc-123");
         assert_eq!(folder_abc.last_file.filename, ".thumbnails/7726.jpg");
         assert_eq!(folder_abc.last_file.at, "2025-11-09T23:24:15Z");
         assert_eq!(folder_abc.last_file.deleted, false);
 
-        let folder_deleted = stats.get("folder-deleted-789").expect("Should have folder-deleted-789");
-        assert_eq!(folder_deleted.last_file.deleted, true, "Deleted flag should be true");
+        let folder_deleted = stats
+            .get("folder-deleted-789")
+            .expect("Should have folder-deleted-789");
+        assert_eq!(
+            folder_deleted.last_file.deleted, true,
+            "Deleted flag should be true"
+        );
 
         // Test conversion to HashMap (simulating what get_folder_stats does)
         let mut updates: HashMap<String, (std::time::SystemTime, String)> = HashMap::new();
         for (folder_id, folder_stats) in stats {
             // Include all files, even deleted ones - matches Syncthing web GUI behavior
-            let timestamp = crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
+            let timestamp =
+                crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
             updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
         }
 
         // Should have all 3 folders (including deleted one - matches web GUI behavior)
-        assert_eq!(updates.len(), 3, "Should include all files, even deleted ones");
+        assert_eq!(
+            updates.len(),
+            3,
+            "Should include all files, even deleted ones"
+        );
         assert!(updates.contains_key("folder-abc-123"));
         assert!(updates.contains_key("folder-xyz-456"));
-        assert!(updates.contains_key("folder-deleted-789"), "Should include deleted file");
+        assert!(
+            updates.contains_key("folder-deleted-789"),
+            "Should include deleted file"
+        );
 
         // Verify file paths
-        let abc_update = updates.get("folder-abc-123").expect("Should have folder-abc-123");
+        let abc_update = updates
+            .get("folder-abc-123")
+            .expect("Should have folder-abc-123");
         assert_eq!(abc_update.1, ".thumbnails/7726.jpg");
     }
 
@@ -925,7 +954,7 @@ mod tests {
                 sequence: 10017,
                 deleted: false,
                 ignored: false,
-                invalid: true, // KEY: Marked as invalid
+                invalid: true,  // KEY: Marked as invalid
                 local_flags: 8, // KEY: Receive-only local addition flag
                 version: vec!["LHNT25C:1762736484".to_string()],
                 blocks_hash: Some("Xfbg4nYTWdMKgnUFjimfzAOBU0VF9Vz0PkGYP11MlFY=".to_string()),

@@ -1,4 +1,4 @@
-# Syncthing CLI TUI Manager
+# stui - Syncthing TUI Manager
 
 ## Project Overview
 
@@ -84,20 +84,46 @@ EOF
 
 **Why:** `cat` is aliased to `bat --style header --style snip --style changes --style header`, and bat labels stdin input as "STDIN".
 
+**CRITICAL: Never add co-authored-by attribution**
+
+Do not add "Co-Authored-By: Claude" or similar attribution lines to commit messages.
+
+**Bad pattern:**
+```bash
+git commit -m "$(/bin/cat <<'EOF'
+feat: Add new feature
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+```
+
+**Good pattern:**
+```bash
+git commit -m "$(/bin/cat <<'EOF'
+feat: Add new feature
+EOF
+)"
+```
+
+**Why:** Commit authorship is already tracked by Git. Additional attribution is redundant and clutters commit history.
+
 ### Syncthing API Testing with curl
 
 **CRITICAL: Always read API credentials from user config file**
 
 When testing Syncthing API endpoints with curl commands:
 
-1. **Read the config file first**: `~/.config/synctui/config.yaml`
+1. **Read the config file first**: `~/.config/stui/config.yaml`
 2. **Extract `api_key` and `base_url` from the config**
 3. **Use those values in curl commands**
 
 **Example workflow:**
 ```bash
 # Read config to get API key and base URL
-cat ~/.config/synctui/config.yaml
+cat ~/.config/stui/config.yaml
 
 # Then use extracted values in curl
 curl -s -H "X-API-Key: <key-from-config>" "<base_url-from-config>/rest/db/need?folder=lok75-7d42r"
@@ -112,6 +138,353 @@ curl -s -H "X-API-Key: <key-from-config>" "<base_url-from-config>/rest/db/need?f
 - ✅ Read config file first
 - ✅ Use current credentials from config
 - ✅ Verify base_url matches user's setup
+
+### Preferred Tools for File Operations
+
+**Use `ag` (The Silver Surfer) for content search:**
+```bash
+# Search for text pattern in code
+ag "search_term"
+
+# Search in specific file type
+ag --rust "pattern"
+
+# Search with context
+ag -C 3 "pattern"
+
+# Case-insensitive search
+ag -i "pattern"
+```
+
+**Use `fd` for finding files:**
+```bash
+# Find files by name pattern
+fd "pattern"
+
+# Find in specific directory
+fd "pattern" src/
+
+# Find by file type
+fd -e rs      # Rust files
+fd -e toml    # TOML files
+
+# Combine with other commands
+fd "test" | head -10
+```
+
+**Why these tools:**
+- `ag`: Faster than grep, respects .gitignore, better syntax highlighting
+- `fd`: Faster than find, simpler syntax, respects .gitignore
+
+**AVOID using:**
+- ❌ `grep -r` - use `ag` instead
+- ❌ `find` - use `fd` instead
+
+### Code Formatting Requirements
+
+**CRITICAL: All code must pass `cargo fmt` and `cargo clippy`**
+
+These checks run on every PR and release - failures will block merging/releasing.
+
+#### Rust Formatting with cargo fmt
+
+**Before committing, always run:**
+```bash
+cargo fmt
+```
+
+This auto-formats all Rust code to match Rustfmt style. Never commit code that fails this check.
+
+**Formatting rules (enforced by Rustfmt):**
+
+**Imports:**
+- Use alphabetical ordering: `use crate::...`, `use std::...`, `use external::...`
+- Group related imports together with blank lines between groups
+- Remove unused imports
+
+Example:
+```rust
+// Good - alphabetical order, grouped
+use crate::utils;
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+// Bad - not alphabetical
+use anyhow::{Context, Result};
+use crate::utils;
+use std::path::PathBuf;
+```
+
+**Line length:**
+- Max 100 characters per line (Rustfmt default)
+- Long function arguments and match arms split across multiple lines
+
+Example:
+```rust
+// Good - split long argument list
+log_debug(&format!(
+    "Failed to get files for {}: {}",
+    folder_id, error
+));
+
+// Bad - exceeds line length
+log_debug(&format!("Failed to get files for {}: {}", folder_id, error));
+```
+
+**Spacing:**
+- Use consistent spacing around operators and delimiters
+- Single space after keywords (`if `, `for `, `match `, etc.)
+- No space between function name and opening parenthesis
+
+Example:
+```rust
+// Good
+if x > 0 {
+    do_something();
+}
+let result = calculate(a, b);
+
+// Bad
+if(x>0){
+    do_something();
+}
+let result = calculate (a, b);
+```
+
+**Type annotations:**
+- Always include explicit type annotations on public functions
+- Use `:` with no space before type: `foo: String`
+
+Example:
+```rust
+// Good
+pub fn get_path() -> PathBuf {
+    let cache_dir: Option<PathBuf> = dirs::cache_dir();
+    cache_dir
+}
+
+// Bad
+pub fn get_path() { // missing return type
+    let cache_dir = dirs::cache_dir();
+}
+```
+
+#### Clippy Linting
+
+**Before committing, also run:**
+```bash
+cargo clippy -- -D warnings
+```
+
+This checks for common mistakes and code improvements. Failures block CI/CD.
+
+**Common Clippy Patterns - Quick Reference:**
+
+**Option/Result Patterns:**
+```rust
+// ✅ Use is_some_and/is_none_or for cleaner Option checks
+if cached_seq.is_some_and(|seq| seq != expected) { }
+if cached_seq.is_none_or(|seq| seq != expected) { }
+
+// ❌ Avoid map_or with boolean literals
+if cached_seq.map_or(false, |seq| seq != expected) { }  // Use is_some_and
+if cached_seq.map_or(true, |seq| seq != expected) { }   // Use is_none_or
+
+// ✅ Use pattern matching instead of unwrap_err after check
+match result.as_ref() {
+    Ok(val) => val,
+    Err(err) => { handle_error(err); return; }
+}
+
+// ❌ Avoid unwrap after is_some/is_err check
+if result.is_err() {
+    let err = result.unwrap_err();  // Clippy warns about this
+}
+```
+
+**Collection Access:**
+```rust
+// ✅ Use .first() for first element
+let first = items.first();
+
+// ❌ Avoid .get(0)
+let first = items.get(0);
+
+// ✅ Use array literals for const data
+let types = [("A", 1), ("B", 2)];
+
+// ❌ Avoid vec! for const data
+let types = vec![("A", 1), ("B", 2)];
+
+// ✅ Use contains_key for HashMaps
+if !map.contains_key(&key) { }
+
+// ❌ Avoid .get().is_none()
+if map.get(&key).is_none() { }
+```
+
+**Iterator Patterns:**
+```rust
+// ✅ Iterate directly when index unused
+for item in items.iter() { }
+
+// ❌ Avoid enumerate when not using index
+for (_idx, item) in items.iter().enumerate() { }
+
+// ✅ Use .iter().take() instead of range indexing
+for item in buffer.iter().take(max) { }
+
+// ❌ Avoid range loops that only index
+for i in 0..max {
+    let item = buffer[i];
+}
+```
+
+**Arithmetic Patterns:**
+```rust
+// ✅ Use saturating_sub for safe subtraction
+let result = a.saturating_sub(b);
+
+// ❌ Avoid manual subtraction with zero check
+let result = if a > b { a - b } else { 0 };
+```
+
+**Control Flow:**
+```rust
+// ✅ Collapse nested ifs with &&
+if condition1 && condition2 {
+    do_something();
+}
+
+// ❌ Avoid unnecessary nesting
+if condition1 {
+    if condition2 {
+        do_something();
+    }
+}
+
+// ✅ Use if let for single pattern match
+if let Some(value) = option {
+    use_value(value);
+}
+
+// ❌ Avoid match for single pattern
+match option {
+    Some(value) => use_value(value),
+    _ => {}
+}
+
+// ✅ Simplify identical if branches
+if condition1 || condition2 {
+    do_same_thing();
+}
+
+// ❌ Avoid duplicate code in branches
+if condition1 {
+    do_same_thing();
+} else if condition2 {
+    do_same_thing();
+}
+```
+
+**String Formatting:**
+```rust
+// ✅ Use string literals directly
+log_debug("Message");
+
+// ❌ Avoid format! with no formatting
+log_debug(&format!("Message"));
+
+// ✅ Use .to_string() for static strings
+"text".to_string()
+
+// ❌ Avoid format! for static strings
+format!("text")
+```
+
+**Type Patterns:**
+```rust
+// ✅ Add Default impl for types with new()
+impl Default for MyStruct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ❌ Clippy warns about new() without Default
+impl MyStruct {
+    pub fn new() -> Self { /* ... */ }
+}
+
+// ✅ Box large enum variants
+enum Response {
+    Small(u32),
+    Large(Box<HugeStruct>),  // Box if >3x size difference
+}
+
+// ❌ Avoid large size differences between variants
+enum Response {
+    Small(u32),        // 4 bytes
+    Large(HugeStruct), // 648 bytes - clippy warns
+}
+```
+
+**Error Handling:**
+```rust
+// ✅ Use ? for error propagation
+fn load_file(path: &str) -> Result<String> {
+    std::fs::read_to_string(path).context("Failed to read file")
+}
+
+// ❌ Avoid unwrap in library code
+fn load_file(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap()
+}
+```
+
+**When to Use #[allow]:**
+```rust
+// ✅ Allow too_many_arguments for UI rendering functions
+// (Ratatui pattern - passing many render parameters is idiomatic)
+#[allow(clippy::too_many_arguments)]
+pub fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    // ... 10+ parameters for rendering state
+) { }
+
+// ✅ Allow complexity for one-time initialization
+#[allow(clippy::cognitive_complexity)]
+fn initialize_app() -> Result<App> {
+    // Complex but necessary startup logic
+}
+```
+
+**Other Common Issues:**
+- Unused variables → remove or prefix with `_`
+- Redundant closures → simplify when possible
+- Incorrect naming → use `snake_case` for functions/variables, `PascalCase` for types
+- Needless borrows → remove `&` when compiler can infer
+- Explicit `return` in final expression → remove `return` keyword
+
+#### GitHub Actions Checks
+
+The CI pipeline runs these checks automatically:
+1. **tests.yml** (on PRs and pushes):
+   - `cargo test` - Run test suite
+   - `cargo fmt -- --check` - Verify formatting
+   - `cargo clippy -- -D warnings` - Run linter
+   - `cargo build --release` - Build project
+
+2. **release.yml** (on version tags):
+   - `cargo test --verbose` - Run all tests before building
+
+**If checks fail:**
+1. Run locally to see the issue: `cargo fmt` and `cargo clippy`
+2. Fix the issues (most cargo fmt issues auto-fix)
+3. Commit the fixes
+4. Push again to re-run checks
 
 ### Other Instructions
 
@@ -305,7 +678,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config file at platform-specific location (Linux: `~/.config/synctui/config.yaml`, macOS: `~/Library/Application Support/synctui/config.yaml`, Windows: `%APPDATA%\synctui\config.yaml`) containing:
+YAML config file at platform-specific location (Linux: `~/.config/stui/config.yaml`, macOS: `~/Library/Application Support/stui/config.yaml`, Windows: `%APPDATA%\stui\config.yaml`) containing:
 - API key
 - Base URL
 - `path_map` (container-to-host path translations)
@@ -318,7 +691,7 @@ YAML config file at platform-specific location (Linux: `~/.config/synctui/config
   - `image_protocol` (string, default: `"auto"`): Terminal graphics protocol - `"auto"`, `"kitty"`, `"iterm2"`, `"sixel"`, or `"halfblocks"`
 
 CLI flags:
-- `--debug`: Enable debug logging to `/tmp/synctui-debug.log` (includes image loading performance metrics)
+- `--debug`: Enable debug logging to `/tmp/stui-debug.log` (includes image loading performance metrics)
 - `--vim`: Enable vim keybindings (overrides config file setting)
 - `--config <path>`: Specify custom config file path
 
@@ -450,12 +823,12 @@ CLI flags:
 - **Idle Detection & Non-Blocking UI**: 300ms idle threshold ensures keyboard input is never blocked by background prefetch operations; main event loop uses 250ms poll timeout to minimize CPU wakeups (~<1-2% CPU when idle)
 
 ### Caching Strategy
-- **SQLite database**: `~/.cache/synctui/cache.db` (Linux) or `/tmp/synctui-cache` (fallback)
+- **SQLite database**: `~/.cache/stui/cache.db` (Linux) or `/tmp/stui-cache` (fallback)
 - **Browse cache**: Directory listings with folder sequence validation, includes `mod_time` and `size` fields
 - **Sync state cache**: Per-file sync states with file sequence validation
 - **Folder status cache**: Status with sequence, displayed stats (in_sync/total items)
 - **Event ID persistence**: Survives app restarts
-- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/synctui/cache.db`)
+- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/stui/cache.db`)
 
 ### ANSI Art Rendering
 - **Auto-Detection**: Content-based detection of ANSI escape codes (ESC[ sequences) in addition to .ans/.asc extensions
@@ -578,7 +951,7 @@ CLI flags:
       - `src/model/ui.rs` - 16 tests in 4 sections (UI Model Creation, Search Mode, Search Query Operations, Search Origin Level)
       - `src/logic/navigation.rs` - 14 tests in 4 sections (Next Selection, Prev Selection, Edge Cases, Find Item By Name)
     - **Benefits:** Tests can be collapsed by section in IDEs, clear grouping makes finding related tests easy, maintains locality with implementation code
-- **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
+- **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/stui-debug.log`
 
 ### Adding New Features - Common Patterns
 

@@ -31,19 +31,13 @@ pub fn translate_path(
     path_map: &HashMap<String, String>,
 ) -> String {
     // Get the full container path
-    let container_path = format!(
-        "{}/{}",
-        folder_path.trim_end_matches('/'),
-        relative_path
-    );
+    let container_path = format!("{}/{}", folder_path.trim_end_matches('/'), relative_path);
 
     // Try to map container path to host path using path_map
     for (container_prefix, host_prefix) in path_map {
         let normalized_prefix = container_prefix.trim_end_matches('/');
         if container_path.starts_with(normalized_prefix) {
-            let remainder = container_path
-                .strip_prefix(normalized_prefix)
-                .unwrap_or("");
+            let remainder = container_path.strip_prefix(normalized_prefix).unwrap_or("");
             return format!("{}{}", host_prefix.trim_end_matches('/'), remainder);
         }
     }
@@ -69,7 +63,7 @@ pub fn translate_path(
 /// ```
 /// use std::collections::HashSet;
 /// use std::path::PathBuf;
-/// use synctui::logic::path::is_path_or_parent_in_set;
+/// use stui::logic::path::is_path_or_parent_in_set;
 ///
 /// let mut pending = HashSet::new();
 /// pending.insert(PathBuf::from("/foo/bar"));
@@ -83,7 +77,10 @@ pub fn translate_path(
 /// // Unrelated path
 /// assert!(is_path_or_parent_in_set(&pending, &PathBuf::from("/other")).is_none());
 /// ```
-pub fn is_path_or_parent_in_set(pending_paths: &HashSet<PathBuf>, path: &PathBuf) -> Option<PathBuf> {
+pub fn is_path_or_parent_in_set(
+    pending_paths: &HashSet<PathBuf>,
+    path: &PathBuf,
+) -> Option<PathBuf> {
     // First check for exact match
     if pending_paths.contains(path) {
         return Some(path.clone());
@@ -164,8 +161,11 @@ mod tests {
         let path = PathBuf::from("/foo/bar");
         let result = is_path_or_parent_in_set(&pending_paths, &path);
 
-        assert_eq!(result, Some(PathBuf::from("/foo/bar")),
-            "Should find exact match in pending set");
+        assert_eq!(
+            result,
+            Some(PathBuf::from("/foo/bar")),
+            "Should find exact match in pending set"
+        );
     }
 
     #[test]
@@ -180,8 +180,11 @@ mod tests {
         let child_path = PathBuf::from("/foo/bar/baz/file.txt");
         let result = is_path_or_parent_in_set(&pending_paths, &child_path);
 
-        assert_eq!(result, Some(PathBuf::from("/foo/bar")),
-            "Should find parent directory in pending set");
+        assert_eq!(
+            result,
+            Some(PathBuf::from("/foo/bar")),
+            "Should find parent directory in pending set"
+        );
     }
 
     #[test]
@@ -196,8 +199,10 @@ mod tests {
         let unrelated_path = PathBuf::from("/completely/different/path");
         let result = is_path_or_parent_in_set(&pending_paths, &unrelated_path);
 
-        assert_eq!(result, None,
-            "Should return None when path has no match or parent match");
+        assert_eq!(
+            result, None,
+            "Should return None when path has no match or parent match"
+        );
     }
 
     #[test]
@@ -209,8 +214,7 @@ mod tests {
         let path = PathBuf::from("/any/path");
         let result = is_path_or_parent_in_set(&pending_paths, &path);
 
-        assert_eq!(result, None,
-            "Should return None when pending set is empty");
+        assert_eq!(result, None, "Should return None when pending set is empty");
     }
 
     #[test]
@@ -230,7 +234,9 @@ mod tests {
         assert!(result.is_some(), "Should find at least one matching parent");
         // Should match either /foo or /foo/bar (both are parents)
         let matched = result.unwrap();
-        assert!(matched == PathBuf::from("/foo") || matched == PathBuf::from("/foo/bar"),
-            "Should match one of the parent paths");
+        assert!(
+            matched == PathBuf::from("/foo") || matched == PathBuf::from("/foo/bar"),
+            "Should match one of the parent paths"
+        );
     }
 }
