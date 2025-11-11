@@ -84,6 +84,32 @@ EOF
 
 **Why:** `cat` is aliased to `bat --style header --style snip --style changes --style header`, and bat labels stdin input as "STDIN".
 
+**CRITICAL: Never add co-authored-by attribution**
+
+Do not add "Co-Authored-By: Claude" or similar attribution lines to commit messages.
+
+**Bad pattern:**
+```bash
+git commit -m "$(/bin/cat <<'EOF'
+feat: Add new feature
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+```
+
+**Good pattern:**
+```bash
+git commit -m "$(/bin/cat <<'EOF'
+feat: Add new feature
+EOF
+)"
+```
+
+**Why:** Commit authorship is already tracked by Git. Additional attribution is redundant and clutters commit history.
+
 ### Syncthing API Testing with curl
 
 **CRITICAL: Always read API credentials from user config file**
@@ -253,25 +279,194 @@ cargo clippy -- -D warnings
 
 This checks for common mistakes and code improvements. Failures block CI/CD.
 
-**Common Clippy issues to avoid:**
-- Using `clone()` excessively - prefer references or move semantics
-- Unnecessary `unwrap()` - use `?` or `match` for error handling
-- Unused variables - remove or prefix with `_`
-- Redundant closures - simplify when possible
-- Incorrect naming - follow Rust conventions (`snake_case` for functions/variables, `PascalCase` for types)
+**Common Clippy Patterns - Quick Reference:**
 
-Example:
+**Option/Result Patterns:**
 ```rust
-// Good - handles error properly
+// ✅ Use is_some_and/is_none_or for cleaner Option checks
+if cached_seq.is_some_and(|seq| seq != expected) { }
+if cached_seq.is_none_or(|seq| seq != expected) { }
+
+// ❌ Avoid map_or with boolean literals
+if cached_seq.map_or(false, |seq| seq != expected) { }  // Use is_some_and
+if cached_seq.map_or(true, |seq| seq != expected) { }   // Use is_none_or
+
+// ✅ Use pattern matching instead of unwrap_err after check
+match result.as_ref() {
+    Ok(val) => val,
+    Err(err) => { handle_error(err); return; }
+}
+
+// ❌ Avoid unwrap after is_some/is_err check
+if result.is_err() {
+    let err = result.unwrap_err();  // Clippy warns about this
+}
+```
+
+**Collection Access:**
+```rust
+// ✅ Use .first() for first element
+let first = items.first();
+
+// ❌ Avoid .get(0)
+let first = items.get(0);
+
+// ✅ Use array literals for const data
+let types = [("A", 1), ("B", 2)];
+
+// ❌ Avoid vec! for const data
+let types = vec![("A", 1), ("B", 2)];
+
+// ✅ Use contains_key for HashMaps
+if !map.contains_key(&key) { }
+
+// ❌ Avoid .get().is_none()
+if map.get(&key).is_none() { }
+```
+
+**Iterator Patterns:**
+```rust
+// ✅ Iterate directly when index unused
+for item in items.iter() { }
+
+// ❌ Avoid enumerate when not using index
+for (_idx, item) in items.iter().enumerate() { }
+
+// ✅ Use .iter().take() instead of range indexing
+for item in buffer.iter().take(max) { }
+
+// ❌ Avoid range loops that only index
+for i in 0..max {
+    let item = buffer[i];
+}
+```
+
+**Arithmetic Patterns:**
+```rust
+// ✅ Use saturating_sub for safe subtraction
+let result = a.saturating_sub(b);
+
+// ❌ Avoid manual subtraction with zero check
+let result = if a > b { a - b } else { 0 };
+```
+
+**Control Flow:**
+```rust
+// ✅ Collapse nested ifs with &&
+if condition1 && condition2 {
+    do_something();
+}
+
+// ❌ Avoid unnecessary nesting
+if condition1 {
+    if condition2 {
+        do_something();
+    }
+}
+
+// ✅ Use if let for single pattern match
+if let Some(value) = option {
+    use_value(value);
+}
+
+// ❌ Avoid match for single pattern
+match option {
+    Some(value) => use_value(value),
+    _ => {}
+}
+
+// ✅ Simplify identical if branches
+if condition1 || condition2 {
+    do_same_thing();
+}
+
+// ❌ Avoid duplicate code in branches
+if condition1 {
+    do_same_thing();
+} else if condition2 {
+    do_same_thing();
+}
+```
+
+**String Formatting:**
+```rust
+// ✅ Use string literals directly
+log_debug("Message");
+
+// ❌ Avoid format! with no formatting
+log_debug(&format!("Message"));
+
+// ✅ Use .to_string() for static strings
+"text".to_string()
+
+// ❌ Avoid format! for static strings
+format!("text")
+```
+
+**Type Patterns:**
+```rust
+// ✅ Add Default impl for types with new()
+impl Default for MyStruct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ❌ Clippy warns about new() without Default
+impl MyStruct {
+    pub fn new() -> Self { /* ... */ }
+}
+
+// ✅ Box large enum variants
+enum Response {
+    Small(u32),
+    Large(Box<HugeStruct>),  // Box if >3x size difference
+}
+
+// ❌ Avoid large size differences between variants
+enum Response {
+    Small(u32),        // 4 bytes
+    Large(HugeStruct), // 648 bytes - clippy warns
+}
+```
+
+**Error Handling:**
+```rust
+// ✅ Use ? for error propagation
 fn load_file(path: &str) -> Result<String> {
     std::fs::read_to_string(path).context("Failed to read file")
 }
 
-// Bad - unwrap panics on error
+// ❌ Avoid unwrap in library code
 fn load_file(path: &str) -> String {
     std::fs::read_to_string(path).unwrap()
 }
 ```
+
+**When to Use #[allow]:**
+```rust
+// ✅ Allow too_many_arguments for UI rendering functions
+// (Ratatui pattern - passing many render parameters is idiomatic)
+#[allow(clippy::too_many_arguments)]
+pub fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    // ... 10+ parameters for rendering state
+) { }
+
+// ✅ Allow complexity for one-time initialization
+#[allow(clippy::cognitive_complexity)]
+fn initialize_app() -> Result<App> {
+    // Complex but necessary startup logic
+}
+```
+
+**Other Common Issues:**
+- Unused variables → remove or prefix with `_`
+- Redundant closures → simplify when possible
+- Incorrect naming → use `snake_case` for functions/variables, `PascalCase` for types
+- Needless borrows → remove `&` when compiler can infer
+- Explicit `return` in final expression → remove `return` keyword
 
 #### GitHub Actions Checks
 
