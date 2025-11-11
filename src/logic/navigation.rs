@@ -240,11 +240,7 @@ mod find_item_tests {
 
     #[test]
     fn test_find_item_index_by_name_found() {
-        let items = vec![
-            make_item("a.txt"),
-            make_item("b.txt"),
-            make_item("c.txt"),
-        ];
+        let items = vec![make_item("a.txt"), make_item("b.txt"), make_item("c.txt")];
 
         assert_eq!(find_item_index_by_name(&items, "a.txt"), Some(0));
         assert_eq!(find_item_index_by_name(&items, "b.txt"), Some(1));

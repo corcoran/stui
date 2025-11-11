@@ -134,7 +134,9 @@ pub fn should_show_restore_button(
 /// // Add folder statuses...
 /// let (files, dirs, bytes) = calculate_local_state_summary(&statuses);
 /// ```
-pub fn calculate_local_state_summary(folder_statuses: &HashMap<String, FolderStatus>) -> (u64, u64, u64) {
+pub fn calculate_local_state_summary(
+    folder_statuses: &HashMap<String, FolderStatus>,
+) -> (u64, u64, u64) {
     let mut total_files = 0u64;
     let mut total_dirs = 0u64;
     let mut total_bytes = 0u64;
@@ -268,8 +270,11 @@ mod tests {
         let folder_statuses: HashMap<String, FolderStatus> = HashMap::new();
         let result = calculate_local_state_summary(&folder_statuses);
 
-        assert_eq!(result, (0, 0, 0),
-            "Empty folder_statuses should return all zeros");
+        assert_eq!(
+            result,
+            (0, 0, 0),
+            "Empty folder_statuses should return all zeros"
+        );
     }
 
     #[test]
@@ -285,8 +290,11 @@ mod tests {
 
         let result = calculate_local_state_summary(&folder_statuses);
 
-        assert_eq!(result, (100, 10, 1024000),
-            "Single folder should return its stats");
+        assert_eq!(
+            result,
+            (100, 10, 1024000),
+            "Single folder should return its stats"
+        );
     }
 
     #[test]
@@ -318,8 +326,11 @@ mod tests {
 
         let result = calculate_local_state_summary(&folder_statuses);
 
-        assert_eq!(result, (350, 35, 3500),
-            "Should aggregate stats from all folders: (100+200+50, 10+20+5, 1000+2000+500)");
+        assert_eq!(
+            result,
+            (350, 35, 3500),
+            "Should aggregate stats from all folders: (100+200+50, 10+20+5, 1000+2000+500)"
+        );
     }
 
     #[test]
@@ -341,7 +352,10 @@ mod tests {
 
         let result = calculate_local_state_summary(&folder_statuses);
 
-        assert_eq!(result, (50, 5, 1000),
-            "Should handle folders with zero stats correctly");
+        assert_eq!(
+            result,
+            (50, 5, 1000),
+            "Should handle folders with zero stats correctly"
+        );
     }
 }

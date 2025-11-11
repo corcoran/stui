@@ -1,5 +1,4 @@
 /// Utility functions used throughout the application
-
 use std::path::PathBuf;
 
 /// Get platform-specific debug log path

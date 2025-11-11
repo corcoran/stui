@@ -139,10 +139,8 @@ impl CacheDb {
         )?;
 
         if !has_columns {
-            self.conn.execute(
-                "ALTER TABLE sync_states ADD COLUMN need_category TEXT",
-                [],
-            )?;
+            self.conn
+                .execute("ALTER TABLE sync_states ADD COLUMN need_category TEXT", [])?;
             self.conn.execute(
                 "ALTER TABLE sync_states ADD COLUMN need_cached_at INTEGER",
                 [],
@@ -303,7 +301,10 @@ impl CacheDb {
         ));
 
         // If folder_sequence is 0, skip validation and use whatever is cached (offline mode)
-        if folder_sequence != 0 && (cached_seq.map_or(false, |seq| seq as u64 != folder_sequence) || cached_seq.is_none()) {
+        if folder_sequence != 0
+            && (cached_seq.map_or(false, |seq| seq as u64 != folder_sequence)
+                || cached_seq.is_none())
+        {
             log_debug(&format!(
                 "DEBUG [get_browse_items]: Cache MISS - returning None"
             ));
@@ -357,9 +358,7 @@ impl CacheDb {
              WHERE folder_id = ?1 LIMIT 1",
         )?;
 
-        let cached_seq: Option<i64> = stmt
-            .query_row(params![folder_id], |row| row.get(0))
-            .ok();
+        let cached_seq: Option<i64> = stmt.query_row(params![folder_id], |row| row.get(0)).ok();
 
         if cached_seq.map_or(true, |seq| seq as u64 != folder_sequence) {
             // Cache is stale or doesn't exist
@@ -870,7 +869,7 @@ impl CacheDb {
              WHERE folder_id = ?1
                AND need_category IS NOT NULL
                AND need_cached_at > ?2
-             GROUP BY need_category"
+             GROUP BY need_category",
         )?;
 
         let rows = stmt.query_map(params![folder_id, cutoff], |row| {
@@ -931,7 +930,7 @@ impl CacheDb {
              FROM sync_states
              WHERE folder_id = ?1
                AND need_category IS NOT NULL
-               AND need_cached_at > ?2"
+               AND need_cached_at > ?2",
         )?;
 
         let rows = stmt.query_map(params![folder_id, cutoff], |row| {
@@ -962,7 +961,7 @@ impl CacheDb {
              FROM sync_states
              WHERE folder_id = ?1
                AND local_changed = 1
-               AND local_cached_at > ?2"
+               AND local_cached_at > ?2",
         )?;
 
         let rows = stmt.query_map(params![folder_id, cutoff], |row| {
@@ -1030,7 +1029,9 @@ mod tests {
             perpage: 100,
         };
 
-        cache.cache_needed_files("test-folder", &need_response).unwrap();
+        cache
+            .cache_needed_files("test-folder", &need_response)
+            .unwrap();
 
         // Verify categories were stored
         // (We'll implement get_folder_sync_breakdown next to verify)
@@ -1045,14 +1046,22 @@ mod tests {
             progress: vec![],
             queued: vec![],
             rest: vec![
-                FileInfo { name: "status-test".to_string(), ..Default::default() },
-                FileInfo { name: "test".to_string(), ..Default::default() },
+                FileInfo {
+                    name: "status-test".to_string(),
+                    ..Default::default()
+                },
+                FileInfo {
+                    name: "test".to_string(),
+                    ..Default::default()
+                },
             ],
             page: 1,
             perpage: 100,
         };
 
-        cache.cache_needed_files("test-folder", &need_response).unwrap();
+        cache
+            .cache_needed_files("test-folder", &need_response)
+            .unwrap();
 
         // Verify need_category was set
         let items = cache.get_out_of_sync_items("test-folder").unwrap();
@@ -1062,17 +1071,39 @@ mod tests {
 
         // Now simulate save_sync_states_batch being called (like from pending writes flush)
         let batch = vec![
-            ("test-folder".to_string(), "status-test".to_string(), SyncState::OutOfSync, 100),
-            ("test-folder".to_string(), "test".to_string(), SyncState::OutOfSync, 100),
+            (
+                "test-folder".to_string(),
+                "status-test".to_string(),
+                SyncState::OutOfSync,
+                100,
+            ),
+            (
+                "test-folder".to_string(),
+                "test".to_string(),
+                SyncState::OutOfSync,
+                100,
+            ),
         ];
 
         cache.save_sync_states_batch(&batch).unwrap();
 
         // BUG: need_category should still be set, but it gets cleared!
         let items_after = cache.get_out_of_sync_items("test-folder").unwrap();
-        assert_eq!(items_after.len(), 2, "Should STILL have 2 items with need_category after batch save");
-        assert_eq!(items_after.get("status-test"), Some(&"remote_only".to_string()), "need_category should be preserved");
-        assert_eq!(items_after.get("test"), Some(&"remote_only".to_string()), "need_category should be preserved");
+        assert_eq!(
+            items_after.len(),
+            2,
+            "Should STILL have 2 items with need_category after batch save"
+        );
+        assert_eq!(
+            items_after.get("status-test"),
+            Some(&"remote_only".to_string()),
+            "need_category should be preserved"
+        );
+        assert_eq!(
+            items_after.get("test"),
+            Some(&"remote_only".to_string()),
+            "need_category should be preserved"
+        );
     }
 
     #[test]
@@ -1082,18 +1113,27 @@ mod tests {
         // Setup test data
         let need_response = NeedResponse {
             progress: vec![
-                FileInfo { name: "file1.txt".to_string(), ..Default::default() },
-                FileInfo { name: "file2.txt".to_string(), ..Default::default() },
+                FileInfo {
+                    name: "file1.txt".to_string(),
+                    ..Default::default()
+                },
+                FileInfo {
+                    name: "file2.txt".to_string(),
+                    ..Default::default()
+                },
             ],
-            queued: vec![
-                FileInfo { name: "file3.txt".to_string(), ..Default::default() },
-            ],
+            queued: vec![FileInfo {
+                name: "file3.txt".to_string(),
+                ..Default::default()
+            }],
             rest: vec![],
             page: 1,
             perpage: 100,
         };
 
-        cache.cache_needed_files("test-folder", &need_response).unwrap();
+        cache
+            .cache_needed_files("test-folder", &need_response)
+            .unwrap();
 
         let breakdown = cache.get_folder_sync_breakdown("test-folder").unwrap();
 
@@ -1109,19 +1149,26 @@ mod tests {
         let cache = CacheDb::new_in_memory().unwrap();
 
         let need_response = NeedResponse {
-            progress: vec![FileInfo { name: "file1.txt".to_string(), ..Default::default() }],
+            progress: vec![FileInfo {
+                name: "file1.txt".to_string(),
+                ..Default::default()
+            }],
             queued: vec![],
             rest: vec![],
             page: 1,
             perpage: 100,
         };
 
-        cache.cache_needed_files("test-folder", &need_response).unwrap();
+        cache
+            .cache_needed_files("test-folder", &need_response)
+            .unwrap();
 
         let before = cache.get_folder_sync_breakdown("test-folder").unwrap();
         assert_eq!(before.downloading, 1);
 
-        cache.invalidate_out_of_sync_categories("test-folder").unwrap();
+        cache
+            .invalidate_out_of_sync_categories("test-folder")
+            .unwrap();
 
         let after = cache.get_folder_sync_breakdown("test-folder").unwrap();
         assert_eq!(after.downloading, 0);
@@ -1158,12 +1205,11 @@ mod tests {
     fn test_cache_local_changed_files_stores_flag() {
         let cache = CacheDb::new_in_memory().unwrap();
 
-        let local_files = vec![
-            "dir1/file1.txt".to_string(),
-            "file2.txt".to_string(),
-        ];
+        let local_files = vec!["dir1/file1.txt".to_string(), "file2.txt".to_string()];
 
-        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+        cache
+            .cache_local_changed_files("test-folder", &local_files)
+            .unwrap();
 
         // Verify files were marked as local_changed
         let items = cache.get_local_changed_items("test-folder").unwrap();
@@ -1176,13 +1222,15 @@ mod tests {
     fn test_cache_local_changed_files_respects_ttl() {
         let cache = CacheDb::new_in_memory().unwrap();
 
-        use std::time::{SystemTime, UNIX_EPOCH};
         use rusqlite::params;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         // Insert file with timestamp 40 seconds in the past (expired)
         let past = SystemTime::now()
-            .duration_since(UNIX_EPOCH).unwrap()
-            .as_secs() as i64 - 40;
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - 40;
 
         cache.conn.execute(
             "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, local_changed, local_cached_at)
@@ -1196,7 +1244,9 @@ mod tests {
 
         // Now cache fresh data - should be returned
         let fresh_files = vec!["fresh-file.txt".to_string()];
-        cache.cache_local_changed_files("test-folder", &fresh_files).unwrap();
+        cache
+            .cache_local_changed_files("test-folder", &fresh_files)
+            .unwrap();
 
         let fresh_items = cache.get_local_changed_items("test-folder").unwrap();
         assert_eq!(fresh_items.len(), 1, "Fresh items should be returned");
@@ -1208,7 +1258,9 @@ mod tests {
         let cache = CacheDb::new_in_memory().unwrap();
 
         let local_files = vec!["file1.txt".to_string()];
-        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+        cache
+            .cache_local_changed_files("test-folder", &local_files)
+            .unwrap();
 
         let before = cache.get_local_changed_items("test-folder").unwrap();
         assert_eq!(before.len(), 1);
@@ -1229,16 +1281,28 @@ mod tests {
 
         // Simulate caching deleted files (which should come from API)
         let local_files = vec![
-            "deleted-file.jpg".to_string(),  // Deleted file
-            "added-file.txt".to_string(),    // Added file
+            "deleted-file.jpg".to_string(), // Deleted file
+            "added-file.txt".to_string(),   // Added file
         ];
 
-        cache.cache_local_changed_files("test-folder", &local_files).unwrap();
+        cache
+            .cache_local_changed_files("test-folder", &local_files)
+            .unwrap();
 
         // Both files should be in cache, including deleted ones
         let items = cache.get_local_changed_items("test-folder").unwrap();
-        assert_eq!(items.len(), 2, "Cache should include all files from API, including deleted");
-        assert!(items.contains(&"deleted-file.jpg".to_string()), "Deleted files should be cached");
-        assert!(items.contains(&"added-file.txt".to_string()), "Added files should be cached");
+        assert_eq!(
+            items.len(),
+            2,
+            "Cache should include all files from API, including deleted"
+        );
+        assert!(
+            items.contains(&"deleted-file.jpg".to_string()),
+            "Deleted files should be cached"
+        );
+        assert!(
+            items.contains(&"added-file.txt".to_string()),
+            "Added files should be cached"
+        );
     }
 }

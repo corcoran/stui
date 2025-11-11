@@ -5,7 +5,7 @@
 //! - Image preview with terminal graphics protocols
 //! - Binary file text extraction
 
-use crate::{App, BrowseItem, Folder, ImageMetadata, ImagePreviewState, model, logic, log_debug};
+use crate::{log_debug, logic, model, App, BrowseItem, Folder, ImageMetadata, ImagePreviewState};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -17,7 +17,13 @@ impl App {
         browse_item: BrowseItem,
     ) {
         // Find the folder
-        let folder = match self.model.syncthing.folders.iter().find(|f| f.id == folder_id) {
+        let folder = match self
+            .model
+            .syncthing
+            .folders
+            .iter()
+            .find(|f| f.id == folder_id)
+        {
             Some(f) => f.clone(),
             None => {
                 self.model.ui.file_info_popup = Some(model::FileInfoPopupState {
@@ -356,8 +362,10 @@ impl App {
                 // Exception: .ans/.asc files (ANSI art) can have null bytes but should be treated as text
                 let check_size = std::cmp::min(bytes.len(), BINARY_CHECK_SIZE);
                 let path_lower = host_path.to_lowercase();
-                let has_ansi_extension = path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
-                let is_binary = !has_ansi_extension && logic::file::is_binary_content(&bytes[..check_size]);
+                let has_ansi_extension =
+                    path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
+                let is_binary =
+                    !has_ansi_extension && logic::file::is_binary_content(&bytes[..check_size]);
 
                 if is_binary {
                     // Attempt text extraction (similar to 'strings' command)
@@ -370,7 +378,7 @@ impl App {
                     let should_use_cp437 = has_ansi_extension || has_ansi_codes;
 
                     if should_use_cp437 {
-                        use codepage_437::{CP437_CONTROL, BorrowFromCp437};
+                        use codepage_437::{BorrowFromCp437, CP437_CONTROL};
                         // Decode from CP437 to Unicode string
                         // CP437_CONTROL variant preserves control characters (important for ANSI escape codes)
                         let decoded = String::borrow_from_cp437(&bytes, &CP437_CONTROL);

@@ -1,3 +1,4 @@
+use crate::utils;
 use anyhow::Result;
 use chrono::DateTime;
 use reqwest::Client;
@@ -7,7 +8,6 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
-use crate::utils;
 
 fn log_debug(msg: &str) {
     // Only log if debug mode is enabled

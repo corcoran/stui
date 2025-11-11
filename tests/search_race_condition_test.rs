@@ -15,8 +15,8 @@
 //! Fix: When cache returns empty vec but breadcrumb.items is non-empty, fall back to
 //! filtering breadcrumb.items only (non-recursive search).
 
-use stui::cache::CacheDb;
 use stui::api::BrowseItem;
+use stui::cache::CacheDb;
 
 /// Test: get_all_browse_items returns empty when sequence doesn't match
 #[test]
@@ -49,11 +49,13 @@ fn test_cache_returns_empty_on_sequence_mismatch() {
         },
     ];
 
-    cache.save_browse_items(folder_id, None, &items, old_sequence)
+    cache
+        .save_browse_items(folder_id, None, &items, old_sequence)
         .expect("Failed to save items");
 
     // Verify cache has data with old sequence
-    let cached = cache.get_browse_items(folder_id, None, old_sequence)
+    let cached = cache
+        .get_browse_items(folder_id, None, old_sequence)
         .expect("Failed to get items");
     assert!(cached.is_some(), "Cache should exist with old sequence");
     assert_eq!(cached.unwrap().len(), 3, "Cache should have 3 items");
@@ -63,7 +65,8 @@ fn test_cache_returns_empty_on_sequence_mismatch() {
     // But breadcrumb.items gets populated with fresh data (35 items)
 
     // User immediately searches → apply_search_filter() calls get_all_browse_items
-    let all_items = cache.get_all_browse_items(folder_id, new_sequence)
+    let all_items = cache
+        .get_all_browse_items(folder_id, new_sequence)
         .expect("get_all_browse_items should not error");
 
     // BUG: Returns empty vec (not an error) because sequence doesn't match
@@ -89,7 +92,8 @@ fn test_cache_returns_empty_when_no_cache() {
 
     // User enters folder → gets data from API, populates breadcrumb.items
     // User immediately searches before cache is written
-    let all_items = cache.get_all_browse_items(folder_id, folder_sequence)
+    let all_items = cache
+        .get_all_browse_items(folder_id, folder_sequence)
         .expect("get_all_browse_items should not error");
 
     // Returns empty vec (cache doesn't exist yet)
@@ -124,23 +128,24 @@ fn test_cache_returns_items_when_sequence_matches() {
         },
     ];
 
-    let movies_items = vec![
-        BrowseItem {
-            name: "jeff-movie.mp4".to_string(),
-            item_type: "file".to_string(),
-            size: 1_000_000,
-            mod_time: "2025-01-01T00:00:00Z".to_string(),
-        },
-    ];
+    let movies_items = vec![BrowseItem {
+        name: "jeff-movie.mp4".to_string(),
+        item_type: "file".to_string(),
+        size: 1_000_000,
+        mod_time: "2025-01-01T00:00:00Z".to_string(),
+    }];
 
     // Save both root and subdirectory
-    cache.save_browse_items(folder_id, None, &root_items, folder_sequence)
+    cache
+        .save_browse_items(folder_id, None, &root_items, folder_sequence)
         .expect("Failed to save root items");
-    cache.save_browse_items(folder_id, Some("Movies/"), &movies_items, folder_sequence)
+    cache
+        .save_browse_items(folder_id, Some("Movies/"), &movies_items, folder_sequence)
         .expect("Failed to save Movies/ items");
 
     // get_all_browse_items should return ALL items recursively
-    let all_items = cache.get_all_browse_items(folder_id, folder_sequence)
+    let all_items = cache
+        .get_all_browse_items(folder_id, folder_sequence)
         .expect("get_all_browse_items should not error");
 
     // Should return 3 items total (2 root + 1 subdirectory)
@@ -156,12 +161,22 @@ fn test_cache_returns_items_when_sequence_matches() {
     // Debug: print actual paths
     eprintln!("Actual paths: {:?}", paths);
 
-    assert!(paths.contains(&"jeff-1.txt".to_string()), "Should include root item");
-    assert!(paths.contains(&"Movies".to_string()), "Should include root directory");
+    assert!(
+        paths.contains(&"jeff-1.txt".to_string()),
+        "Should include root item"
+    );
+    assert!(
+        paths.contains(&"Movies".to_string()),
+        "Should include root directory"
+    );
 
     // Check for subdirectory item - the path format might be different
     let has_movie = paths.iter().any(|p| p.contains("jeff-movie"));
-    assert!(has_movie, "Should include subdirectory item (actual paths: {:?})", paths);
+    assert!(
+        has_movie,
+        "Should include subdirectory item (actual paths: {:?})",
+        paths
+    );
 }
 
 /// Test: Verify search fallback logic with logic::search::filter_items
@@ -199,11 +214,19 @@ fn test_search_fallback_filters_current_level() {
 
     // Search with wildcard
     let filtered_wildcard = stui::logic::search::filter_items(&items, "*jeff*", None);
-    assert_eq!(filtered_wildcard.len(), 2, "Wildcard search should also find 2 items");
+    assert_eq!(
+        filtered_wildcard.len(),
+        2,
+        "Wildcard search should also find 2 items"
+    );
 
     // Search with no matches
     let filtered_none = stui::logic::search::filter_items(&items, "nonexistent", None);
-    assert_eq!(filtered_none.len(), 0, "Should return empty vec when no matches");
+    assert_eq!(
+        filtered_none.len(),
+        0,
+        "Should return empty vec when no matches"
+    );
 }
 
 /// Test: Cache sequence cleanup when saving with new sequence
@@ -216,51 +239,50 @@ fn test_cache_sequence_cleanup_on_save() {
     let new_sequence = 101;
 
     // Simulate old cache from previous session
-    let old_root_items = vec![
-        BrowseItem {
-            name: "old-file.txt".to_string(),
-            item_type: "file".to_string(),
-            size: 1024,
-            mod_time: "2025-01-01T00:00:00Z".to_string(),
-        },
-    ];
+    let old_root_items = vec![BrowseItem {
+        name: "old-file.txt".to_string(),
+        item_type: "file".to_string(),
+        size: 1024,
+        mod_time: "2025-01-01T00:00:00Z".to_string(),
+    }];
 
-    let old_subdir_items = vec![
-        BrowseItem {
-            name: "old-movie.mp4".to_string(),
-            item_type: "file".to_string(),
-            size: 1_000_000,
-            mod_time: "2025-01-01T00:00:00Z".to_string(),
-        },
-    ];
+    let old_subdir_items = vec![BrowseItem {
+        name: "old-movie.mp4".to_string(),
+        item_type: "file".to_string(),
+        size: 1_000_000,
+        mod_time: "2025-01-01T00:00:00Z".to_string(),
+    }];
 
     // Save old data with old sequence
-    cache.save_browse_items(folder_id, None, &old_root_items, old_sequence)
+    cache
+        .save_browse_items(folder_id, None, &old_root_items, old_sequence)
         .expect("Failed to save old root");
-    cache.save_browse_items(folder_id, Some("Movies/"), &old_subdir_items, old_sequence)
+    cache
+        .save_browse_items(folder_id, Some("Movies/"), &old_subdir_items, old_sequence)
         .expect("Failed to save old subdir");
 
     // Verify old data exists
-    let old_cache = cache.get_browse_items(folder_id, None, old_sequence)
+    let old_cache = cache
+        .get_browse_items(folder_id, None, old_sequence)
         .expect("Failed to get old cache");
     assert!(old_cache.is_some(), "Old cache should exist");
 
     // NEW SESSION: Folder sequence updated to new_sequence
     // Save new root data with new sequence
-    let new_root_items = vec![
-        BrowseItem {
-            name: "new-file.txt".to_string(),
-            item_type: "file".to_string(),
-            size: 2048,
-            mod_time: "2025-01-02T00:00:00Z".to_string(),
-        },
-    ];
+    let new_root_items = vec![BrowseItem {
+        name: "new-file.txt".to_string(),
+        item_type: "file".to_string(),
+        size: 2048,
+        mod_time: "2025-01-02T00:00:00Z".to_string(),
+    }];
 
-    cache.save_browse_items(folder_id, None, &new_root_items, new_sequence)
+    cache
+        .save_browse_items(folder_id, None, &new_root_items, new_sequence)
         .expect("Failed to save new root");
 
     // CRITICAL: Old subdirectory cache should be DELETED because sequence changed
-    let old_subdir_after = cache.get_browse_items(folder_id, Some("Movies/"), old_sequence)
+    let old_subdir_after = cache
+        .get_browse_items(folder_id, Some("Movies/"), old_sequence)
         .expect("Failed to query old subdir");
     assert!(
         old_subdir_after.is_none(),
@@ -268,13 +290,15 @@ fn test_cache_sequence_cleanup_on_save() {
     );
 
     // New root data should exist
-    let new_root_after = cache.get_browse_items(folder_id, None, new_sequence)
+    let new_root_after = cache
+        .get_browse_items(folder_id, None, new_sequence)
         .expect("Failed to get new root");
     assert!(new_root_after.is_some(), "New root cache should exist");
     assert_eq!(new_root_after.unwrap()[0].name, "new-file.txt");
 
     // get_all_browse_items with new sequence should return only new data
-    let all_items = cache.get_all_browse_items(folder_id, new_sequence)
+    let all_items = cache
+        .get_all_browse_items(folder_id, new_sequence)
         .expect("get_all_browse_items should not error");
     assert_eq!(all_items.len(), 1, "Should only have new root item");
     assert_eq!(all_items[0].1.name, "new-file.txt");

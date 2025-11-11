@@ -9,7 +9,7 @@
 //! - Preserve selection when switching
 //! - Mutual exclusion (activating one clears the other)
 
-use crate::{App, api, logic, log_debug, model, services};
+use crate::{api, log_debug, logic, model, services, App};
 
 impl App {
     // ============================================================================
@@ -24,8 +24,7 @@ impl App {
         level.selected_index = if level.display_items().is_empty() {
             None
         } else if let Some(name) = selected_name {
-            logic::navigation::find_item_index_by_name(level.display_items(), &name)
-                .or(Some(0))
+            logic::navigation::find_item_index_by_name(level.display_items(), &name).or(Some(0))
         } else {
             Some(0)
         };
@@ -39,7 +38,11 @@ impl App {
     ///
     /// When user searches, this queues browse requests for all subdirectories
     /// in the folder so that search can find matches at any depth.
-    pub(crate) fn prefetch_subdirectories_for_search(&mut self, folder_id: &str, prefix: Option<&str>) {
+    pub(crate) fn prefetch_subdirectories_for_search(
+        &mut self,
+        folder_id: &str,
+        prefix: Option<&str>,
+    ) {
         let folder_sequence = self
             .model
             .syncthing
@@ -64,7 +67,12 @@ impl App {
 
                     // Check if we've already queued this directory
                     let prefetch_key = format!("{}:{}", folder_id, subdir_prefix);
-                    if self.model.performance.discovered_dirs.contains(&prefetch_key) {
+                    if self
+                        .model
+                        .performance
+                        .discovered_dirs
+                        .contains(&prefetch_key)
+                    {
                         continue; // Already queued, skip
                     }
 
@@ -132,11 +140,8 @@ impl App {
                             "DEBUG [search]: Cache empty but level has {} items - falling back to current-level-only search",
                             level.items.len()
                         ));
-                        let filtered = logic::search::filter_items(
-                            &level.items,
-                            &query,
-                            prefix.as_deref(),
-                        );
+                        let filtered =
+                            logic::search::filter_items(&level.items, &query, prefix.as_deref());
                         level.filtered_items = Some(filtered);
                         Self::restore_selection_in_filtered_items(level, selected_name);
                         return;
@@ -147,11 +152,8 @@ impl App {
                 Err(e) => {
                     log_debug(&format!("Failed to get cached items for search: {:?}", e));
                     // Fallback to simple filtering of current level.items only
-                    let filtered = logic::search::filter_items(
-                        &level.items,
-                        &query,
-                        prefix.as_deref(),
-                    );
+                    let filtered =
+                        logic::search::filter_items(&level.items, &query, prefix.as_deref());
                     level.filtered_items = Some(filtered);
                     Self::restore_selection_in_filtered_items(level, selected_name);
                     return;
@@ -253,7 +255,9 @@ impl App {
     /// - Have local changes (receive-only folders)
     pub(crate) fn apply_out_of_sync_filter(&mut self) {
         // Don't filter folder list (only breadcrumbs)
-        if self.model.navigation.focus_level == 0 || self.model.navigation.breadcrumb_trail.is_empty() {
+        if self.model.navigation.focus_level == 0
+            || self.model.navigation.breadcrumb_trail.is_empty()
+        {
             return;
         }
 
@@ -280,7 +284,12 @@ impl App {
 
         // If no out-of-sync items and no local changed items in cache, handle based on current filter state
         if out_of_sync_items.is_empty() && local_changed_items.is_empty() {
-            let any_filtered = self.model.navigation.breadcrumb_trail.iter().any(|l| l.filtered_items.is_some());
+            let any_filtered = self
+                .model
+                .navigation
+                .breadcrumb_trail
+                .iter()
+                .any(|l| l.filtered_items.is_some());
 
             if any_filtered {
                 // Filter already active but cache is empty (likely just invalidated)
@@ -302,9 +311,11 @@ impl App {
                     .unwrap_or(false);
 
                 if is_receive_only {
-                    let _ = self.api_tx.send(services::api::ApiRequest::GetLocalChanged {
-                        folder_id: folder_id.clone(),
-                    });
+                    let _ = self
+                        .api_tx
+                        .send(services::api::ApiRequest::GetLocalChanged {
+                            folder_id: folder_id.clone(),
+                        });
                 }
 
                 // Keep existing filtered_items until fresh data arrives
@@ -358,12 +369,13 @@ impl App {
                     out_of_sync_items
                         .keys()
                         .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
-                    || local_changed_items
-                        .iter()
-                        .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
+                        || local_changed_items
+                            .iter()
+                            .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
                 } else {
                     // For files: direct match in either remote or local
-                    out_of_sync_items.contains_key(&full_path) || local_changed_items.contains(&full_path)
+                    out_of_sync_items.contains_key(&full_path)
+                        || local_changed_items.contains(&full_path)
                 };
 
                 if is_out_of_sync {
@@ -405,12 +417,12 @@ impl App {
 
         // If filter is already active, clear it (regardless of what level we're on)
         if self.model.ui.out_of_sync_filter.is_some() {
-            self.clear_out_of_sync_filter(true, None);  // Preserve selection, no toast (user toggling off)
+            self.clear_out_of_sync_filter(true, None); // Preserve selection, no toast (user toggling off)
             return;
         }
 
         // Clear any stale filter from a different folder/level
-        self.clear_out_of_sync_filter(false, None);  // Don't preserve (stale context), no toast
+        self.clear_out_of_sync_filter(false, None); // Don't preserve (stale context), no toast
 
         // Get current folder info
         let level_idx = self.model.navigation.focus_level - 1;
@@ -430,9 +442,7 @@ impl App {
 
         if !has_out_of_sync {
             // No out-of-sync items, show toast
-            self.model
-                .ui
-                .show_toast("All files synced!".to_string());
+            self.model.ui.show_toast("All files synced!".to_string());
             return;
         }
 
@@ -472,9 +482,11 @@ impl App {
 
         // Also check for local changes if folder is receive-only
         if is_receive_only && !has_local_cached {
-            let _ = self.api_tx.send(services::api::ApiRequest::GetLocalChanged {
-                folder_id: folder_id.clone(),
-            });
+            let _ = self
+                .api_tx
+                .send(services::api::ApiRequest::GetLocalChanged {
+                    folder_id: folder_id.clone(),
+                });
         }
 
         // If we're missing any required data, show loading toast and return
@@ -504,20 +516,26 @@ impl App {
     /// # Arguments
     /// * `preserve_selection` - Whether to keep cursor on same item by name
     /// * `show_toast` - Optional toast message to display
-    pub(crate) fn clear_out_of_sync_filter(&mut self, preserve_selection: bool, show_toast: Option<&str>) {
+    pub(crate) fn clear_out_of_sync_filter(
+        &mut self,
+        preserve_selection: bool,
+        show_toast: Option<&str>,
+    ) {
         self.model.ui.out_of_sync_filter = None;
 
         if preserve_selection {
             // Clear filtered items while preserving selection by name
             for level in &mut self.model.navigation.breadcrumb_trail {
-                let selected_name = level.selected_index
+                let selected_name = level
+                    .selected_index
                     .and_then(|idx| level.display_items().get(idx))
                     .map(|item| item.name.clone());
 
                 level.filtered_items = None;
 
                 if let Some(name) = selected_name {
-                    level.selected_index = logic::navigation::find_item_index_by_name(&level.items, &name);
+                    level.selected_index =
+                        logic::navigation::find_item_index_by_name(&level.items, &name);
                 }
             }
         } else {

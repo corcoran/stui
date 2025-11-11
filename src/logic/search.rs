@@ -56,11 +56,7 @@ pub fn search_matches(query: &str, file_path: &str) -> bool {
 ///
 /// # Returns
 /// Filtered list containing only matching items
-pub fn filter_items(
-    items: &[BrowseItem],
-    query: &str,
-    prefix: Option<&str>,
-) -> Vec<BrowseItem> {
+pub fn filter_items(items: &[BrowseItem], query: &str, prefix: Option<&str>) -> Vec<BrowseItem> {
     if query.is_empty() {
         return items.to_vec();
     }

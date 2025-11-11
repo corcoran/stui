@@ -17,13 +17,19 @@ fn test_folder_status_updates_after_scan_completes() {
     let new_sequence = 101u64;
 
     // Verify state transition logic
-    assert_ne!(old_sequence, new_sequence, "Sequence should change after scan");
+    assert_ne!(
+        old_sequence, new_sequence,
+        "Sequence should change after scan"
+    );
 
     // The bug: even though sequence changes, state stays "scanning"
     // Expected: when sequence increments, we should fetch new status
     let old_state = "scanning";
     let new_state = "idle";
-    assert_ne!(old_state, new_state, "State should transition from scanning to idle");
+    assert_ne!(
+        old_state, new_state,
+        "State should transition from scanning to idle"
+    );
 }
 
 /// Test: Sequence increment should trigger status refresh
@@ -36,7 +42,10 @@ fn test_sequence_change_detection() {
     let idle_seq = 101u64;
 
     // We should detect this change and update
-    assert_ne!(scanning_seq, idle_seq, "Sequence changed - should update status");
+    assert_ne!(
+        scanning_seq, idle_seq,
+        "Sequence changed - should update status"
+    );
 }
 
 /// Test: Transient states should not be cached
@@ -47,8 +56,11 @@ fn test_transient_states_not_cached() {
 
     for state in transient_states {
         // These states should be monitored for changes
-        assert!(state == "scanning" || state == "syncing" || state == "cleaning",
-                "State '{}' is transient and should update automatically", state);
+        assert!(
+            state == "scanning" || state == "syncing" || state == "cleaning",
+            "State '{}' is transient and should update automatically",
+            state
+        );
     }
 }
 
@@ -61,9 +73,15 @@ fn test_last_known_sequence_tracking() {
     let sequence = 100u64;
 
     // App should track last known sequence
-    model.performance.last_known_sequences.insert(folder_id.clone(), sequence);
+    model
+        .performance
+        .last_known_sequences
+        .insert(folder_id.clone(), sequence);
 
-    assert_eq!(model.performance.last_known_sequences.get(&folder_id), Some(&sequence));
+    assert_eq!(
+        model.performance.last_known_sequences.get(&folder_id),
+        Some(&sequence)
+    );
 
     // When new status arrives with different sequence, we should update
     let new_sequence = 101u64;
@@ -74,7 +92,13 @@ fn test_last_known_sequence_tracking() {
 #[test]
 fn test_poll_transient_state_folders() {
     // Transient states that need polling
-    let transient_states = vec!["scanning", "syncing", "cleaning", "scan-waiting", "sync-waiting"];
+    let transient_states = vec![
+        "scanning",
+        "syncing",
+        "cleaning",
+        "scan-waiting",
+        "sync-waiting",
+    ];
 
     for state in &transient_states {
         // These states should trigger periodic polling
@@ -94,7 +118,11 @@ fn test_poll_transient_state_folders() {
             "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
         );
 
-        assert!(!needs_polling, "State '{}' should NOT trigger polling", state);
+        assert!(
+            !needs_polling,
+            "State '{}' should NOT trigger polling",
+            state
+        );
     }
 }
 
@@ -125,7 +153,11 @@ fn test_identify_folders_needing_poll() {
         })
         .collect();
 
-    assert_eq!(folders_needing_poll.len(), 2, "Should have 2 folders needing poll");
+    assert_eq!(
+        folders_needing_poll.len(),
+        2,
+        "Should have 2 folders needing poll"
+    );
     assert!(folders_needing_poll.iter().any(|(id, _)| *id == "folder1"));
     assert!(folders_needing_poll.iter().any(|(id, _)| *id == "folder3"));
 }

@@ -29,42 +29,48 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Calculate status bar data (needed for status height calculation)
     // Clone strings to avoid borrowing issues
-    let (breadcrumb_folder_label, breadcrumb_folder_id, breadcrumb_item_count, breadcrumb_selected_item) =
-        if app.model.navigation.focus_level > 0 {
-            let level_idx = app.model.navigation.focus_level - 1;
-            if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                let folder_label = Some(level.folder_label.clone());
-                let folder_id = Some(level.folder_id.clone());
-                // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
-                let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
-                let item_count = Some(display_items.len());
-                let selected_item = level.selected_index.and_then(|sel| {
-                    display_items.get(sel).map(|item| {
-                        let sync_state = level.file_sync_states.get(&item.name).copied();
-                        let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
-                        let exists = if is_ignored {
-                            level.ignored_exists.get(&item.name).copied()
-                        } else {
-                            None
-                        };
-                        (
-                            item.name.clone(),
-                            item.item_type.clone(),
-                            sync_state,
-                            exists,
-                        )
-                    })
-                });
-                (folder_label, folder_id, item_count, selected_item)
-            } else {
-                (None, None, None, None)
-            }
+    let (
+        breadcrumb_folder_label,
+        breadcrumb_folder_id,
+        breadcrumb_item_count,
+        breadcrumb_selected_item,
+    ) = if app.model.navigation.focus_level > 0 {
+        let level_idx = app.model.navigation.focus_level - 1;
+        if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
+            let folder_label = Some(level.folder_label.clone());
+            let folder_id = Some(level.folder_id.clone());
+            // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
+            let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
+            let item_count = Some(display_items.len());
+            let selected_item = level.selected_index.and_then(|sel| {
+                display_items.get(sel).map(|item| {
+                    let sync_state = level.file_sync_states.get(&item.name).copied();
+                    let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
+                    let exists = if is_ignored {
+                        level.ignored_exists.get(&item.name).copied()
+                    } else {
+                        None
+                    };
+                    (
+                        item.name.clone(),
+                        item.item_type.clone(),
+                        sync_state,
+                        exists,
+                    )
+                })
+            });
+            (folder_label, folder_id, item_count, selected_item)
         } else {
             (None, None, None, None)
-        };
+        }
+    } else {
+        (None, None, None, None)
+    };
 
     let pending_operations_count: usize = app
-        .model.performance.pending_ignore_deletes
+        .model
+        .performance
+        .pending_ignore_deletes
         .values()
         .map(|info| info.paths.len())
         .sum();
@@ -183,8 +189,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
         breadcrumb::render_breadcrumb_panel(
             f,
             area,
-            &level.items,                       // Unfiltered source
-            level.filtered_items.as_ref(),      // Filtered view (if active)
+            &level.items,                  // Unfiltered source
+            level.filtered_items.as_ref(), // Filtered view (if active)
             &level.file_sync_states,
             &level.ignored_exists,
             &mut temp_state,
@@ -273,7 +279,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 // Not implemented - would render ignore+delete confirmation
                 dialogs::render_delete_confirmation(f, name, *is_dir);
             }
-            crate::model::ConfirmAction::PauseResume { label, is_paused, .. } => {
+            crate::model::ConfirmAction::PauseResume {
+                label, is_paused, ..
+            } => {
                 dialogs::render_pause_resume_confirmation(f, label, *is_paused);
             }
             crate::model::ConfirmAction::Rescan { folder_label, .. } => {
@@ -286,7 +294,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.model.ui.show_setup_help {
         // Get error message from connection state
         let error_message = match &app.model.syncthing.connection_state {
-            crate::model::syncthing::ConnectionState::Disconnected { message, .. } => message.as_str(),
+            crate::model::syncthing::ConnectionState::Disconnected { message, .. } => {
+                message.as_str()
+            }
             _ => "Unknown error",
         };
         dialogs::render_setup_help(f, error_message, &app.model.ui.config_path);
@@ -319,7 +329,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Render file info popup if active
     if let Some(state) = &mut app.model.ui.file_info_popup {
-        let my_device_id = app.model.syncthing.system_status.as_ref().map(|s| s.my_id.as_str());
+        let my_device_id = app
+            .model
+            .syncthing
+            .system_status
+            .as_ref()
+            .map(|s| s.my_id.as_str());
         dialogs::render_file_info(
             f,
             state,

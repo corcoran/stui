@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 use crate::api::{
-    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, NeedResponse,
-    SyncthingClient, SystemStatus,
+    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, NeedResponse, SyncthingClient,
+    SystemStatus,
 };
 use crate::utils;
 
@@ -100,9 +100,7 @@ pub enum ApiRequest {
     },
 
     /// Get local changed files (receive-only folders)
-    GetLocalChanged {
-        folder_id: String,
-    },
+    GetLocalChanged { folder_id: String },
 }
 
 impl ApiRequest {
@@ -303,7 +301,10 @@ impl ApiService {
     }
 
     /// Helper to get local changed file paths
-    async fn get_local_changed_files(client: &SyncthingClient, folder_id: &str) -> Result<Vec<String>> {
+    async fn get_local_changed_files(
+        client: &SyncthingClient,
+        folder_id: &str,
+    ) -> Result<Vec<String>> {
         // Use get_local_changed_files() which includes deleted files
         // NOT get_local_changed_items() which filters them out for browse UI
         client.get_local_changed_files(folder_id).await
@@ -315,9 +316,7 @@ impl ApiService {
             ApiRequest::BrowseFolder {
                 folder_id, prefix, ..
             } => {
-                let items = client
-                    .browse_folder(&folder_id, prefix.as_deref())
-                    .await;
+                let items = client.browse_folder(&folder_id, prefix.as_deref()).await;
 
                 ApiResponse::BrowseResult {
                     folder_id,
@@ -361,9 +360,7 @@ impl ApiService {
             }
 
             ApiRequest::GetFolderStatus { folder_id } => {
-                let status = client
-                    .get_folder_status(&folder_id)
-                    .await;
+                let status = client.get_folder_status(&folder_id).await;
 
                 ApiResponse::FolderStatusResult { folder_id, status }
             }
@@ -390,9 +387,7 @@ impl ApiService {
             }
 
             ApiRequest::GetConnectionStats => {
-                let stats = client
-                    .get_connection_stats()
-                    .await;
+                let stats = client.get_connection_stats().await;
 
                 ApiResponse::ConnectionStatsResult { stats }
             }
@@ -403,16 +398,21 @@ impl ApiService {
                 ApiResponse::DevicesResult { devices }
             }
 
-            ApiRequest::GetNeededFiles { folder_id, page, perpage } => {
+            ApiRequest::GetNeededFiles {
+                folder_id,
+                page,
+                perpage,
+            } => {
                 match client.get_needed_files(&folder_id, page, perpage).await {
-                    Ok(response) => {
-                        ApiResponse::NeededFiles {
-                            folder_id: folder_id.clone(),
-                            response,
-                        }
-                    }
+                    Ok(response) => ApiResponse::NeededFiles {
+                        folder_id: folder_id.clone(),
+                        response,
+                    },
                     Err(e) => {
-                        log_debug(&format!("Failed to get needed files for {}: {}", folder_id, e));
+                        log_debug(&format!(
+                            "Failed to get needed files for {}: {}",
+                            folder_id, e
+                        ));
                         // Return empty response on error
                         ApiResponse::NeededFiles {
                             folder_id,
@@ -430,14 +430,15 @@ impl ApiService {
 
             ApiRequest::GetLocalChanged { folder_id } => {
                 match Self::get_local_changed_files(&client, &folder_id).await {
-                    Ok(file_paths) => {
-                        ApiResponse::LocalChanged {
-                            folder_id: folder_id.clone(),
-                            file_paths,
-                        }
-                    }
+                    Ok(file_paths) => ApiResponse::LocalChanged {
+                        folder_id: folder_id.clone(),
+                        file_paths,
+                    },
                     Err(e) => {
-                        log_debug(&format!("Failed to get local changed files for {}: {}", folder_id, e));
+                        log_debug(&format!(
+                            "Failed to get local changed files for {}: {}",
+                            folder_id, e
+                        ));
                         // Return empty response on error
                         ApiResponse::LocalChanged {
                             folder_id,

@@ -5,7 +5,7 @@
 //! - Reversible sorting
 //! - Selection preservation across sorts
 
-use crate::{App, logic};
+use crate::{logic, App};
 
 impl App {
     /// Sort a specific breadcrumb level by its index
@@ -26,7 +26,6 @@ impl App {
             let selected_name = preserve_selection_name.or_else(|| {
                 level
                     .selected_index
-
                     .and_then(|idx| level.items.get(idx))
                     .map(|item| item.name.clone())
             });
@@ -74,10 +73,9 @@ impl App {
     }
 
     pub(crate) fn cycle_sort_mode(&mut self) {
-        if let Some(new_mode) = logic::ui::cycle_sort_mode(
-            self.model.ui.sort_mode,
-            self.model.navigation.focus_level,
-        ) {
+        if let Some(new_mode) =
+            logic::ui::cycle_sort_mode(self.model.ui.sort_mode, self.model.navigation.focus_level)
+        {
             self.model.ui.sort_mode = new_mode;
             self.model.ui.sort_reverse = false; // Reset reverse when changing mode
             self.sort_all_levels(); // Apply to all levels

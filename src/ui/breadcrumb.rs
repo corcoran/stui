@@ -162,7 +162,7 @@ fn build_list_item<'a>(
 pub fn render_breadcrumb_panel(
     f: &mut Frame,
     area: Rect,
-    items: &[BrowseItem],              // Source items (unfiltered)
+    items: &[BrowseItem],                     // Source items (unfiltered)
     filtered_items: Option<&Vec<BrowseItem>>, // Filtered view
     file_sync_states: &std::collections::HashMap<String, SyncState>,
     ignored_exists: &std::collections::HashMap<String, bool>,
@@ -258,8 +258,8 @@ pub fn render_breadcrumb_panel(
         let offset = state.offset();
 
         // ScrollbarState needs total content length and current position
-        let mut scrollbar_state = ScrollbarState::new(total_items.saturating_sub(viewport_height))
-            .position(offset);
+        let mut scrollbar_state =
+            ScrollbarState::new(total_items.saturating_sub(viewport_height)).position(offset);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))

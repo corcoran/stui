@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicBool;
 
 pub mod api;
 pub mod cache;
-pub mod model;
 pub mod logic;
+pub mod model;
 pub mod services;
 pub mod utils;
 

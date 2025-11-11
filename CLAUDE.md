@@ -154,6 +154,143 @@ fd "test" | head -10
 - ❌ `grep -r` - use `ag` instead
 - ❌ `find` - use `fd` instead
 
+### Code Formatting Requirements
+
+**CRITICAL: All code must pass `cargo fmt` and `cargo clippy`**
+
+These checks run on every PR and release - failures will block merging/releasing.
+
+#### Rust Formatting with cargo fmt
+
+**Before committing, always run:**
+```bash
+cargo fmt
+```
+
+This auto-formats all Rust code to match Rustfmt style. Never commit code that fails this check.
+
+**Formatting rules (enforced by Rustfmt):**
+
+**Imports:**
+- Use alphabetical ordering: `use crate::...`, `use std::...`, `use external::...`
+- Group related imports together with blank lines between groups
+- Remove unused imports
+
+Example:
+```rust
+// Good - alphabetical order, grouped
+use crate::utils;
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+// Bad - not alphabetical
+use anyhow::{Context, Result};
+use crate::utils;
+use std::path::PathBuf;
+```
+
+**Line length:**
+- Max 100 characters per line (Rustfmt default)
+- Long function arguments and match arms split across multiple lines
+
+Example:
+```rust
+// Good - split long argument list
+log_debug(&format!(
+    "Failed to get files for {}: {}",
+    folder_id, error
+));
+
+// Bad - exceeds line length
+log_debug(&format!("Failed to get files for {}: {}", folder_id, error));
+```
+
+**Spacing:**
+- Use consistent spacing around operators and delimiters
+- Single space after keywords (`if `, `for `, `match `, etc.)
+- No space between function name and opening parenthesis
+
+Example:
+```rust
+// Good
+if x > 0 {
+    do_something();
+}
+let result = calculate(a, b);
+
+// Bad
+if(x>0){
+    do_something();
+}
+let result = calculate (a, b);
+```
+
+**Type annotations:**
+- Always include explicit type annotations on public functions
+- Use `:` with no space before type: `foo: String`
+
+Example:
+```rust
+// Good
+pub fn get_path() -> PathBuf {
+    let cache_dir: Option<PathBuf> = dirs::cache_dir();
+    cache_dir
+}
+
+// Bad
+pub fn get_path() { // missing return type
+    let cache_dir = dirs::cache_dir();
+}
+```
+
+#### Clippy Linting
+
+**Before committing, also run:**
+```bash
+cargo clippy -- -D warnings
+```
+
+This checks for common mistakes and code improvements. Failures block CI/CD.
+
+**Common Clippy issues to avoid:**
+- Using `clone()` excessively - prefer references or move semantics
+- Unnecessary `unwrap()` - use `?` or `match` for error handling
+- Unused variables - remove or prefix with `_`
+- Redundant closures - simplify when possible
+- Incorrect naming - follow Rust conventions (`snake_case` for functions/variables, `PascalCase` for types)
+
+Example:
+```rust
+// Good - handles error properly
+fn load_file(path: &str) -> Result<String> {
+    std::fs::read_to_string(path).context("Failed to read file")
+}
+
+// Bad - unwrap panics on error
+fn load_file(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap()
+}
+```
+
+#### GitHub Actions Checks
+
+The CI pipeline runs these checks automatically:
+1. **tests.yml** (on PRs and pushes):
+   - `cargo test` - Run test suite
+   - `cargo fmt -- --check` - Verify formatting
+   - `cargo clippy -- -D warnings` - Run linter
+   - `cargo build --release` - Build project
+
+2. **release.yml** (on version tags):
+   - `cargo test --verbose` - Run all tests before building
+
+**If checks fail:**
+1. Run locally to see the issue: `cargo fmt` and `cargo clippy`
+2. Fix the issues (most cargo fmt issues auto-fix)
+3. Commit the fixes
+4. Push again to re-run checks
+
 ### Other Instructions
 
 - If you make a change that doesn't work, do not just keep adding more things on. If a change didn't fix things, consider that and revert it before attempting a new solution.

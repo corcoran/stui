@@ -128,7 +128,11 @@ pub fn render_pause_resume_confirmation(f: &mut Frame, folder_label: &str, is_pa
         height: prompt_height,
     };
 
-    let border_color = if is_paused { Color::Green } else { Color::Yellow };
+    let border_color = if is_paused {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
 
     let prompt = Paragraph::new(prompt_text)
         .block(
@@ -276,7 +280,15 @@ pub fn render_file_info(
         .split(popup_area);
 
     // Render metadata column
-    render_metadata_column(f, columns[0], state, devices, my_device_id, icon_renderer, image_state_map);
+    render_metadata_column(
+        f,
+        columns[0],
+        state,
+        devices,
+        my_device_id,
+        icon_renderer,
+        image_state_map,
+    );
 
     // Render preview column
     render_preview_column(f, columns[1], state, image_font_size, image_state_map);
@@ -516,98 +528,99 @@ fn render_preview_column(
                         ref mut protocol,
                         ref metadata,
                     }) = image_state_map.get_mut(&state.file_path)
-                {
-                    // Create bordered block with dimensions in title
-                    let title = if let Some((w, h)) = metadata.dimensions {
-                        format!("Preview (Image | {}x{})", w, h)
-                    } else {
-                        "Preview (Image)".to_string()
-                    };
-
-                    let block = Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan))
-                        .title(title);
-
-                    // Render block first
-                    f.render_widget(block, area);
-
-                    // Render image with proper centering using font_size
-                    let inner_area = area.inner(Margin {
-                        horizontal: 1,
-                        vertical: 1,
-                    });
-
-                    let render_rect = if let (Some((img_w, img_h)), Some((font_w, font_h))) =
-                        (metadata.dimensions, image_font_size)
                     {
-                        // Calculate how many cells the image needs (protocol's "desired" size)
-                        let desired_width = ((img_w as f32) / (font_w as f32)).ceil() as u16;
-                        let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
-
-                        // Fit desired size to available area (Resize::Fit logic)
-                        let (fit_width, fit_height) = if desired_width <= inner_area.width
-                            && desired_height <= inner_area.height
-                        {
-                            // Image fits - use desired size
-                            (desired_width, desired_height)
+                        // Create bordered block with dimensions in title
+                        let title = if let Some((w, h)) = metadata.dimensions {
+                            format!("Preview (Image | {}x{})", w, h)
                         } else {
-                            // Image doesn't fit - scale down maintaining aspect ratio
-                            let desired_aspect = desired_width as f32 / desired_height as f32;
-                            let area_aspect = inner_area.width as f32 / inner_area.height as f32;
-
-                            if desired_aspect > area_aspect {
-                                // Width constrained
-                                let width = inner_area.width;
-                                let height = (width as f32 / desired_aspect) as u16;
-                                (width, height)
-                            } else {
-                                // Height constrained
-                                let height = inner_area.height;
-                                let width = (height as f32 * desired_aspect) as u16;
-                                (width, height)
-                            }
+                            "Preview (Image)".to_string()
                         };
 
-                        // Center the fitted rect
-                        let x_offset = (inner_area.width.saturating_sub(fit_width)) / 2;
-                        let y_offset = (inner_area.height.saturating_sub(fit_height)) / 2;
+                        let block = Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Cyan))
+                            .title(title);
 
-                        Rect {
-                            x: inner_area.x + x_offset,
-                            y: inner_area.y + y_offset,
-                            width: fit_width,
-                            height: fit_height,
-                        }
-                    } else {
-                        // No dimensions or font_size - use full area
-                        inner_area
-                    };
+                        // Render block first
+                        f.render_widget(block, area);
 
-                    // Adaptive filter for protocol's final resize
-                    // Pre-downscale already handled most of the work, so we can use faster filters
-                    let filter = if let Some((img_w, img_h)) = metadata.dimensions {
-                        // Calculate if this is still a large downscale
-                        let width_ratio = img_w as f32 / render_rect.width as f32;
-                        let height_ratio = img_h as f32 / render_rect.height as f32;
-                        let max_ratio = width_ratio.max(height_ratio);
+                        // Render image with proper centering using font_size
+                        let inner_area = area.inner(Margin {
+                            horizontal: 1,
+                            vertical: 1,
+                        });
 
-                        if max_ratio > 3.0 {
-                            // Still large downscale: use Triangle for speed
-                            image::imageops::FilterType::Triangle
+                        let render_rect = if let (Some((img_w, img_h)), Some((font_w, font_h))) =
+                            (metadata.dimensions, image_font_size)
+                        {
+                            // Calculate how many cells the image needs (protocol's "desired" size)
+                            let desired_width = ((img_w as f32) / (font_w as f32)).ceil() as u16;
+                            let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
+
+                            // Fit desired size to available area (Resize::Fit logic)
+                            let (fit_width, fit_height) = if desired_width <= inner_area.width
+                                && desired_height <= inner_area.height
+                            {
+                                // Image fits - use desired size
+                                (desired_width, desired_height)
+                            } else {
+                                // Image doesn't fit - scale down maintaining aspect ratio
+                                let desired_aspect = desired_width as f32 / desired_height as f32;
+                                let area_aspect =
+                                    inner_area.width as f32 / inner_area.height as f32;
+
+                                if desired_aspect > area_aspect {
+                                    // Width constrained
+                                    let width = inner_area.width;
+                                    let height = (width as f32 / desired_aspect) as u16;
+                                    (width, height)
+                                } else {
+                                    // Height constrained
+                                    let height = inner_area.height;
+                                    let width = (height as f32 * desired_aspect) as u16;
+                                    (width, height)
+                                }
+                            };
+
+                            // Center the fitted rect
+                            let x_offset = (inner_area.width.saturating_sub(fit_width)) / 2;
+                            let y_offset = (inner_area.height.saturating_sub(fit_height)) / 2;
+
+                            Rect {
+                                x: inner_area.x + x_offset,
+                                y: inner_area.y + y_offset,
+                                width: fit_width,
+                                height: fit_height,
+                            }
                         } else {
-                            // Moderate/small: use Lanczos3 for quality
-                            image::imageops::FilterType::Lanczos3
-                        }
-                    } else {
-                        // No dimensions: use CatmullRom as balanced default
-                        image::imageops::FilterType::CatmullRom
-                    };
+                            // No dimensions or font_size - use full area
+                            inner_area
+                        };
 
-                    let image = ratatui_image::StatefulImage::new()
-                        .resize(ratatui_image::Resize::Fit(Some(filter)));
-                    f.render_stateful_widget(image, render_rect, protocol);
-                }
+                        // Adaptive filter for protocol's final resize
+                        // Pre-downscale already handled most of the work, so we can use faster filters
+                        let filter = if let Some((img_w, img_h)) = metadata.dimensions {
+                            // Calculate if this is still a large downscale
+                            let width_ratio = img_w as f32 / render_rect.width as f32;
+                            let height_ratio = img_h as f32 / render_rect.height as f32;
+                            let max_ratio = width_ratio.max(height_ratio);
+
+                            if max_ratio > 3.0 {
+                                // Still large downscale: use Triangle for speed
+                                image::imageops::FilterType::Triangle
+                            } else {
+                                // Moderate/small: use Lanczos3 for quality
+                                image::imageops::FilterType::Lanczos3
+                            }
+                        } else {
+                            // No dimensions: use CatmullRom as balanced default
+                            image::imageops::FilterType::CatmullRom
+                        };
+
+                        let image = ratatui_image::StatefulImage::new()
+                            .resize(ratatui_image::Resize::Fit(Some(filter)));
+                        f.render_stateful_widget(image, render_rect, protocol);
+                    }
                 }
                 ImagePreviewState::Failed { metadata } => {
                     // Show image &metadata as fallback
@@ -677,9 +690,9 @@ fn render_preview_column(
                 let horizontal_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
-                        Constraint::Min(0),                    // Left padding
-                        Constraint::Length(fixed_width),       // Fixed width for ANSI art
-                        Constraint::Min(0),                    // Right padding
+                        Constraint::Min(0),              // Left padding
+                        Constraint::Length(fixed_width), // Fixed width for ANSI art
+                        Constraint::Min(0),              // Right padding
                     ])
                     .split(area);
                 horizontal_chunks[1]

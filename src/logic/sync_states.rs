@@ -157,7 +157,9 @@ mod tests {
         assert!(sync_state_priority(SyncState::OutOfSync) < sync_state_priority(SyncState::Synced));
 
         // Syncing should come before RemoteOnly
-        assert!(sync_state_priority(SyncState::Syncing) < sync_state_priority(SyncState::RemoteOnly));
+        assert!(
+            sync_state_priority(SyncState::Syncing) < sync_state_priority(SyncState::RemoteOnly)
+        );
 
         // Unknown should come before Synced
         assert!(sync_state_priority(SyncState::Unknown) < sync_state_priority(SyncState::Synced));
@@ -174,14 +176,12 @@ mod tests {
 
     #[test]
     fn test_check_ignored_existence_no_ignored_items() {
-        let items = vec![
-            BrowseItem {
-                name: "file1.txt".to_string(),
-                size: 100,
-                mod_time: "2023-01-01T00:00:00Z".to_string(),
-                item_type: "FILE_INFO_TYPE_FILE".to_string(),
-            },
-        ];
+        let items = vec![BrowseItem {
+            name: "file1.txt".to_string(),
+            size: 100,
+            mod_time: "2023-01-01T00:00:00Z".to_string(),
+            item_type: "FILE_INFO_TYPE_FILE".to_string(),
+        }];
         let mut file_sync_states = HashMap::new();
         file_sync_states.insert("file1.txt".to_string(), SyncState::Synced);
 
@@ -191,14 +191,12 @@ mod tests {
 
     #[test]
     fn test_check_ignored_existence_parent_not_exists() {
-        let items = vec![
-            BrowseItem {
-                name: "ignored.txt".to_string(),
-                size: 100,
-                mod_time: "2023-01-01T00:00:00Z".to_string(),
-                item_type: "FILE_INFO_TYPE_FILE".to_string(),
-            },
-        ];
+        let items = vec![BrowseItem {
+            name: "ignored.txt".to_string(),
+            size: 100,
+            mod_time: "2023-01-01T00:00:00Z".to_string(),
+            item_type: "FILE_INFO_TYPE_FILE".to_string(),
+        }];
         let mut file_sync_states = HashMap::new();
         file_sync_states.insert("ignored.txt".to_string(), SyncState::Ignored);
 
@@ -254,11 +252,7 @@ mod aggregate_tests {
     fn test_aggregate_directory_state_one_syncing() {
         // Syncing has highest priority
         let direct_state = Some(SyncState::Synced);
-        let child_states = vec![
-            SyncState::Synced,
-            SyncState::Syncing,
-            SyncState::OutOfSync,
-        ];
+        let child_states = vec![SyncState::Synced, SyncState::Syncing, SyncState::OutOfSync];
 
         let result = aggregate_directory_state(direct_state, &child_states);
         assert_eq!(result, SyncState::Syncing);
@@ -314,5 +308,4 @@ mod aggregate_tests {
         let result = aggregate_directory_state(direct_state, &child_states);
         assert_eq!(result, SyncState::Ignored);
     }
-
 }
