@@ -161,6 +161,7 @@ pub fn build_legend_paragraph(
 }
 
 /// Render the hotkey legend (dynamically changes based on vim mode and focus level)
+#[allow(clippy::too_many_arguments)]
 pub fn render_legend(
     f: &mut Frame,
     area: Rect,

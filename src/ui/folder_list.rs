@@ -11,6 +11,7 @@ use ratatui::{
 use std::collections::HashMap;
 
 /// Render the folder list panel
+#[allow(clippy::too_many_arguments)]
 pub fn render_folder_list(
     f: &mut Frame,
     area: Rect,

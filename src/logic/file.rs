@@ -332,9 +332,7 @@ fn build_spans_from_buffer_upto(
     let mut current_span_text = String::new();
     let mut current_span_style = line_buffer[0].1;
 
-    for i in 0..max_col {
-        let (ch, mut style) = line_buffer[i];
-
+    for (ch, mut style) in line_buffer.iter().take(max_col).copied() {
         // Strip background color from spaces to prevent unwanted background bleeding
         if ch == ' ' && style.bg.is_some() {
             style = Style {

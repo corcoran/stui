@@ -193,7 +193,7 @@ pub fn render_folder_type_selection(
     current_type: &str,
     state: &mut ListState,
 ) {
-    let types = vec![
+    let types = [
         ("Send Only", "sendonly"),
         ("Send & Receive", "sendreceive"),
         ("Receive Only", "receiveonly"),
@@ -336,18 +336,16 @@ fn render_metadata_column(
 
     // Image resolution (if this is an image with loaded metadata)
     if state.is_image {
-        if let Some(ref image_state) = image_state_map.get(&state.file_path) {
-            match image_state {
-                crate::ImagePreviewState::Ready { metadata, .. }
-                | crate::ImagePreviewState::Failed { metadata } => {
-                    if let Some((width, height)) = metadata.dimensions {
-                        lines.push(Line::from(vec![
-                            Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
-                            Span::raw(format!("{}x{}", width, height)),
-                        ]));
-                    }
-                }
-                _ => {}
+        if let Some(
+            crate::ImagePreviewState::Ready { metadata, .. }
+            | crate::ImagePreviewState::Failed { metadata },
+        ) = image_state_map.get(&state.file_path)
+        {
+            if let Some((width, height)) = metadata.dimensions {
+                lines.push(Line::from(vec![
+                    Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
+                    Span::raw(format!("{}x{}", width, height)),
+                ]));
             }
         }
     }
@@ -658,11 +656,7 @@ fn render_preview_column(
         let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
 
         // Calculate max scroll position (can't scroll past the last line)
-        let max_scroll = if total_lines > viewport_height {
-            total_lines - viewport_height
-        } else {
-            0
-        };
+        let max_scroll = total_lines.saturating_sub(viewport_height);
 
         // Clamp scroll offset to valid range
         let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;

@@ -287,7 +287,7 @@ impl App {
                 img
             };
 
-        log_debug(&format!("Creating protocol..."));
+        log_debug("Creating protocol...");
         let protocol_start = std::time::Instant::now();
         let protocol = picker.new_resize_protocol(processed_img);
         log_debug(&format!(

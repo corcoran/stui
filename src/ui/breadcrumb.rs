@@ -159,6 +159,7 @@ fn build_list_item<'a>(
 }
 
 /// Render a single breadcrumb level panel
+#[allow(clippy::too_many_arguments)]
 pub fn render_breadcrumb_panel(
     f: &mut Frame,
     area: Rect,

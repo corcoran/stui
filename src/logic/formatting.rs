@@ -75,36 +75,36 @@ pub fn format_human_size(size: u64) -> String {
     const TB: u64 = GB * 1024;
 
     if size == 0 {
-        return "   0".to_string();
+        "   0".to_string()
     } else if size < KB {
-        return format!("{:>4}", size);
+        format!("{:>4}", size)
     } else if size < MB {
         let kb = size as f64 / KB as f64;
         if kb < 10.0 {
-            return format!("{:.1}K", kb);
+            format!("{:.1}K", kb)
         } else {
-            return format!("{:>3}K", (size / KB));
+            format!("{:>3}K", (size / KB))
         }
     } else if size < GB {
         let mb = size as f64 / MB as f64;
         if mb < 10.0 {
-            return format!("{:.1}M", mb);
+            format!("{:.1}M", mb)
         } else {
-            return format!("{:>3}M", (size / MB));
+            format!("{:>3}M", (size / MB))
         }
     } else if size < TB {
         let gb = size as f64 / GB as f64;
         if gb < 10.0 {
-            return format!("{:.1}G", gb);
+            format!("{:.1}G", gb)
         } else {
-            return format!("{:>3}G", (size / GB));
+            format!("{:>3}G", (size / GB))
         }
     } else {
         let tb = size as f64 / TB as f64;
         if tb < 10.0 {
-            return format!("{:.1}T", tb);
+            format!("{:.1}T", tb)
         } else {
-            return format!("{:>3}T", (size / TB));
+            format!("{:>3}T", (size / TB))
         }
     }
 }

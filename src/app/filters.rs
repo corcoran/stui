@@ -393,18 +393,17 @@ impl App {
             }
 
             // Restore selection to same item name if possible (only for current level)
-            if level_idx == self.model.navigation.focus_level - 1 {
-                if level.filtered_items.is_some() {
-                    // Filter is active - try to restore previous selection
-                    level.selected_index = if let Some(name) = selected_name {
-                        logic::navigation::find_item_index_by_name(level.display_items(), &name)
-                            .or(Some(0)) // If not found, default to first item
-                    } else {
-                        Some(0) // No previous selection, default to first item
-                    };
-                }
-                // If no filter (filtered_items = None), keep existing selection
+            if level_idx == self.model.navigation.focus_level - 1 && level.filtered_items.is_some()
+            {
+                // Filter is active - try to restore previous selection
+                level.selected_index = if let Some(name) = selected_name {
+                    logic::navigation::find_item_index_by_name(level.display_items(), &name)
+                        .or(Some(0)) // If not found, default to first item
+                } else {
+                    Some(0) // No previous selection, default to first item
+                };
             }
+            // If no filter (filtered_items = None), keep existing selection
         }
     }
 

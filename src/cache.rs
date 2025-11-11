@@ -302,26 +302,19 @@ impl CacheDb {
 
         // If folder_sequence is 0, skip validation and use whatever is cached (offline mode)
         if folder_sequence != 0
-            && (cached_seq.map_or(false, |seq| seq as u64 != folder_sequence)
-                || cached_seq.is_none())
+            && (cached_seq.is_some_and(|seq| seq as u64 != folder_sequence) || cached_seq.is_none())
         {
-            log_debug(&format!(
-                "DEBUG [get_browse_items]: Cache MISS - returning None"
-            ));
+            log_debug("DEBUG [get_browse_items]: Cache MISS - returning None");
             return Ok(None); // Cache is stale or doesn't exist
         }
 
         // If we have no cached data at all, return None
         if cached_seq.is_none() {
-            log_debug(&format!(
-                "DEBUG [get_browse_items]: No cache exists - returning None"
-            ));
+            log_debug("DEBUG [get_browse_items]: No cache exists - returning None");
             return Ok(None);
         }
 
-        log_debug(&format!(
-            "DEBUG [get_browse_items]: Cache HIT - fetching items"
-        ));
+        log_debug("DEBUG [get_browse_items]: Cache HIT - fetching items");
 
         // Fetch cached items
         let mut stmt = self.conn.prepare(
@@ -360,7 +353,7 @@ impl CacheDb {
 
         let cached_seq: Option<i64> = stmt.query_row(params![folder_id], |row| row.get(0)).ok();
 
-        if cached_seq.map_or(true, |seq| seq as u64 != folder_sequence) {
+        if cached_seq.is_none_or(|seq| seq as u64 != folder_sequence) {
             // Cache is stale or doesn't exist
             return Ok(Vec::new());
         }
@@ -481,12 +474,10 @@ impl CacheDb {
                     }
                 }
             }
-            log_debug(&format!("DEBUG [save_browse_items]: All inserts completed"));
+            log_debug("DEBUG [save_browse_items]: All inserts completed");
         }
 
-        log_debug(&format!(
-            "DEBUG [save_browse_items]: Committing transaction"
-        ));
+        log_debug("DEBUG [save_browse_items]: Committing transaction");
         tx.commit()?;
         log_debug(&format!(
             "DEBUG [save_browse_items]: Successfully saved {} items",

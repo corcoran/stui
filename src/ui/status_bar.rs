@@ -67,6 +67,7 @@ pub fn map_folder_state(
 }
 
 /// Build the status bar paragraph (reusable for both rendering and height calculation)
+#[allow(clippy::too_many_arguments)]
 pub fn build_status_paragraph(
     icon_renderer: &IconRenderer,
     focus_level: usize,
@@ -145,6 +146,7 @@ pub fn build_status_paragraph(
 }
 
 /// Build the status line string (extracted for reuse)
+#[allow(clippy::too_many_arguments)]
 fn build_status_line(
     icon_renderer: &IconRenderer,
     focus_level: usize,
@@ -375,6 +377,7 @@ fn build_status_line(
 /// Render the bottom status bar
 /// - When focus_level == 0: Shows folder status (state, size, sync progress)
 /// - When focus_level > 0: Shows directory metrics (items, sort mode, load time, cache hit)
+#[allow(clippy::too_many_arguments)]
 pub fn render_status_bar(
     f: &mut Frame,
     area: Rect,
@@ -415,6 +418,7 @@ pub fn render_status_bar(
 }
 
 /// Calculate required height for status bar based on terminal width and content
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_status_height(
     terminal_width: u16,
     icon_renderer: &IconRenderer,

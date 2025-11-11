@@ -323,7 +323,7 @@ impl App {
         &mut self,
         folder_id: &str,
         dir_path: &str,
-        folder_sequence: u64,
+        _folder_sequence: u64,
         current_depth: usize,
         max_depth: usize,
         result: &mut Vec<String>,
@@ -389,7 +389,7 @@ impl App {
                 self.discover_subdirectories_sync(
                     folder_id,
                     &nested_path,
-                    folder_sequence,
+                    _folder_sequence,
                     current_depth + 1,
                     max_depth,
                     result,
@@ -441,10 +441,9 @@ impl App {
                 }
 
                 // Check if we already have this directory's state
-                self.model.navigation.breadcrumb_trail[level_idx]
+                !self.model.navigation.breadcrumb_trail[level_idx]
                     .file_sync_states
-                    .get(&item.name)
-                    .is_none()
+                    .contains_key(&item.name)
             })
             .take(max_concurrent)
             .map(|item| item.name.clone())
@@ -539,8 +538,6 @@ impl App {
             }
         }
     }
-
-    /// Check which ignored files exist on disk (done once on directory load, not per-frame)
 
     /// Update ignored_exists status for a single file in a breadcrumb level
     pub(crate) fn update_ignored_exists_for_file(

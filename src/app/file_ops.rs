@@ -344,15 +344,16 @@ impl App {
     pub(crate) fn copy_to_clipboard(&mut self) -> Result<()> {
         let text_to_copy = if self.model.navigation.focus_level == 0 {
             // In folder list - copy folder ID
-            if let Some(selected) = self.model.navigation.folders_state_selection {
-                if let Some(folder) = self.model.syncthing.folders.get(selected) {
-                    Some(folder.id.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            self.model
+                .navigation
+                .folders_state_selection
+                .and_then(|selected| {
+                    self.model
+                        .syncthing
+                        .folders
+                        .get(selected)
+                        .map(|folder| folder.id.clone())
+                })
         } else {
             // In breadcrumbs - copy file/directory path (mapped host path)
             if self.model.navigation.breadcrumb_trail.is_empty() {

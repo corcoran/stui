@@ -310,40 +310,42 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             let sync_key = format!("{}:{}", folder_id, file_path);
             app.model.performance.loading_sync_states.remove(&sync_key);
 
-            let Ok(file_details) = details else {
-                // API call failed - only update state if we're not already in Connecting mode
-                if !matches!(
-                    app.model.syncthing.connection_state,
-                    ConnectionState::Connecting { .. }
-                ) {
-                    let error = details.unwrap_err();
-                    app.model.syncthing.connection_state = ConnectionState::Disconnected {
-                        error_type: crate::logic::errors::classify_error(&error),
-                        message: crate::logic::errors::format_error_message(&error),
-                    };
-                    crate::log_debug(&format!(
-                        "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
-                        folder_id, file_path, error
-                    ));
+            let file_details = match details.as_ref() {
+                Ok(details) => details,
+                Err(error) => {
+                    // API call failed - only update state if we're not already in Connecting mode
+                    if !matches!(
+                        app.model.syncthing.connection_state,
+                        ConnectionState::Connecting { .. }
+                    ) {
+                        app.model.syncthing.connection_state = ConnectionState::Disconnected {
+                            error_type: crate::logic::errors::classify_error(error),
+                            message: crate::logic::errors::format_error_message(error),
+                        };
+                        crate::log_debug(&format!(
+                            "DEBUG [FileInfoResult ERROR]: folder={} path={} error={:?}",
+                            folder_id, file_path, error
+                        ));
+                    }
+                    return;
                 }
-                return;
             };
 
             // Successful API call - mark as connected
             app.model.syncthing.connection_state = ConnectionState::Connected;
 
             // Check if this response is still relevant to current navigation
-            let is_relevant = if app.model.navigation.focus_level == 0 {
-                false // At folder list, no file info is relevant
-            } else if app.model.navigation.breadcrumb_trail.is_empty() {
-                false // No breadcrumb trail, nothing is relevant
-            } else {
+            let is_relevant = if app.model.navigation.focus_level != 0
+                && !app.model.navigation.breadcrumb_trail.is_empty()
+            {
                 // Check if this folder_id matches any level in our current breadcrumb trail
                 app.model
                     .navigation
                     .breadcrumb_trail
                     .iter()
                     .any(|level| level.folder_id == folder_id)
+            } else {
+                false
             };
 
             if !is_relevant {
@@ -377,8 +379,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // Update UI if this file is visible in current level
             let mut updated = false;
-            for (_level_idx, level) in app.model.navigation.breadcrumb_trail.iter_mut().enumerate()
-            {
+            for level in app.model.navigation.breadcrumb_trail.iter_mut() {
                 if level.folder_id == folder_id {
                     // Check if this file path belongs to this level
                     let level_prefix = level.prefix.as_deref().unwrap_or("");
@@ -804,7 +805,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     .model
                     .navigation
                     .breadcrumb_trail
-                    .get(0)
+                    .first()
                     .map(|level| &level.folder_id);
 
                 if current_folder_id == Some(&folder_id) {

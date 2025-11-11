@@ -62,11 +62,7 @@ pub fn calculate_visible_pane_range(
     let max_visible_panes = (content_width / MIN_PANE_WIDTH).max(2) as usize;
 
     // Calculate which panes to show (prioritize right side)
-    let start_pane = if num_panes > max_visible_panes {
-        num_panes - max_visible_panes
-    } else {
-        0
-    };
+    let start_pane = num_panes.saturating_sub(max_visible_panes);
 
     let visible_panes = num_panes.min(max_visible_panes);
     let folders_visible = start_pane == 0;

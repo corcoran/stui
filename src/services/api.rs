@@ -166,7 +166,7 @@ pub enum ApiResponse {
     FileInfoResult {
         folder_id: String,
         file_path: String,
-        details: Result<FileDetails, anyhow::Error>,
+        details: Box<Result<FileDetails, anyhow::Error>>,
     },
 
     FolderStatusResult {
@@ -279,18 +279,16 @@ impl ApiService {
             let response = Self::execute_request(&client, request).await;
 
             // Log before sending response
-            match &response {
-                ApiResponse::FileInfoResult {
-                    folder_id,
-                    file_path,
-                    ..
-                } => {
-                    log_debug(&format!(
-                        "DEBUG [API Service]: Sending FileInfoResult for folder={} path={}",
-                        folder_id, file_path
-                    ));
-                }
-                _ => {}
+            if let ApiResponse::FileInfoResult {
+                folder_id,
+                file_path,
+                ..
+            } = &response
+            {
+                log_debug(&format!(
+                    "DEBUG [API Service]: Sending FileInfoResult for folder={} path={}",
+                    folder_id, file_path
+                ));
             }
 
             let _ = response_tx.send(response);
@@ -355,7 +353,7 @@ impl ApiService {
                 ApiResponse::FileInfoResult {
                     folder_id,
                     file_path,
-                    details,
+                    details: Box::new(details),
                 }
             }
 
@@ -429,7 +427,7 @@ impl ApiService {
             }
 
             ApiRequest::GetLocalChanged { folder_id } => {
-                match Self::get_local_changed_files(&client, &folder_id).await {
+                match Self::get_local_changed_files(client, &folder_id).await {
                     Ok(file_paths) => ApiResponse::LocalChanged {
                         folder_id: folder_id.clone(),
                         file_paths,

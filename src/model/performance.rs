@@ -90,6 +90,12 @@ impl PerformanceModel {
     }
 }
 
+impl Default for PerformanceModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

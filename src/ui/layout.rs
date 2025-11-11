@@ -21,6 +21,7 @@ pub struct LayoutInfo {
 }
 
 /// Calculate the screen layout for all UI components
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_layout(
     terminal_size: Rect,
     num_breadcrumb_levels: usize,

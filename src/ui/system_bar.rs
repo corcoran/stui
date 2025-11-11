@@ -82,97 +82,98 @@ pub fn render_system_bar(
     local_state_summary: (u64, u64, u64), // (files, dirs, bytes)
     last_transfer_rates: Option<(f64, f64)>, // (download, upload) in bytes/sec
 ) {
-    let system_line =
-        if matches!(connection_state, ConnectionState::Connected) && system_status.is_some() {
-            // Only show full system info when connected AND have status
-            let sys_status = system_status.unwrap();
-            let uptime_str = format_uptime(sys_status.uptime);
-            let (total_files, total_dirs, total_bytes) = local_state_summary;
+    let system_line = if let (true, Some(sys_status)) = (
+        matches!(connection_state, ConnectionState::Connected),
+        system_status,
+    ) {
+        // Only show full system info when connected AND have status
+        let uptime_str = format_uptime(sys_status.uptime);
+        let (total_files, total_dirs, total_bytes) = local_state_summary;
 
-            let mut spans = render_connection_status(connection_state);
-            spans.push(Span::raw(device_name.unwrap_or("Unknown")));
+        let mut spans = render_connection_status(connection_state);
+        spans.push(Span::raw(device_name.unwrap_or("Unknown")));
+        spans.push(Span::raw(" | "));
+        spans.push(Span::styled("Up:", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(format!(" {}", uptime_str)));
+
+        // Add local state (use trimmed size to avoid padding)
+        let size_str = format_human_size(total_bytes).trim().to_string();
+        spans.push(Span::raw(" | "));
+        spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(format!(
+            " {} files, {} dirs, {}",
+            total_files, total_dirs, size_str
+        )));
+
+        // Add rates if available (display pre-calculated rates)
+        if let Some((in_rate, out_rate)) = last_transfer_rates {
             spans.push(Span::raw(" | "));
-            spans.push(Span::styled("Up:", Style::default().fg(Color::Yellow)));
-            spans.push(Span::raw(format!(" {}", uptime_str)));
+            spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
+            spans.push(Span::raw(format_transfer_rate(in_rate)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
+            spans.push(Span::raw(format_transfer_rate(out_rate)));
+        }
 
-            // Add local state (use trimmed size to avoid padding)
-            let size_str = format_human_size(total_bytes).trim().to_string();
-            spans.push(Span::raw(" | "));
-            spans.push(Span::styled("Local:", Style::default().fg(Color::Yellow)));
-            spans.push(Span::raw(format!(
-                " {} files, {} dirs, {}",
-                total_files, total_dirs, size_str
-            )));
-
-            // Add rates if available (display pre-calculated rates)
-            if let Some((in_rate, out_rate)) = last_transfer_rates {
-                spans.push(Span::raw(" | "));
-                spans.push(Span::styled("↓", Style::default().fg(Color::Yellow)));
-                spans.push(Span::raw(format_transfer_rate(in_rate)));
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled("↑", Style::default().fg(Color::Yellow)));
-                spans.push(Span::raw(format_transfer_rate(out_rate)));
+        Line::from(spans)
+    } else {
+        // No system status yet - show connection state and error
+        let spans = match connection_state {
+            ConnectionState::Disconnected { message, .. } => {
+                // Show error message (no device name since we're not connected)
+                vec![Span::styled(
+                    format!("🔴 {}", message),
+                    Style::default().fg(Color::Red),
+                )]
             }
+            ConnectionState::Connecting {
+                attempt,
+                last_error,
+                next_retry_secs,
+            } => {
+                let mut spans = vec![];
 
-            Line::from(spans)
-        } else {
-            // No system status yet - show connection state and error
-            let spans = match connection_state {
-                ConnectionState::Disconnected { message, .. } => {
-                    // Show error message (no device name since we're not connected)
-                    vec![Span::styled(
-                        format!("🔴 {}", message),
-                        Style::default().fg(Color::Red),
-                    )]
+                // Show connecting status
+                let text = if *attempt > 1 {
+                    format!(
+                        "🟡 Connecting (attempt {}, next: {}s)",
+                        attempt, next_retry_secs
+                    )
+                } else {
+                    "🟡 Connecting...".to_string()
+                };
+                spans.push(Span::styled(text, Style::default().fg(Color::Yellow)));
+
+                // Show last error if available
+                if let Some(err) = last_error {
+                    spans.push(Span::raw(" | "));
+                    spans.push(Span::styled(
+                        err.clone(),
+                        Style::default().fg(Color::Yellow),
+                    ));
                 }
-                ConnectionState::Connecting {
-                    attempt,
-                    last_error,
-                    next_retry_secs,
-                } => {
-                    let mut spans = vec![];
 
-                    // Show connecting status
-                    let text = if *attempt > 1 {
-                        format!(
-                            "🟡 Connecting (attempt {}, next: {}s)",
-                            attempt, next_retry_secs
-                        )
-                    } else {
-                        "🟡 Connecting...".to_string()
-                    };
-                    spans.push(Span::styled(text, Style::default().fg(Color::Yellow)));
+                spans
+            }
+            ConnectionState::Connected => {
+                // Connected but no system status - still loading
+                let mut spans = vec![Span::styled(
+                    "🟢 Connected",
+                    Style::default().fg(Color::Green),
+                )];
 
-                    // Show last error if available
-                    if let Some(err) = last_error {
-                        spans.push(Span::raw(" | "));
-                        spans.push(Span::styled(
-                            err.clone(),
-                            Style::default().fg(Color::Yellow),
-                        ));
-                    }
-
-                    spans
+                if let Some(name) = device_name {
+                    spans.push(Span::raw(" | "));
+                    spans.push(Span::raw(name));
                 }
-                ConnectionState::Connected => {
-                    // Connected but no system status - still loading
-                    let mut spans = vec![Span::styled(
-                        "🟢 Connected",
-                        Style::default().fg(Color::Green),
-                    )];
 
-                    if let Some(name) = device_name {
-                        spans.push(Span::raw(" | "));
-                        spans.push(Span::raw(name));
-                    }
-
-                    spans.push(Span::raw(" | Loading..."));
-                    spans
-                }
-            };
-
-            Line::from(spans)
+                spans.push(Span::raw(" | Loading..."));
+                spans
+            }
         };
+
+        Line::from(spans)
+    };
 
     let system_widget = Paragraph::new(system_line)
         .block(Block::default().borders(Borders::ALL).title("System"))
