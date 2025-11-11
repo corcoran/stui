@@ -9,6 +9,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --verbose
+
   build-linux-x86:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
@@ -157,7 +169,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-linux-x86, build-linux-arm, build-macos-intel, build-macos-arm, build-windows]
+    needs: [test, build-linux-x86, build-linux-arm, build-macos-intel, build-macos-arm, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
