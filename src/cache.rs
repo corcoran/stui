@@ -417,14 +417,39 @@ impl CacheDb {
         // Use a transaction for better performance with many items
         let tx = self.conn.unchecked_transaction()?;
 
-        // Delete old entries for this folder/prefix
+        // CRITICAL FIX: Check if folder sequence changed from cached data
+        // If so, delete ALL old cached entries to prevent cache inconsistency
+        let existing_seq: Option<i64> = tx
+            .query_row(
+                "SELECT DISTINCT folder_sequence FROM browse_cache
+                 WHERE folder_id = ?1 LIMIT 1",
+                params![folder_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(old_seq) = existing_seq {
+            if old_seq as u64 != folder_sequence {
+                // Sequence changed - delete ALL old cached data for this folder
+                let cleared = tx.execute(
+                    "DELETE FROM browse_cache WHERE folder_id = ?1",
+                    params![folder_id],
+                )?;
+                log_debug(&format!(
+                    "DEBUG [save_browse_items]: Sequence changed ({} -> {}), cleared {} entries for entire folder",
+                    old_seq, folder_sequence, cleared
+                ));
+            }
+        }
+
+        // Delete old entries for this specific folder/prefix (in case of same-sequence update)
         let deleted = tx.execute(
             "DELETE FROM browse_cache WHERE folder_id = ?1 AND prefix = ?2",
             params![folder_id, prefix_str],
         )?;
         log_debug(&format!(
-            "DEBUG [save_browse_items]: Deleted {} old entries",
-            deleted
+            "DEBUG [save_browse_items]: Deleted {} old entries for prefix {:?}",
+            deleted, prefix
         ));
 
         // Insert new entries

@@ -199,20 +199,30 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Sort and restore selection using the saved name
                     app.sort_level_with_selection(idx, selected_name);
 
-                    // Only re-apply filters if this is the CURRENT breadcrumb level
-                    // This prevents cascading filter re-applications during prefetch
+                    // Check if this is the current breadcrumb level
                     let is_current_level = idx == app.model.navigation.focus_level.saturating_sub(1);
 
-                    if is_current_level {
-                        // Re-apply search filter if active
-                        if !app.model.ui.search_query.is_empty() {
-                            app.apply_search_filter();
-                        }
+                    // Check if this BrowseResult is for the same folder as current level
+                    // GUARD: Only check if we have a valid focus_level (not 0)
+                    let current_level_folder = if app.model.navigation.focus_level > 0 {
+                        app.model.navigation.breadcrumb_trail
+                            .get(app.model.navigation.focus_level - 1)
+                            .map(|l| l.folder_id.as_str())
+                    } else {
+                        None
+                    };
+                    let is_same_folder = current_level_folder == Some(&folder_id);
 
-                        // Re-apply out-of-sync filter if active
-                        if app.model.ui.out_of_sync_filter.is_some() {
-                            app.apply_out_of_sync_filter();
-                        }
+                    // CRITICAL: Re-apply search filter if active AND this is for the current folder
+                    // Search uses cache.get_all_browse_items() which queries entire folder recursively,
+                    // so we need to re-filter whenever ANY prefix in the folder gets cached (not just current level)
+                    if !app.model.ui.search_query.is_empty() && is_same_folder {
+                        app.apply_search_filter();
+                    }
+
+                    // Re-apply out-of-sync filter only for current level (it's level-specific)
+                    if is_current_level && app.model.ui.out_of_sync_filter.is_some() {
+                        app.apply_out_of_sync_filter();
                     }
 
                     // Request FileInfo for ALL items (no filtering, let API service deduplicate)
