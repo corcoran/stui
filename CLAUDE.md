@@ -1,4 +1,4 @@
-# Syncthing CLI TUI Manager
+# stui - Syncthing TUI Manager
 
 ## Project Overview
 
@@ -90,14 +90,14 @@ EOF
 
 When testing Syncthing API endpoints with curl commands:
 
-1. **Read the config file first**: `~/.config/synctui/config.yaml`
+1. **Read the config file first**: `~/.config/stui/config.yaml`
 2. **Extract `api_key` and `base_url` from the config**
 3. **Use those values in curl commands**
 
 **Example workflow:**
 ```bash
 # Read config to get API key and base URL
-cat ~/.config/synctui/config.yaml
+cat ~/.config/stui/config.yaml
 
 # Then use extracted values in curl
 curl -s -H "X-API-Key: <key-from-config>" "<base_url-from-config>/rest/db/need?folder=lok75-7d42r"
@@ -112,6 +112,47 @@ curl -s -H "X-API-Key: <key-from-config>" "<base_url-from-config>/rest/db/need?f
 - ✅ Read config file first
 - ✅ Use current credentials from config
 - ✅ Verify base_url matches user's setup
+
+### Preferred Tools for File Operations
+
+**Use `ag` (The Silver Surfer) for content search:**
+```bash
+# Search for text pattern in code
+ag "search_term"
+
+# Search in specific file type
+ag --rust "pattern"
+
+# Search with context
+ag -C 3 "pattern"
+
+# Case-insensitive search
+ag -i "pattern"
+```
+
+**Use `fd` for finding files:**
+```bash
+# Find files by name pattern
+fd "pattern"
+
+# Find in specific directory
+fd "pattern" src/
+
+# Find by file type
+fd -e rs      # Rust files
+fd -e toml    # TOML files
+
+# Combine with other commands
+fd "test" | head -10
+```
+
+**Why these tools:**
+- `ag`: Faster than grep, respects .gitignore, better syntax highlighting
+- `fd`: Faster than find, simpler syntax, respects .gitignore
+
+**AVOID using:**
+- ❌ `grep -r` - use `ag` instead
+- ❌ `find` - use `fd` instead
 
 ### Other Instructions
 
@@ -305,7 +346,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config file at platform-specific location (Linux: `~/.config/synctui/config.yaml`, macOS: `~/Library/Application Support/synctui/config.yaml`, Windows: `%APPDATA%\synctui\config.yaml`) containing:
+YAML config file at platform-specific location (Linux: `~/.config/stui/config.yaml`, macOS: `~/Library/Application Support/stui/config.yaml`, Windows: `%APPDATA%\stui\config.yaml`) containing:
 - API key
 - Base URL
 - `path_map` (container-to-host path translations)
@@ -318,7 +359,7 @@ YAML config file at platform-specific location (Linux: `~/.config/synctui/config
   - `image_protocol` (string, default: `"auto"`): Terminal graphics protocol - `"auto"`, `"kitty"`, `"iterm2"`, `"sixel"`, or `"halfblocks"`
 
 CLI flags:
-- `--debug`: Enable debug logging to `/tmp/synctui-debug.log` (includes image loading performance metrics)
+- `--debug`: Enable debug logging to `/tmp/stui-debug.log` (includes image loading performance metrics)
 - `--vim`: Enable vim keybindings (overrides config file setting)
 - `--config <path>`: Specify custom config file path
 
@@ -450,12 +491,12 @@ CLI flags:
 - **Idle Detection & Non-Blocking UI**: 300ms idle threshold ensures keyboard input is never blocked by background prefetch operations; main event loop uses 250ms poll timeout to minimize CPU wakeups (~<1-2% CPU when idle)
 
 ### Caching Strategy
-- **SQLite database**: `~/.cache/synctui/cache.db` (Linux) or `/tmp/synctui-cache` (fallback)
+- **SQLite database**: `~/.cache/stui/cache.db` (Linux) or `/tmp/stui-cache` (fallback)
 - **Browse cache**: Directory listings with folder sequence validation, includes `mod_time` and `size` fields
 - **Sync state cache**: Per-file sync states with file sequence validation
 - **Folder status cache**: Status with sequence, displayed stats (in_sync/total items)
 - **Event ID persistence**: Survives app restarts
-- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/synctui/cache.db`)
+- **Schema migrations**: Manual cache clear required when database schema changes (`rm ~/.cache/stui/cache.db`)
 
 ### ANSI Art Rendering
 - **Auto-Detection**: Content-based detection of ANSI escape codes (ESC[ sequences) in addition to .ans/.asc extensions
@@ -578,7 +619,7 @@ CLI flags:
       - `src/model/ui.rs` - 16 tests in 4 sections (UI Model Creation, Search Mode, Search Query Operations, Search Origin Level)
       - `src/logic/navigation.rs` - 14 tests in 4 sections (Next Selection, Prev Selection, Edge Cases, Find Item By Name)
     - **Benefits:** Tests can be collapsed by section in IDEs, clear grouping makes finding related tests easy, maintains locality with implementation code
-- **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/synctui-debug.log`
+- **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/stui-debug.log`
 
 ### Adding New Features - Common Patterns
 
