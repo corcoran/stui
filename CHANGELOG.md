@@ -5,7 +5,7 @@ All notable changes to Synctui will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2025-11-09
+## [Unreleased] - 2025-11-10
 
 ### 🎨 Code Quality & Architecture
 
@@ -118,12 +118,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+**Critical: File Actions Target Wrong Items During Search/Filter** ⚠️
+- Fixed serious bug where file operations targeted wrong items when search or out-of-sync filter was active
+- **Impact**: Selecting file #2 in filtered view could delete/open/copy a completely different file from the unfiltered list
+- **Fixed operations**: Delete (`d`), Open (`o`), Copy (`c`), Toggle ignore (`i`), Ignore+Delete (`I`)
+- Delete confirmation now removes items by name (not index) from both filtered and unfiltered lists
+- All 6 affected code locations corrected with comprehensive test coverage
+
 **Search & Filtering**
+- Fixed empty search query handling and state management
 - Fixed search term clearing behavior
 - Fixed cache filter state management
 - Search results properly update when clearing terms
 - Filters clear correctly from all breadcrumb levels
 - Filtered results update correctly in subdirectories
+- Extracted search/filter logic into dedicated `filters.rs` module (498 lines refactored)
 
 **Out-of-Sync Filter**
 - Fixed filter persistence when new files/events arrive
@@ -161,7 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **556 total tests passing** (507 binary + 25 integration + 24 doc tests)
+- **569 total tests passing** (507 binary + 38 integration + 24 doc tests)
+- Added 8 comprehensive tests for filter index bug (demonstrates bug + validates fix)
+- Added 5 tests for search race conditions and empty query handling
 - Added tests for out-of-sync filter and summary modal functionality
 - Added tests for search and filter mutual exclusivity
 - Added tests for non-destructive filtering (filtered_items field)
@@ -169,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added 22 new tests for pure logic functions (TDD methodology)
 - Added 10 comprehensive reconnection flow tests
 - Added 6 tests for unified confirmation dialogs
-- Added 5 tests for timestamp parsing and event processing (RFC3339 parsing, early termination, reverse processing)
+- Fixed flaky timestamp test - now uses dynamic timestamps instead of hardcoded dates
 - Fixed status_bar tests for out-of-sync filter parameter
 - Fixed FolderStatus doctest after field additions
 - All refactoring covered by existing test suite
