@@ -11,8 +11,8 @@
 //! 4. BUG: Only prefix="" deleted, Messages/ cache still has 3 items
 //! 5. User navigates to Messages/ → cache HIT with stale data (should be 2 items)
 
-use synctui::cache::CacheDb;
-use synctui::api::BrowseItem;
+use stui::cache::CacheDb;
+use stui::api::BrowseItem;
 
 /// Test: invalidate_directory with empty dir_path should clear ALL prefixes
 #[test]

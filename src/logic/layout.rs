@@ -33,7 +33,7 @@ pub struct VisiblePaneRange {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::layout::calculate_visible_pane_range;
+/// use stui::logic::layout::calculate_visible_pane_range;
 ///
 /// // Wide terminal: 100 cells, 3 breadcrumb levels = 4 total panes
 /// // Min width = 20, max panes = 100/20 = 5, all 4 panes fit

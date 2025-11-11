@@ -36,7 +36,7 @@ pub fn has_local_changes(status: Option<&FolderStatus>) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::folder::can_delete_file;
+/// use stui::logic::folder::can_delete_file;
 ///
 /// // Can delete: in breadcrumb view with trail
 /// assert!(can_delete_file(1, false));
@@ -66,10 +66,10 @@ pub fn can_delete_file(focus_level: usize, breadcrumb_trail_empty: bool) -> bool
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::folder::should_show_restore_button;
+/// use stui::logic::folder::should_show_restore_button;
 ///
 /// // Show restore: breadcrumb view + has changes
-/// assert!(should_show_restore_button(1, Some(&synctui::api::FolderStatus {
+/// assert!(should_show_restore_button(1, Some(&stui::api::FolderStatus {
 ///     state: "idle".to_string(),
 ///     sequence: 0,
 ///     global_bytes: 0,
@@ -127,8 +127,8 @@ pub fn should_show_restore_button(
 /// # Example
 /// ```
 /// use std::collections::HashMap;
-/// use synctui::logic::folder::calculate_local_state_summary;
-/// use synctui::api::FolderStatus;
+/// use stui::logic::folder::calculate_local_state_summary;
+/// use stui::api::FolderStatus;
 ///
 /// let mut statuses = HashMap::new();
 /// // Add folder statuses...

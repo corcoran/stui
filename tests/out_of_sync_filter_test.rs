@@ -9,8 +9,8 @@
 //! 2. Press Enter to drill into "Messages/" → ALL files in Messages/ are visible
 //! 3. Expected: Only "foo" should be visible (it's the only out-of-sync file)
 
-use synctui::model::{Model, types::OutOfSyncFilterState};
-use synctui::api::BrowseItem;
+use stui::model::{Model, types::OutOfSyncFilterState};
+use stui::api::BrowseItem;
 
 /// Test: Filter state should be tracked when activated
 #[test]

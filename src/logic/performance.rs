@@ -22,7 +22,7 @@ use std::time::Duration;
 /// # Examples
 /// ```
 /// use std::time::Duration;
-/// use synctui::logic::performance::should_flush_batch;
+/// use stui::logic::performance::should_flush_batch;
 ///
 /// // Empty queue - no flush needed
 /// assert!(!should_flush_batch(0, Duration::from_millis(0)));

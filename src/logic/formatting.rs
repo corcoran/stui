@@ -15,7 +15,7 @@
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::formatting::format_uptime;
+/// use stui::logic::formatting::format_uptime;
 ///
 /// assert_eq!(format_uptime(0), "0m");
 /// assert_eq!(format_uptime(30), "0m");  // Rounds down to 0 minutes
@@ -60,7 +60,7 @@ pub fn format_uptime(seconds: u64) -> String {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::formatting::format_human_size;
+/// use stui::logic::formatting::format_human_size;
 ///
 /// assert_eq!(format_human_size(0), "   0");
 /// assert_eq!(format_human_size(512), " 512");

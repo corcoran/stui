@@ -1,6 +1,6 @@
 use super::icons::IconRenderer;
 use crate::api::{BrowseItem, SyncState};
-use ::synctui::DisplayMode;
+use ::stui::DisplayMode;
 use ratatui::{
     layout::{Margin, Rect},
     style::{Color, Modifier, Style},

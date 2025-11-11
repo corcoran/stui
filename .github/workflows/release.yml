@@ -29,16 +29,16 @@ jobs:
       - name: Create archive
         run: |
           mkdir -p package
-          cp target/x86_64-unknown-linux-musl/release/synctui package/
+          cp target/x86_64-unknown-linux-musl/release/stui package/
           cp README.md config.yaml.example package/
           cd package
-          tar -czf ../synctui-linux-x86_64.tar.gz *
+          tar -czf ../stui-linux-x86_64.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synctui-linux-x86_64
-          path: synctui-linux-x86_64.tar.gz
+          name: stui-linux-x86_64
+          path: stui-linux-x86_64.tar.gz
 
   build-linux-arm:
     name: Build Linux ARM64
@@ -64,16 +64,16 @@ jobs:
       - name: Create archive
         run: |
           mkdir -p package
-          cp target/aarch64-unknown-linux-musl/release/synctui package/
+          cp target/aarch64-unknown-linux-musl/release/stui package/
           cp README.md config.yaml.example package/
           cd package
-          tar -czf ../synctui-linux-aarch64.tar.gz *
+          tar -czf ../stui-linux-aarch64.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synctui-linux-aarch64
-          path: synctui-linux-aarch64.tar.gz
+          name: stui-linux-aarch64
+          path: stui-linux-aarch64.tar.gz
 
   build-macos-intel:
     name: Build macOS Intel
@@ -90,16 +90,16 @@ jobs:
       - name: Create archive
         run: |
           mkdir -p package
-          cp target/release/synctui package/
+          cp target/release/stui package/
           cp README.md config.yaml.example package/
           cd package
-          tar -czf ../synctui-macos-intel.tar.gz *
+          tar -czf ../stui-macos-intel.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synctui-macos-intel
-          path: synctui-macos-intel.tar.gz
+          name: stui-macos-intel
+          path: stui-macos-intel.tar.gz
 
   build-macos-arm:
     name: Build macOS Apple Silicon
@@ -116,16 +116,16 @@ jobs:
       - name: Create archive
         run: |
           mkdir -p package
-          cp target/release/synctui package/
+          cp target/release/stui package/
           cp README.md config.yaml.example package/
           cd package
-          tar -czf ../synctui-macos-arm64.tar.gz *
+          tar -czf ../stui-macos-arm64.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synctui-macos-arm64
-          path: synctui-macos-arm64.tar.gz
+          name: stui-macos-arm64
+          path: stui-macos-arm64.tar.gz
 
   build-windows:
     name: Build Windows x86_64
@@ -143,17 +143,17 @@ jobs:
         shell: pwsh
         run: |
           mkdir package
-          cp target/release/synctui.exe package/
+          cp target/release/stui.exe package/
           cp README.md package/
           cp config.yaml.example package/
           cd package
-          Compress-Archive -Path * -DestinationPath ../synctui-windows-x86_64.zip
+          Compress-Archive -Path * -DestinationPath ../stui-windows-x86_64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synctui-windows-x86_64
-          path: synctui-windows-x86_64.zip
+          name: stui-windows-x86_64
+          path: stui-windows-x86_64.zip
 
   create-release:
     name: Create GitHub Release
@@ -174,11 +174,11 @@ jobs:
         with:
           draft: true
           files: |
-            artifacts/synctui-linux-x86_64/synctui-linux-x86_64.tar.gz
-            artifacts/synctui-linux-aarch64/synctui-linux-aarch64.tar.gz
-            artifacts/synctui-macos-intel/synctui-macos-intel.tar.gz
-            artifacts/synctui-macos-arm64/synctui-macos-arm64.tar.gz
-            artifacts/synctui-windows-x86_64/synctui-windows-x86_64.zip
+            artifacts/stui-linux-x86_64/stui-linux-x86_64.tar.gz
+            artifacts/stui-linux-aarch64/stui-linux-aarch64.tar.gz
+            artifacts/stui-macos-intel/stui-macos-intel.tar.gz
+            artifacts/stui-macos-arm64/stui-macos-arm64.tar.gz
+            artifacts/stui-windows-x86_64/stui-windows-x86_64.zip
           body: |
             ## Installation
 
@@ -186,30 +186,30 @@ jobs:
 
             **Linux (x86_64):**
             ```bash
-            tar -xzf synctui-linux-x86_64.tar.gz
-            sudo cp synctui /usr/local/bin/
+            tar -xzf stui-linux-x86_64.tar.gz
+            sudo cp stui /usr/local/bin/
             ```
 
             **Linux (ARM64):**
             ```bash
-            tar -xzf synctui-linux-aarch64.tar.gz
-            sudo cp synctui /usr/local/bin/
+            tar -xzf stui-linux-aarch64.tar.gz
+            sudo cp stui /usr/local/bin/
             ```
 
             **macOS (Intel):**
             ```bash
-            tar -xzf synctui-macos-intel.tar.gz
-            sudo cp synctui /usr/local/bin/
+            tar -xzf stui-macos-intel.tar.gz
+            sudo cp stui /usr/local/bin/
             ```
 
             **macOS (Apple Silicon):**
             ```bash
-            tar -xzf synctui-macos-arm64.tar.gz
-            sudo cp synctui /usr/local/bin/
+            tar -xzf stui-macos-arm64.tar.gz
+            sudo cp stui /usr/local/bin/
             ```
 
             **Windows:**
-            Extract the zip file and add `synctui.exe` to your PATH.
+            Extract the zip file and add `stui.exe` to your PATH.
 
             ## Configuration
 

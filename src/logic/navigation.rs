@@ -17,7 +17,7 @@
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::navigation::next_selection;
+/// use stui::logic::navigation::next_selection;
 ///
 /// // Empty list
 /// assert_eq!(next_selection(None, 0), None);
@@ -57,7 +57,7 @@ pub fn next_selection(current: Option<usize>, list_len: usize) -> Option<usize> 
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::navigation::prev_selection;
+/// use stui::logic::navigation::prev_selection;
 ///
 /// // Empty list
 /// assert_eq!(prev_selection(None, 0), None);
@@ -96,8 +96,8 @@ pub fn prev_selection(current: Option<usize>, list_len: usize) -> Option<usize> 
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::navigation::find_item_index_by_name;
-/// use synctui::api::BrowseItem;
+/// use stui::logic::navigation::find_item_index_by_name;
+/// use stui::api::BrowseItem;
 ///
 /// let items = vec![
 ///     BrowseItem {

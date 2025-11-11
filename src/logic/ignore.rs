@@ -17,7 +17,7 @@
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::ignore::pattern_matches;
+/// use stui::logic::ignore::pattern_matches;
 ///
 /// assert!(pattern_matches("/foo/bar.txt", "/foo/bar.txt"));
 /// assert!(pattern_matches("*.tmp", "/some/path/file.tmp"));
@@ -74,7 +74,7 @@ pub fn pattern_matches(pattern: &str, file_path: &str) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::ignore::find_matching_patterns;
+/// use stui::logic::ignore::find_matching_patterns;
 ///
 /// let patterns = vec![
 ///     "*.tmp".to_string(),
@@ -112,7 +112,7 @@ pub fn find_matching_patterns(patterns: &[String], file_path: &str) -> Vec<Strin
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::ignore::validate_pattern;
+/// use stui::logic::ignore::validate_pattern;
 ///
 /// // Valid patterns
 /// assert!(validate_pattern("*.jpg").is_ok());

@@ -15,8 +15,8 @@
 //! Fix: When cache returns empty vec but breadcrumb.items is non-empty, fall back to
 //! filtering breadcrumb.items only (non-recursive search).
 
-use synctui::cache::CacheDb;
-use synctui::api::BrowseItem;
+use stui::cache::CacheDb;
+use stui::api::BrowseItem;
 
 /// Test: get_all_browse_items returns empty when sequence doesn't match
 #[test]
@@ -190,7 +190,7 @@ fn test_search_fallback_filters_current_level() {
     ];
 
     // Search for "jeff"
-    let filtered = synctui::logic::search::filter_items(&items, "jeff", None);
+    let filtered = stui::logic::search::filter_items(&items, "jeff", None);
 
     // Should match 2 items
     assert_eq!(filtered.len(), 2, "Should find 2 items matching 'jeff'");
@@ -198,11 +198,11 @@ fn test_search_fallback_filters_current_level() {
     assert_eq!(filtered[1].name, "jeff-2.txt");
 
     // Search with wildcard
-    let filtered_wildcard = synctui::logic::search::filter_items(&items, "*jeff*", None);
+    let filtered_wildcard = stui::logic::search::filter_items(&items, "*jeff*", None);
     assert_eq!(filtered_wildcard.len(), 2, "Wildcard search should also find 2 items");
 
     // Search with no matches
-    let filtered_none = synctui::logic::search::filter_items(&items, "nonexistent", None);
+    let filtered_none = stui::logic::search::filter_items(&items, "nonexistent", None);
     assert_eq!(filtered_none.len(), 0, "Should return empty vec when no matches");
 }
 

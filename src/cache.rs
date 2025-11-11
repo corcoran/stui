@@ -62,7 +62,7 @@ impl CacheDb {
 
     fn get_cache_dir() -> Result<PathBuf> {
         if let Some(cache_dir) = dirs::cache_dir() {
-            Ok(cache_dir.join("synctui"))
+            Ok(cache_dir.join("stui"))
         } else {
             // Fallback to platform-specific temp dir if no cache dir available
             Ok(utils::get_cache_fallback_path())

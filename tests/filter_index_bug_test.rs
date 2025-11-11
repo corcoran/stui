@@ -19,8 +19,8 @@
 //! - ignore_and_delete() - src/app/ignore.rs:221
 //! - Delete confirmation handler - src/handlers/keyboard.rs:165
 
-use synctui::model::types::BreadcrumbLevel;
-use synctui::api::BrowseItem;
+use stui::model::types::BreadcrumbLevel;
+use stui::api::BrowseItem;
 
 /// Helper: Create a breadcrumb level with full list and filtered subset
 fn create_test_level_with_filter() -> BreadcrumbLevel {

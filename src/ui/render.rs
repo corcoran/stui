@@ -1,6 +1,6 @@
 use crate::App;
 use ratatui::Frame;
-use synctui::DisplayMode;
+use stui::DisplayMode;
 
 use super::{
     breadcrumb, dialogs, folder_list, layout, legend, out_of_sync_summary, search, status_bar,

@@ -5,14 +5,14 @@ use std::path::PathBuf;
 /// Get platform-specific debug log path
 pub fn get_debug_log_path() -> PathBuf {
     let mut path = std::env::temp_dir();
-    path.push("synctui-debug.log");
+    path.push("stui-debug.log");
     path
 }
 
 /// Get platform-specific cache fallback path
 pub fn get_cache_fallback_path() -> PathBuf {
     let mut path = std::env::temp_dir();
-    path.push("synctui-cache");
+    path.push("stui-cache");
     path
 }
 

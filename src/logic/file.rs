@@ -14,7 +14,7 @@
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::is_image_file;
+/// use stui::logic::file::is_image_file;
 ///
 /// assert!(is_image_file("photo.jpg"));
 /// assert!(is_image_file("image.PNG"));  // Case insensitive
@@ -48,7 +48,7 @@ pub fn is_image_file(path: &str) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::is_binary_content;
+/// use stui::logic::file::is_binary_content;
 ///
 /// // Text content - no null bytes
 /// assert!(!is_binary_content(b"Hello, world!"));
@@ -77,7 +77,7 @@ pub fn is_binary_content(bytes: &[u8]) -> bool {
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::file::contains_ansi_codes;
+/// use stui::logic::file::contains_ansi_codes;
 ///
 /// // Text with ANSI color codes
 /// assert!(contains_ansi_codes(b"\x1b[31mRed text\x1b[0m"));
@@ -385,7 +385,7 @@ fn build_spans_from_buffer_upto(line_buffer: &[(char, ratatui::style::Style)], m
 ///
 /// # Example
 /// ```
-/// use synctui::logic::file::extract_text_from_binary;
+/// use stui::logic::file::extract_text_from_binary;
 ///
 /// let binary = b"Hello\x00World\x00\x01\x02Test\x00";
 /// let result = extract_text_from_binary(binary);

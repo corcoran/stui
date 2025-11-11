@@ -3,7 +3,7 @@
 //! Bug: Folder stays in "scanning" state even after scan completes
 //! WebUI shows "synced" but TUI shows "scanning" until manual refresh
 
-use synctui::model::Model;
+use stui::model::Model;
 
 /// Test: Folder status should update from "scanning" to "idle" automatically
 #[test]

@@ -1,4 +1,4 @@
-# Synctui
+# Stui
 
 A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.net/) — browse folders, track sync states, manage ignore patterns, and control your files, all from the comfort of your terminal.
 
@@ -39,10 +39,10 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/synctui.git
-cd synctui
+git clone https://github.com/yourusername/stui.git
+cd stui
 cargo build --release
-sudo cp target/release/synctui /usr/local/bin/
+sudo cp target/release/stui /usr/local/bin/
 ```
 
 ### Prerequisites
@@ -52,9 +52,9 @@ sudo cp target/release/synctui /usr/local/bin/
 ## Configuration
 
 Create a config file at the platform-specific location:
-- **Linux**: `~/.config/synctui/config.yaml`
-- **macOS**: `~/Library/Application Support/synctui/config.yaml`
-- **Windows**: `%APPDATA%\synctui\config.yaml`
+- **Linux**: `~/.config/stui/config.yaml`
+- **macOS**: `~/Library/Application Support/stui/config.yaml`
+- **Windows**: `%APPDATA%\stui\config.yaml`
 
 ```yaml
 api_key: "your-syncthing-api-key"
@@ -100,21 +100,21 @@ path_map:
   "/media": "/mnt/external/media"   # Multiple mappings supported
 ```
 
-This allows synctui (running on host) to perform file operations on the correct paths.
+This allows stui (running on host) to perform file operations on the correct paths.
 
 ## Usage
 
 ### Basic Commands
 
 ```bash
-# Start synctui (reads config from ~/.config/synctui/config.yaml)
-synctui
+# Start stui (reads config from ~/.config/stui/config.yaml)
+stui
 
 # Enable vim keybindings for this session
-synctui --vim
+stui --vim
 
 # Enable debug logging
-synctui --debug
+stui --debug
 ```
 
 ### Navigation Keys
@@ -151,7 +151,7 @@ synctui --debug
 | `s` | Cycle sort mode (Sync State → A-Z → Timestamp → Size) | No |
 | `S` | Reverse current sort order | No |
 | `t` | Toggle info display (Off → Timestamp → Size+Timestamp) | No |
-| `q` | Quit synctui | No |
+| `q` | Quit stui | No |
 
 **Search Mode Keys** (when search is active):
 - Type to filter results in real-time
@@ -166,21 +166,21 @@ synctui --debug
 
 ## Cache Management
 
-Synctui caches data for instant UI performance. Cache locations:
-- **Linux**: `~/.cache/synctui/cache.db`
-- **macOS**: `~/Library/Caches/synctui/cache.db`
-- **Windows**: `%LOCALAPPDATA%\synctui\cache\cache.db`
+Stui caches data for instant UI performance. Cache locations:
+- **Linux**: `~/.cache/stui/cache.db`
+- **macOS**: `~/Library/Caches/stui/cache.db`
+- **Windows**: `%LOCALAPPDATA%\stui\cache\cache.db`
 
 To clear cache if you experience issues:
 ```bash
 # Linux
-rm ~/.cache/synctui/cache.db
+rm ~/.cache/stui/cache.db
 
 # macOS
-rm ~/Library/Caches/synctui/cache.db
+rm ~/Library/Caches/stui/cache.db
 
 # Windows
-del %LOCALAPPDATA%\synctui\cache\cache.db
+del %LOCALAPPDATA%\stui\cache\cache.db
 ```
 
 ## Troubleshooting
@@ -194,12 +194,12 @@ del %LOCALAPPDATA%\synctui\cache\cache.db
 - API key is found in Syncthing Web UI: Actions → Settings → General
 
 ### Cache issues after update
-- Run `rm ~/.cache/synctui/cache.db` to clear stale cache
+- Run `rm ~/.cache/stui/cache.db` to clear stale cache
 - Required when database schema changes between versions
 
 ### Debug logging
 - Run with `--debug` flag to enable verbose logging
-- Check `/tmp/synctui-debug.log` for detailed operation traces
+- Check `/tmp/stui-debug.log` for detailed operation traces
 
 ## Limitations
 

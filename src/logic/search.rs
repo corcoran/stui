@@ -14,7 +14,7 @@ use crate::api::BrowseItem;
 ///
 /// # Examples
 /// ```
-/// use synctui::logic::search::search_matches;
+/// use stui::logic::search::search_matches;
 ///
 /// assert!(search_matches("jeff", "jeff-1.txt"));
 /// assert!(search_matches("*jeff*", "my-jeff-file.txt"));

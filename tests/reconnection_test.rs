@@ -4,7 +4,7 @@
 //! 1. App starts with Syncthing down → shows setup help dialog
 //! 2. Syncthing comes back online → folders populate + dialog dismisses
 
-use synctui::model::{Model, syncthing::ConnectionState};
+use stui::model::{Model, syncthing::ConnectionState};
 
 /// Test: When app starts disconnected with no folders, setup help should be shown
 #[test]
@@ -13,7 +13,7 @@ fn test_initial_state_shows_setup_help() {
 
     // Simulate initial disconnection with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -33,7 +33,7 @@ fn test_reconnection_sets_folder_refresh_flag() {
 
     // Initial state: disconnected with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -72,14 +72,14 @@ fn test_folder_population_dismisses_setup_help() {
     // Simulate: main loop fetches folders (we'll just add them directly)
     model.ui.needs_folder_refresh = false; // Flag consumed
     model.syncthing.folders = vec![
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test-folder-1".to_string(),
             label: Some("Test Folder 1".to_string()),
             path: "/data/test1".to_string(),
             folder_type: "sendreceive".to_string(),
             paused: false,
         },
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test-folder-2".to_string(),
             label: Some("Test Folder 2".to_string()),
             path: "/data/test2".to_string(),
@@ -108,7 +108,7 @@ fn test_complete_reconnection_flow() {
 
     // STEP 1: Initial disconnection - show setup help
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -134,7 +134,7 @@ fn test_complete_reconnection_flow() {
     // STEP 3: Fetch folders and dismiss dialog
     model.ui.needs_folder_refresh = false;
     model.syncthing.folders = vec![
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test".to_string(),
             label: Some("Test".to_string()),
             path: "/data/test".to_string(),
@@ -161,11 +161,11 @@ fn test_reconnection_with_existing_folders_no_flag() {
 
     // State: have folders but disconnected (edge case)
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "existing".to_string(),
             label: Some("Existing".to_string()),
             path: "/data/existing".to_string(),
@@ -223,7 +223,7 @@ fn test_state_already_connected_before_system_status() {
 
     // Initial state: disconnected with no folders
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -285,7 +285,7 @@ fn test_reconnect_after_user_dismissed_setup_help() {
 
     // Initial state: disconnected with no folders, setup help showing
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -319,7 +319,7 @@ fn test_complete_flow_after_dismissed_dialog() {
 
     // Start disconnected, dialog showing
     model.syncthing.connection_state = ConnectionState::Disconnected {
-        error_type: synctui::logic::errors::ErrorType::NetworkError,
+        error_type: stui::logic::errors::ErrorType::NetworkError,
         message: "Connection refused".to_string(),
     };
     model.syncthing.folders = vec![];
@@ -339,7 +339,7 @@ fn test_complete_flow_after_dismissed_dialog() {
     // Fetch folders
     model.ui.needs_folder_refresh = false;
     model.syncthing.folders = vec![
-        synctui::api::Folder {
+        stui::api::Folder {
             id: "test".to_string(),
             label: Some("Test".to_string()),
             path: "/data/test".to_string(),

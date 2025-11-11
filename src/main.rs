@@ -51,7 +51,7 @@ use api::{
 };
 use cache::CacheDb;
 use config::Config;
-use synctui::{DisplayMode, SortMode};
+use stui::{DisplayMode, SortMode};
 use ui::icons::{IconMode, IconRenderer, IconTheme};
 
 // Build version string with git hash and build date
@@ -770,10 +770,10 @@ fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
         }
     }
 
-    // Try ~/.config/synctui/config.yaml
+    // Try ~/.config/stui/config.yaml
     if let Some(config_dir) = dirs::config_dir() {
-        let synctui_dir = config_dir.join("synctui");
-        let config_path = synctui_dir.join("config.yaml");
+        let stui_dir = config_dir.join("stui");
+        let config_path = stui_dir.join("config.yaml");
 
         if config_path.exists() {
             return Ok(config_path);
@@ -789,12 +789,12 @@ fn get_config_path(cli_path: Option<String>) -> Result<std::path::PathBuf> {
     // No config found, provide helpful error
     let expected_path = if let Some(config_dir) = dirs::config_dir() {
         config_dir
-            .join("synctui")
+            .join("stui")
             .join("config.yaml")
             .display()
             .to_string()
     } else {
-        "~/.config/synctui/config.yaml".to_string()
+        "~/.config/stui/config.yaml".to_string()
     };
 
     anyhow::bail!(

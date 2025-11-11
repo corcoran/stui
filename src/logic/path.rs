@@ -69,7 +69,7 @@ pub fn translate_path(
 /// ```
 /// use std::collections::HashSet;
 /// use std::path::PathBuf;
-/// use synctui::logic::path::is_path_or_parent_in_set;
+/// use stui::logic::path::is_path_or_parent_in_set;
 ///
 /// let mut pending = HashSet::new();
 /// pending.insert(PathBuf::from("/foo/bar"));
