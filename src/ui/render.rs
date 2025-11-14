@@ -357,6 +357,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
         );
     }
 
+    // Render folder history modal (if active)
+    if let Some(ref modal_state) = app.model.ui.folder_history_modal {
+        crate::ui::folder_history::render_folder_history_modal(
+            f,
+            size,
+            modal_state,
+            &app.icon_renderer,
+        );
+    }
+
     // Render toast notification if active
     if let Some((message, _timestamp)) = &app.model.ui.toast_message {
         toast::render_toast(f, size, message);

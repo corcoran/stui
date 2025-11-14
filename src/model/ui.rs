@@ -6,8 +6,8 @@
 use std::time::Instant;
 
 use super::types::{
-    ConfirmAction, FileInfoPopupState, FolderTypeSelectionState, OutOfSyncFilterState,
-    OutOfSyncSummaryState, PatternSelectionState, VimCommandState,
+    ConfirmAction, FileInfoPopupState, FolderHistoryModal, FolderTypeSelectionState,
+    OutOfSyncFilterState, OutOfSyncSummaryState, PatternSelectionState, VimCommandState,
 };
 use crate::{DisplayMode, SortMode};
 
@@ -80,6 +80,9 @@ pub struct UiModel {
     /// Out-of-sync summary modal state
     pub out_of_sync_summary: Option<OutOfSyncSummaryState>,
 
+    /// Folder update history modal state
+    pub folder_history_modal: Option<FolderHistoryModal>,
+
     // ============================================
     // VISUAL STATE
     // ============================================
@@ -115,6 +118,7 @@ impl UiModel {
             search_origin_level: None,
             out_of_sync_filter: None,
             out_of_sync_summary: None,
+            folder_history_modal: None,
             sixel_cleanup_frames: 0,
             image_font_size: None,
             should_quit: false,

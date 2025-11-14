@@ -396,6 +396,10 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `S`: Toggle reverse sort order
 - `t`: Toggle info display (Off → TimestampOnly → TimestampAndSize → Off)
 - `p`: Pause/resume folder (folder view only, with confirmation)
+- `u`: **Folder Update History** - Shows recent file updates for the selected folder with lazy-loading pagination
+  - Loads files in batches of 100 as you scroll
+  - Auto-loads when within 10 items of bottom
+  - Press `Enter` on a file to jump directly to that file's location in breadcrumbs
 - Vim keybindings (optional): `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
 
 ### Search Feature

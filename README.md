@@ -20,6 +20,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
   - Shows remote files you need to download
   - Shows local changes in receive-only folders (added/deleted/modified files)
   - Works recursively across entire folder hierarchy
+- **Update History**: View recent file changes with timestamps (lazy-loaded pagination) — press `Enter` to jump directly to any file's location
 - **Flexible Sorting**: Sort by sync state, name, date, or size
 - **File Preview Popup**: View file details, text content, ANSI art, or images directly in terminal
   - **Text files**: Scrollable with vim keybindings
@@ -139,6 +140,7 @@ stui --debug
 |-----|--------|--------------|
 | `Ctrl-F` / `/` | **Search**: Enter search mode (recursive wildcard search) | No |
 | `f` | **Filter**: Toggle out-of-sync filter (shows remote needed files + local changes) | No |
+| `u` | **View Update History**: Show recent file updates for folder with lazy-loading pagination (folder view only). Press `Enter` on a file to jump to its location. | No |
 | `?` | Show detailed file info popup (metadata, sync state, preview). Note: `Enter` on files also opens preview. | No |
 | `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
 | `p` | Pause/resume folder (folder view only) | Yes |

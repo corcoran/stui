@@ -331,7 +331,9 @@ fn render_metadata_column(
     // Modified time
     lines.push(Line::from(vec![
         Span::styled("Modified: ", Style::default().fg(Color::Yellow)),
-        Span::raw(&state.browse_item.mod_time),
+        Span::raw(crate::logic::formatting::format_datetime(
+            &state.browse_item.mod_time,
+        )),
     ]));
 
     // Image resolution (if this is an image with loaded metadata)

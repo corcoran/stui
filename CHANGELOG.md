@@ -5,6 +5,35 @@ All notable changes to stui will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ✨ New Features
+
+**Folder Update History Enhancements**
+- **Jump to File from History**: Press `Enter` on any file in the folder history modal to navigate breadcrumbs directly to that file's location
+- Automatically enters the folder and traverses the directory tree to highlight the selected file
+- Graceful error handling: navigates as deep as possible if intermediate directories are missing
+- Clear toast messages guide user through navigation errors (missing directories, missing files)
+- **Implementation**: Pure path parsing logic with comprehensive test coverage (5 tests), reusable folder entry method
+
+### 🔧 Improvements
+
+**File Preview Datetime Formatting**
+- Standardized datetime display in file preview metadata to match folder history format
+- Before: `Modified: 2024-01-15T14:30:45.123456789Z` (raw RFC 3339)
+- After: `Modified: 2024-01-15 14:30:45` (clean, human-readable)
+- Added `format_datetime()` utility function with doctest coverage
+
+### 🧪 Testing
+
+- **604 total tests passing** (up from 569)
+- Added 5 new tests for path parsing logic (deep paths, root-level files, spaces in names)
+- Added integration test for jump-to-file path parsing
+- Added doctest for datetime formatting function
+- Zero compiler warnings, zero clippy warnings
+
+---
+
 ## [0.9.1] - 2025-11-10
 
 ### 🎨 Code Quality & Architecture

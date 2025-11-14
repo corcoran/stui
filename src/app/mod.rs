@@ -13,6 +13,7 @@
 
 pub(crate) mod file_ops;
 pub(crate) mod filters;
+pub(crate) mod folder_history;
 pub(crate) mod ignore;
 pub(crate) mod navigation;
 pub(crate) mod preview;

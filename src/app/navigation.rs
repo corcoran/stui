@@ -356,6 +356,159 @@ impl App {
         Ok(())
     }
 
+    /// Enter a folder from folder view (focus_level == 0)
+    ///
+    /// Creates the first breadcrumb level for the folder.
+    /// This is the programmatic equivalent of selecting a folder and pressing Enter.
+    pub async fn enter_folder(&mut self, folder_id: &str) -> anyhow::Result<()> {
+        use std::time::Instant;
+
+        log_debug(&format!("Entering folder: {}", folder_id));
+
+        // Find folder
+        let folder = self
+            .model
+            .syncthing
+            .folders
+            .iter()
+            .find(|f| f.id == folder_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Folder not found: {}", folder_id))?;
+
+        // Update selection in folder list
+        if let Some(idx) = self
+            .model
+            .syncthing
+            .folders
+            .iter()
+            .position(|f| f.id == folder_id)
+        {
+            self.model.navigation.folders_state_selection = Some(idx);
+        }
+
+        let folder_id = folder.id.clone();
+        let folder_label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
+        let folder_path = folder.path;
+
+        // Start timing
+        let start = Instant::now();
+
+        // Get folder sequence for cache validation
+        let folder_sequence = self
+            .model
+            .syncthing
+            .folder_statuses
+            .get(&folder_id)
+            .map(|s| s.sequence)
+            .unwrap_or(0);
+
+        // Create key for tracking in-flight operations
+        let browse_key = format!("{}:", folder_id);
+
+        // Remove from loading_browse set if it's there
+        self.model.performance.loading_browse.remove(&browse_key);
+
+        // Try cache first
+        let (items, local_items) = if let Ok(Some(cached_items)) =
+            self.cache
+                .get_browse_items(&folder_id, None, folder_sequence)
+        {
+            self.model.performance.cache_hit = Some(true);
+            let mut items = cached_items;
+            let local_items = self
+                .merge_local_only_files(&folder_id, &mut items, None)
+                .await;
+            (items, local_items)
+        } else {
+            // Mark as loading
+            self.model
+                .performance
+                .loading_browse
+                .insert(browse_key.clone());
+            self.model.performance.cache_hit = Some(false);
+
+            // Cache miss - fetch from API
+            match self.client.browse_folder(&folder_id, None).await {
+                Ok(mut items) => {
+                    let local_items = self
+                        .merge_local_only_files(&folder_id, &mut items, None)
+                        .await;
+
+                    let _ = self
+                        .cache
+                        .save_browse_items(&folder_id, None, &items, folder_sequence);
+
+                    self.model.performance.loading_browse.remove(&browse_key);
+
+                    (items, local_items)
+                }
+                Err(e) => {
+                    self.model.ui.show_toast(format!("Unable to browse: {}", e));
+                    self.model.performance.loading_browse.remove(&browse_key);
+                    return Err(e);
+                }
+            }
+        };
+
+        // Record load time
+        self.model.performance.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
+
+        // Load cached sync states for items
+        let mut file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+
+        // Mark local-only items with LocalOnly sync state
+        for local_item_name in &local_items {
+            file_sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+            let _ =
+                self.cache
+                    .save_sync_state(&folder_id, local_item_name, SyncState::LocalOnly, 0);
+        }
+
+        // Check which ignored files exist on disk
+        let parent_exists = Some(std::path::Path::new(&folder_path).exists());
+        let ignored_exists = logic::sync_states::check_ignored_existence(
+            &items,
+            &file_sync_states,
+            &folder_path,
+            parent_exists,
+        );
+
+        // Clear any existing breadcrumb trail and create first breadcrumb level
+        self.model.navigation.breadcrumb_trail.clear();
+        self.model
+            .navigation
+            .breadcrumb_trail
+            .push(model::BreadcrumbLevel {
+                folder_id,
+                folder_label,
+                folder_path: folder_path.clone(),
+                prefix: None,
+                items,
+                selected_index: None,
+                translated_base_path: folder_path,
+                file_sync_states,
+                ignored_exists,
+                filtered_items: None,
+            });
+
+        self.model.navigation.focus_level = 1;
+
+        // Apply initial sorting
+        self.sort_current_level();
+
+        // Apply search filter if search is active
+        if !self.model.ui.search_query.is_empty() {
+            self.apply_search_filter();
+        }
+
+        // Apply out-of-sync filter if active
+        if self.model.ui.out_of_sync_filter.is_some() {
+            self.apply_out_of_sync_filter();
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn go_back(&mut self) {
         // Only clear search if backing out past the level where it was initiated
         let should_clear_search = if let Some(origin_level) = self.model.ui.search_origin_level {
