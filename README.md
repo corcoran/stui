@@ -39,7 +39,7 @@ A fast, keyboard-driven terminal UI for managing [Syncthing](https://syncthing.n
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/stui.git
+git clone https://github.com/corcoran/stui.git
 cd stui
 cargo build --release
 sudo cp target/release/stui /usr/local/bin/
