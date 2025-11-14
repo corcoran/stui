@@ -45,6 +45,8 @@ fn build_hotkey_spans(
         hotkey_spans.extend(vec![
             Span::styled("f", Style::default().fg(Color::Yellow)),
             Span::raw(":Summary  "),
+            Span::styled("u", Style::default().fg(Color::Yellow)),
+            Span::raw(":Updates  "),
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Change Type  "),
             Span::styled("p", Style::default().fg(Color::Yellow)),

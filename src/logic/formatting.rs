@@ -109,6 +109,37 @@ pub fn format_human_size(size: u64) -> String {
     }
 }
 
+/// Format RFC 3339 datetime string to human-readable format (YYYY-MM-DD HH:MM:SS)
+///
+/// Converts ISO 8601/RFC 3339 timestamps (e.g., "2024-01-15T14:30:45Z")
+/// into a clean format matching the folder history display.
+///
+/// # Arguments
+/// * `rfc3339` - RFC 3339 formatted datetime string
+///
+/// # Returns
+/// Formatted string like "2025-01-15 14:30:45", or the original string if parsing fails
+///
+/// # Examples
+/// ```
+/// use stui::logic::formatting::format_datetime;
+///
+/// assert_eq!(format_datetime("2024-01-15T14:30:45Z"), "2024-01-15 14:30:45");
+/// assert_eq!(format_datetime("2024-01-15T14:30:45.123456Z"), "2024-01-15 14:30:45");
+/// assert_eq!(format_datetime("invalid"), "invalid"); // Falls back to original
+/// ```
+pub fn format_datetime(rfc3339: &str) -> String {
+    use chrono::DateTime;
+
+    // Try to parse as RFC 3339
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(rfc3339) {
+        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        // Fallback: return original string if parsing fails
+        rfc3339.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -155,6 +155,31 @@ pub struct OutOfSyncSummaryState {
     pub loading: HashSet<String>,
 }
 
+/// Folder update history modal state
+#[derive(Debug, Clone)]
+pub struct FolderHistoryModal {
+    pub folder_id: String,
+    pub folder_label: String,
+    pub entries: Vec<FolderHistoryEntry>,
+    pub selected_index: usize,
+    // Pagination state
+    pub total_files_scanned: usize,
+    pub loading: bool,
+    pub has_more: bool,
+    pub current_offset: usize,
+    // Sorted file cache for pagination (path, mod_time, size)
+    pub all_files_sorted: Option<Vec<(String, std::time::SystemTime, u64)>>,
+}
+
+/// A single entry in the folder history modal
+#[derive(Debug, Clone)]
+pub struct FolderHistoryEntry {
+    pub timestamp: std::time::SystemTime,
+    pub event_type: String,
+    pub file_path: String,
+    pub file_size: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +488,156 @@ mod tests {
         };
         let cloned = action.clone();
         assert_eq!(action, cloned);
+    }
+
+    // ========================================
+    // FOLDER HISTORY MODAL
+    // ========================================
+
+    #[test]
+    fn test_folder_history_modal_creation() {
+        let modal = FolderHistoryModal {
+            folder_id: "test-folder".to_string(),
+            folder_label: "Test Folder".to_string(),
+            entries: vec![],
+            selected_index: 0,
+            total_files_scanned: 0,
+            loading: false,
+            has_more: true,
+            current_offset: 0,
+            all_files_sorted: None,
+        };
+
+        assert_eq!(modal.folder_id, "test-folder");
+        assert_eq!(modal.folder_label, "Test Folder");
+        assert_eq!(modal.entries.len(), 0);
+        assert_eq!(modal.selected_index, 0);
+    }
+
+    #[test]
+    fn test_folder_history_entry_creation() {
+        use std::time::SystemTime;
+
+        let entry = FolderHistoryEntry {
+            timestamp: SystemTime::now(),
+            event_type: "ItemFinished".to_string(),
+            file_path: "test.txt".to_string(),
+            file_size: Some(1024),
+        };
+
+        assert_eq!(entry.file_path, "test.txt");
+        assert_eq!(entry.event_type, "ItemFinished");
+        assert_eq!(entry.file_size, Some(1024));
+    }
+
+    #[test]
+    fn test_folder_history_modal_is_clone() {
+        use std::time::SystemTime;
+
+        let modal = FolderHistoryModal {
+            folder_id: "test".to_string(),
+            folder_label: "Test".to_string(),
+            entries: vec![FolderHistoryEntry {
+                timestamp: SystemTime::now(),
+                event_type: "ItemFinished".to_string(),
+                file_path: "file.txt".to_string(),
+                file_size: None,
+            }],
+            selected_index: 0,
+            total_files_scanned: 0,
+            loading: false,
+            has_more: true,
+            current_offset: 0,
+            all_files_sorted: None,
+        };
+
+        let cloned = modal.clone();
+        assert_eq!(modal.folder_id, cloned.folder_id);
+        assert_eq!(modal.entries.len(), cloned.entries.len());
+    }
+
+    // ========================================
+    // FOLDER HISTORY PAGINATION
+    // ========================================
+
+    #[test]
+    fn test_folder_history_modal_initial_state() {
+        let modal = FolderHistoryModal {
+            folder_id: "test-folder".to_string(),
+            folder_label: "Test Folder".to_string(),
+            entries: vec![],
+            selected_index: 0,
+            total_files_scanned: 0,
+            loading: false,
+            has_more: true,
+            current_offset: 0,
+            all_files_sorted: None,
+        };
+
+        assert_eq!(modal.total_files_scanned, 0);
+        assert!(!modal.loading);
+        assert!(modal.has_more); // Initially assume more files exist
+        assert_eq!(modal.current_offset, 0);
+        assert!(modal.all_files_sorted.is_none()); // No cached files initially
+    }
+
+    #[test]
+    fn test_pagination_state_updates() {
+        use std::time::SystemTime;
+
+        let mut modal = FolderHistoryModal {
+            folder_id: "test-folder".to_string(),
+            folder_label: "Test Folder".to_string(),
+            entries: vec![],
+            selected_index: 0,
+            total_files_scanned: 0,
+            loading: false,
+            has_more: true,
+            current_offset: 0,
+            all_files_sorted: None,
+        };
+
+        // Simulate loading first batch
+        modal.loading = true;
+        assert!(modal.loading);
+
+        // Simulate batch loaded
+        modal.entries.push(FolderHistoryEntry {
+            timestamp: SystemTime::now(),
+            event_type: "Modified".to_string(),
+            file_path: "file1.txt".to_string(),
+            file_size: Some(1024),
+        });
+        modal.total_files_scanned = 100;
+        modal.current_offset = 100;
+        modal.loading = false;
+        modal.has_more = true;
+
+        assert_eq!(modal.entries.len(), 1);
+        assert_eq!(modal.total_files_scanned, 100);
+        assert_eq!(modal.current_offset, 100);
+        assert!(!modal.loading);
+        assert!(modal.has_more);
+    }
+
+    #[test]
+    fn test_has_more_detection() {
+        let mut modal = FolderHistoryModal {
+            folder_id: "test-folder".to_string(),
+            folder_label: "Test Folder".to_string(),
+            entries: vec![],
+            selected_index: 0,
+            total_files_scanned: 50,
+            loading: false,
+            has_more: true,
+            current_offset: 0,
+            all_files_sorted: None,
+        };
+
+        // Simulate final batch with less than 100 files
+        modal.has_more = false;
+
+        assert!(!modal.has_more);
+        assert_eq!(modal.total_files_scanned, 50);
     }
 }

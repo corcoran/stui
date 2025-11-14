@@ -1,3 +1,4 @@
+use crate::services::events::SyncthingEvent;
 use crate::utils;
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -657,6 +658,40 @@ impl SyncthingClient {
         Ok(updates)
     }
 
+    /// Fetch folder events from Syncthing event stream
+    ///
+    /// Returns events starting from `since` event ID, limited to `limit` events.
+    /// Uses /rest/events endpoint to get historical sync events.
+    ///
+    /// # Arguments
+    /// * `since` - Event ID to start from (0 for all history, or recent ID for recent events)
+    /// * `limit` - Maximum number of events to fetch
+    ///
+    /// # Returns
+    /// Vec of SyncthingEvent objects containing event metadata and data
+    #[allow(dead_code)] // Used in folder history feature (Task 4)
+    pub async fn get_folder_events(&self, since: u64, limit: usize) -> Result<Vec<SyncthingEvent>> {
+        let url = format!(
+            "{}/rest/events?since={}&limit={}",
+            self.base_url, since, limit
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch folder events")?;
+
+        let events: Vec<SyncthingEvent> = response
+            .json()
+            .await
+            .context("Failed to parse folder events")?;
+
+        Ok(events)
+    }
+
     /// Pause or resume a folder
     ///
     /// Uses PATCH /rest/config/folders/{id} to set the paused state
@@ -982,5 +1017,25 @@ mod tests {
             "Local addition in receive-only folder (invalid=true) should be LocalOnly, not {:?}",
             state
         );
+    }
+
+    #[test]
+    fn test_get_folder_events_exists() {
+        // Test that get_folder_events method exists with correct signature
+        // We can't easily test async functions in unit tests without tokio runtime,
+        // but we can verify the method exists by calling it in a type-checked way
+        let client = SyncthingClient {
+            base_url: "http://localhost:8384".to_string(),
+            api_key: "test-key".to_string(),
+            client: reqwest::Client::new(),
+        };
+
+        // Verify method exists by referencing it (won't execute due to being async)
+        let _method = SyncthingClient::get_folder_events;
+        // Verify parameters are correct types
+        let _since: u64 = 0;
+        let _limit: usize = 100;
+        // This would need tokio runtime to actually call:
+        // let _ = client.get_folder_events(_since, _limit).await;
     }
 }

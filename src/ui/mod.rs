@@ -15,6 +15,7 @@
 
 pub mod breadcrumb;
 pub mod dialogs;
+pub mod folder_history;
 pub mod folder_list;
 pub mod icons;
 pub mod layout;

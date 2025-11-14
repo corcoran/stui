@@ -11,6 +11,14 @@ use crate::api::SyncState;
 use crate::model::{self, ConfirmAction};
 use crate::App;
 
+/// Check if folder history modal should load more files
+///
+/// Returns true if user is near bottom (within 10 items) and more files are available
+fn should_load_more_history(modal: &crate::model::types::FolderHistoryModal) -> bool {
+    let near_bottom = modal.selected_index >= modal.entries.len().saturating_sub(10);
+    near_bottom && !modal.loading && modal.has_more
+}
+
 /// Handle keyboard input
 ///
 /// Processes all keyboard events and dispatches to appropriate actions.
@@ -288,6 +296,207 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             _ => {
                 // Ignore other keys while modal is showing
+                return Ok(());
+            }
+        }
+    }
+
+    // ========================================
+    // FOLDER HISTORY MODAL HANDLERS
+    // ========================================
+
+    // Handle folder history modal (process before other keys)
+    if let Some(ref mut modal_state) = app.model.ui.folder_history_modal {
+        match key.code {
+            KeyCode::Enter => {
+                // Get selected file path and folder ID before closing modal
+                if let Some(entry) = modal_state.entries.get(modal_state.selected_index) {
+                    let file_path = entry.file_path.clone();
+                    let folder_id = modal_state.folder_id.clone();
+
+                    // Close modal first for cleaner UX
+                    app.close_folder_history_modal();
+
+                    // Navigate back to folder view if we're in breadcrumbs
+                    while app.model.navigation.focus_level > 0 {
+                        app.go_back();
+                    }
+
+                    // Enter the folder to establish breadcrumb level 1
+                    match app.enter_folder(&folder_id).await {
+                        Ok(()) => {
+                            // Now jump to the file within the folder
+                            if let Err(e) = app.jump_to_file(&file_path).await {
+                                app.model
+                                    .ui
+                                    .show_toast(format!("Failed to navigate: {}", e));
+                            }
+                        }
+                        Err(e) => {
+                            app.model
+                                .ui
+                                .show_toast(format!("Failed to enter folder: {}", e));
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                app.close_folder_history_modal();
+                return Ok(());
+            }
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && app.model.ui.vim_mode =>
+            {
+                // Half page up (Ctrl-u in vim mode) - must be before plain 'u'
+                modal_state.selected_index = modal_state.selected_index.saturating_sub(5);
+                return Ok(());
+            }
+            KeyCode::Char('u') => {
+                // Toggle - close modal with same key
+                app.close_folder_history_modal();
+                return Ok(());
+            }
+            KeyCode::Up | KeyCode::Char('k') if app.model.ui.vim_mode => {
+                // Navigate up in history list
+                if modal_state.selected_index > 0 {
+                    modal_state.selected_index -= 1;
+                }
+                return Ok(());
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.model.ui.vim_mode => {
+                // Navigate down in history list
+                if modal_state.selected_index + 1 < modal_state.entries.len() {
+                    modal_state.selected_index += 1;
+                }
+
+                // Auto-load more if near bottom
+                if should_load_more_history(modal_state) {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::Up if !app.model.ui.vim_mode => {
+                // Navigate up (non-vim mode)
+                if modal_state.selected_index > 0 {
+                    modal_state.selected_index -= 1;
+                }
+                return Ok(());
+            }
+            KeyCode::Down if !app.model.ui.vim_mode => {
+                // Navigate down (non-vim mode)
+                if modal_state.selected_index + 1 < modal_state.entries.len() {
+                    modal_state.selected_index += 1;
+                }
+
+                // Auto-load more if near bottom
+                if should_load_more_history(modal_state) {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::PageUp => {
+                // Page up (10 items)
+                modal_state.selected_index = modal_state.selected_index.saturating_sub(10);
+                return Ok(());
+            }
+            KeyCode::PageDown => {
+                // Page down (10 items)
+                modal_state.selected_index = (modal_state.selected_index + 10)
+                    .min(modal_state.entries.len().saturating_sub(1));
+
+                // Auto-load more if near bottom
+                if should_load_more_history(modal_state) {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::Home | KeyCode::Char('g')
+                if app.model.ui.vim_mode
+                    && app.model.ui.vim_command_state
+                        == crate::model::VimCommandState::WaitingForSecondG =>
+            {
+                // Jump to first (gg in vim mode)
+                modal_state.selected_index = 0;
+                app.model.ui.vim_command_state = crate::model::VimCommandState::None;
+                return Ok(());
+            }
+            KeyCode::Home if !app.model.ui.vim_mode => {
+                // Jump to first (non-vim mode)
+                modal_state.selected_index = 0;
+                return Ok(());
+            }
+            KeyCode::End | KeyCode::Char('G') if app.model.ui.vim_mode => {
+                // Jump to last (G in vim mode)
+                if !modal_state.entries.is_empty() {
+                    modal_state.selected_index = modal_state.entries.len() - 1;
+                }
+
+                // Immediate load if at end and more available (fast jump)
+                if modal_state.has_more && !modal_state.loading {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::End if !app.model.ui.vim_mode => {
+                // Jump to last (non-vim mode)
+                if !modal_state.entries.is_empty() {
+                    modal_state.selected_index = modal_state.entries.len() - 1;
+                }
+
+                // Immediate load if at end and more available (fast jump)
+                if modal_state.has_more && !modal_state.loading {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::Char('d')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && app.model.ui.vim_mode =>
+            {
+                // Half page down (Ctrl-d in vim mode)
+                modal_state.selected_index = (modal_state.selected_index + 5)
+                    .min(modal_state.entries.len().saturating_sub(1));
+
+                // Auto-load more if near bottom
+                if should_load_more_history(modal_state) {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::Char('f')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && app.model.ui.vim_mode =>
+            {
+                // Full page down (Ctrl-f in vim mode)
+                modal_state.selected_index = (modal_state.selected_index + 10)
+                    .min(modal_state.entries.len().saturating_sub(1));
+
+                // Auto-load more if near bottom
+                if should_load_more_history(modal_state) {
+                    let _ = app.load_next_history_batch().await;
+                }
+
+                return Ok(());
+            }
+            KeyCode::Char('b')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && app.model.ui.vim_mode =>
+            {
+                // Full page up (Ctrl-b in vim mode)
+                modal_state.selected_index = modal_state.selected_index.saturating_sub(10);
+                return Ok(());
+            }
+            KeyCode::Char('g') if app.model.ui.vim_mode => {
+                // First g in gg sequence
+                app.model.ui.vim_command_state = crate::model::VimCommandState::WaitingForSecondG;
+                return Ok(());
+            }
+            _ => {
+                // Ignore other keys while modal is open
                 return Ok(());
             }
         }
@@ -762,6 +971,14 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char('f') if app.model.navigation.focus_level > 0 => {
             // Toggle out-of-sync filter (only in breadcrumb view)
             app.activate_out_of_sync_filter();
+        }
+        KeyCode::Char('u') if app.model.navigation.focus_level == 0 => {
+            // Open folder update history modal (folder view only)
+            if let Some(folder) = app.model.selected_folder() {
+                let folder_id = folder.id.clone();
+                let label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
+                app.open_folder_history_modal(&folder_id, &label).await;
+            }
         }
         KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {
             // Pause/resume folder (only in folder view)
