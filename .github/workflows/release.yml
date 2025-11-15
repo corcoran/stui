@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/x86_64-unknown-linux-musl/release/stui package/stui/
-          cp README.md config.yaml.example package/stui/
+          cp README.md CHANGELOG.md config.yaml.example package/stui/
           cd package
           tar -czf ../stui-linux-x86_64.tar.gz stui
 
@@ -77,7 +77,7 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/aarch64-unknown-linux-musl/release/stui package/stui/
-          cp README.md config.yaml.example package/stui/
+          cp README.md CHANGELOG.md config.yaml.example package/stui/
           cd package
           tar -czf ../stui-linux-aarch64.tar.gz stui
 
@@ -110,7 +110,7 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/release/stui package/stui/
-          cp README.md config.yaml.example package/stui/
+          cp README.md CHANGELOG.md config.yaml.example package/stui/
           cd package
           tar -czf ../stui-macos-intel.tar.gz stui
 
@@ -143,7 +143,7 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/release/stui package/stui/
-          cp README.md config.yaml.example package/stui/
+          cp README.md CHANGELOG.md config.yaml.example package/stui/
           cd package
           tar -czf ../stui-macos-arm64.tar.gz stui
 
@@ -177,7 +177,7 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/release/stui.exe package/stui/
-          cp README.md package/stui/
+          cp README.md CHANGELOG.md config.yaml.example package/stui/
           cp config.yaml.example package/stui/
           cd package
           Compress-Archive -Path stui -DestinationPath ../stui-windows-x86_64.zip
