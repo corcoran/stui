@@ -208,6 +208,26 @@ del %LOCALAPPDATA%\stui\cache\cache.db
 - No async loading spinners (planned)
 - No batch operations for multi-select yet (planned)
 
+## What Stui Cannot Do (Yet?)
+
+Stui is designed for **monitoring and file-level operations**, not initial setup or configuration. You'll still need the Syncthing Web UI for these tasks:
+
+| Category | Missing Features (that Web UI CAN do) | Impact |
+|----------|-----------------|--------|
+| **Device Management** | Add/remove/edit devices, configure device settings (compression, rate limits, introducer), view device IDs | Cannot set up or manage sync relationships |
+| **Folder Setup** | Create/delete folders, edit folder settings (path, label, versioning, intervals, pull order), share folders with devices | Cannot configure new sync folders or modify existing folder settings |
+| **Versioning** | Enable/configure versioning schemes (Simple/Staggered/Trashcan/External), browse version history, restore old versions | No access to file version history or recovery |
+| **System Configuration** | GUI settings (authentication, theme), connection settings (listen addresses, NAT, UPnP), global bandwidth limits, discovery/relay toggles | Cannot configure Syncthing's network or system behavior |
+| **Advanced Ignore Patterns** | Direct `.stignore` editing with complex patterns, pattern validation/help | Limited to adding/removing individual files only |
+| **Diagnostics & Monitoring** | Syncthing logs, failed items view | Limited troubleshooting capabilities |
+| **System Control** | Restart/shutdown Syncthing, API key management | Must use command line for system administration |
+
+**What Stui DOES Better Than Web UI:**
+- File-level browsing, deletion, and restore operations (Web UI doesn't browse individual files)
+- Real-time sync state monitoring with visual indicators
+- Fast keyboard-driven navigation and search
+- Terminal-native file previews (text, images, ANSI art)
+
 ## Contributing
 
 Contributions welcome! This project is actively being developed. See [PLAN.md](PLAN.md) for roadmap and [CLAUDE.md](CLAUDE.md) for architecture details.
