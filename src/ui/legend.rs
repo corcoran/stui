@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Build hotkey spans (extracted for testability)
@@ -43,8 +43,6 @@ fn build_hotkey_spans(
     // Folder-specific actions - only in folder view (focus_level == 0)
     if focus_level == 0 {
         hotkey_spans.extend(vec![
-            Span::styled("f", Style::default().fg(Color::Yellow)),
-            Span::raw(":Summary  "),
             Span::styled("u", Style::default().fg(Color::Yellow)),
             Span::raw(":Updates  "),
             Span::styled("c", Style::default().fg(Color::Yellow)),

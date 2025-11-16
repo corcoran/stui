@@ -4,7 +4,7 @@
 //! 1. App starts with Syncthing down → shows setup help dialog
 //! 2. Syncthing comes back online → folders populate + dialog dismisses
 
-use stui::model::{syncthing::ConnectionState, Model};
+use stui::model::{Model, syncthing::ConnectionState};
 
 /// Test: When app starts disconnected with no folders, setup help should be shown
 #[test]
@@ -81,6 +81,7 @@ fn test_folder_population_dismisses_setup_help() {
             path: "/data/test1".to_string(),
             folder_type: "sendreceive".to_string(),
             paused: false,
+            devices: vec![],
         },
         stui::api::Folder {
             id: "test-folder-2".to_string(),
@@ -88,6 +89,7 @@ fn test_folder_population_dismisses_setup_help() {
             path: "/data/test2".to_string(),
             folder_type: "sendreceive".to_string(),
             paused: false,
+            devices: vec![],
         },
     ];
 
@@ -143,6 +145,7 @@ fn test_complete_reconnection_flow() {
         path: "/data/test".to_string(),
         folder_type: "sendreceive".to_string(),
         paused: false,
+        devices: vec![],
     }];
 
     if !model.syncthing.folders.is_empty() {
@@ -180,6 +183,7 @@ fn test_reconnection_with_existing_folders_no_flag() {
         path: "/data/existing".to_string(),
         folder_type: "sendreceive".to_string(),
         paused: false,
+        devices: vec![],
     }];
     model.ui.needs_folder_refresh = false;
 
@@ -361,6 +365,7 @@ fn test_complete_flow_after_dismissed_dialog() {
         path: "/data/test".to_string(),
         folder_type: "sendreceive".to_string(),
         paused: false,
+        devices: vec![],
     }];
 
     // Select first folder

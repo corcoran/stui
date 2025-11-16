@@ -178,9 +178,11 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert!(result.iter().any(|e| e.file_path == "root.txt"));
         assert!(result.iter().any(|e| e.file_path == "subdir/nested1.txt"));
-        assert!(result
-            .iter()
-            .any(|e| e.file_path == "level1/level2/level3/deep.txt"));
+        assert!(
+            result
+                .iter()
+                .any(|e| e.file_path == "level1/level2/level3/deep.txt")
+        );
     }
 
     // ========================================

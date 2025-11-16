@@ -2,7 +2,7 @@
 //!
 //! Pure functions for UI state cycling and transitions.
 
-use crate::{model::VimCommandState, DisplayMode, SortMode};
+use crate::{DisplayMode, SortMode, model::VimCommandState};
 
 /// Cycle to the next display mode: Off → TimestampOnly → TimestampAndSize → Off
 ///

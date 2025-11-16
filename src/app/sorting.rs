@@ -5,7 +5,7 @@
 //! - Reversible sorting
 //! - Selection preservation across sorts
 
-use crate::{logic, App};
+use crate::{App, logic};
 
 impl App {
     /// Sort a specific breadcrumb level by its index

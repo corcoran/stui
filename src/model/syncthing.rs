@@ -66,6 +66,9 @@ pub struct SyncthingModel {
     /// Cached transfer rates (download, upload) in bytes/sec
     pub last_transfer_rates: Option<(f64, f64)>,
 
+    /// Connected device count
+    pub connected_device_count: Option<usize>,
+
     // ============================================
     // FOLDER-SPECIFIC STATE
     // ============================================
@@ -91,6 +94,7 @@ impl SyncthingModel {
             last_connection_stats: None,
             device_name: None,
             last_transfer_rates: None,
+            connected_device_count: None,
             last_folder_updates: HashMap::new(),
         }
     }
@@ -175,5 +179,33 @@ mod tests {
             next_retry_secs: 5,
         };
         assert_eq!(state3, state4);
+    }
+
+    #[test]
+    fn test_devices_storage() {
+        let mut model = SyncthingModel::new();
+
+        let devices = vec![
+            crate::api::Device {
+                id: "DEVICE1".to_string(),
+                name: "Device 1".to_string(),
+            },
+            crate::api::Device {
+                id: "DEVICE2".to_string(),
+                name: "Device 2".to_string(),
+            },
+        ];
+
+        model.devices = devices.clone();
+        assert_eq!(model.devices.len(), 2);
+        assert_eq!(model.devices[0].name, "Device 1");
+    }
+
+    #[test]
+    fn test_connected_device_count() {
+        let mut model = SyncthingModel::new();
+
+        model.connected_device_count = Some(3);
+        assert_eq!(model.connected_device_count, Some(3));
     }
 }

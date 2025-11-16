@@ -5,11 +5,11 @@
 
 use std::time::Instant;
 
+use crate::App;
 use crate::api::SyncState;
 use crate::model;
 use crate::model::syncthing::ConnectionState;
 use crate::services::api::{ApiRequest, ApiResponse, Priority};
-use crate::App;
 
 /// Handle API response from background service
 ///
@@ -75,7 +75,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             };
 
             if !is_relevant {
-                crate::log_debug(&format!("DEBUG [BrowseResult]: Skipping irrelevant response for folder={} prefix={:?} (navigated away)", folder_id, prefix));
+                crate::log_debug(&format!(
+                    "DEBUG [BrowseResult]: Skipping irrelevant response for folder={} prefix={:?} (navigated away)",
+                    folder_id, prefix
+                ));
                 return; // Skip saving and UI updates for responses from folders we've left
             }
 
@@ -135,7 +138,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             crate::log_debug(&format!(
                 "DEBUG [BrowseResult]: folder={} prefix={:?} items_count={} focus_level={} breadcrumb_count={}",
-                folder_id, prefix, items.len(), app.model.navigation.focus_level, app.model.navigation.breadcrumb_trail.len()
+                folder_id,
+                prefix,
+                items.len(),
+                app.model.navigation.focus_level,
+                app.model.navigation.breadcrumb_trail.len()
             ));
 
             // Save merged items to cache
@@ -418,12 +425,18 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                             updated = true;
                         }
                     } else {
-                        crate::log_debug(&format!("DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}", file_path, level_prefix));
+                        crate::log_debug(&format!(
+                            "DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}",
+                            file_path, level_prefix
+                        ));
                     }
                 }
             }
             if !updated {
-                crate::log_debug(&format!("DEBUG [FileInfoResult UI update]: WARNING - No matching level found for folder={} path={}", folder_id, file_path));
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult UI update]: WARNING - No matching level found for folder={} path={}",
+                    folder_id, file_path
+                ));
             }
         }
 
@@ -463,7 +476,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // SystemStatus will handle setting needs_folder_refresh if folders are empty
             if was_disconnected {
                 let start = std::time::Instant::now();
-                crate::log_debug("DEBUG [FolderStatusResult]: Just reconnected, requesting immediate system status");
+                crate::log_debug(
+                    "DEBUG [FolderStatusResult]: Just reconnected, requesting immediate system status",
+                );
                 let _ = app.api_tx.send(ApiRequest::GetSystemStatus);
                 crate::log_debug(&format!(
                     "DEBUG [FolderStatusResult]: GetSystemStatus sent in {:?}",
@@ -475,16 +490,16 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             let receive_only_count = status.receive_only_total_items;
 
             // Check if sequence changed
-            if let Some(&last_seq) = app.model.performance.last_known_sequences.get(&folder_id) {
-                if last_seq != sequence {
-                    crate::log_debug(&format!(
-                        "DEBUG [FolderStatusResult]: Sequence changed from {} to {} for folder={}",
-                        last_seq, sequence, folder_id
-                    ));
+            if let Some(&last_seq) = app.model.performance.last_known_sequences.get(&folder_id)
+                && last_seq != sequence
+            {
+                crate::log_debug(&format!(
+                    "DEBUG [FolderStatusResult]: Sequence changed from {} to {} for folder={}",
+                    last_seq, sequence, folder_id
+                ));
 
-                    // Sequence changed - invalidate cache and refresh
-                    app.invalidate_and_refresh_folder(&folder_id);
-                }
+                // Sequence changed - invalidate cache and refresh
+                app.invalidate_and_refresh_folder(&folder_id);
             }
 
             // Check if receive-only item count changed (indicates local-only files added/removed)
@@ -493,32 +508,34 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 .performance
                 .last_known_receive_only_counts
                 .get(&folder_id)
+                && last_count != receive_only_count
             {
-                if last_count != receive_only_count {
-                    crate::log_debug(&format!("DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}", last_count, receive_only_count, folder_id));
+                crate::log_debug(&format!(
+                    "DEBUG [FolderStatusResult]: receiveOnlyTotalItems changed from {} to {} for folder={}",
+                    last_count, receive_only_count, folder_id
+                ));
 
-                    // Trigger refresh for currently viewed directory
-                    if !app.model.navigation.breadcrumb_trail.is_empty()
-                        && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
-                    {
-                        for level in &mut app.model.navigation.breadcrumb_trail {
-                            if level.folder_id == folder_id {
-                                let browse_key = format!(
-                                    "{}:{}",
-                                    folder_id,
-                                    level.prefix.as_deref().unwrap_or("")
-                                );
-                                if !app.model.performance.loading_browse.contains(&browse_key) {
-                                    app.model.performance.loading_browse.insert(browse_key);
+                // Trigger refresh for currently viewed directory
+                if !app.model.navigation.breadcrumb_trail.is_empty()
+                    && app.model.navigation.breadcrumb_trail[0].folder_id == folder_id
+                {
+                    for level in &mut app.model.navigation.breadcrumb_trail {
+                        if level.folder_id == folder_id {
+                            let browse_key =
+                                format!("{}:{}", folder_id, level.prefix.as_deref().unwrap_or(""));
+                            if !app.model.performance.loading_browse.contains(&browse_key) {
+                                app.model.performance.loading_browse.insert(browse_key);
 
-                                    let _ = app.api_tx.send(ApiRequest::BrowseFolder {
-                                        folder_id: folder_id.clone(),
-                                        prefix: level.prefix.clone(),
-                                        priority: Priority::High,
-                                    });
+                                let _ = app.api_tx.send(ApiRequest::BrowseFolder {
+                                    folder_id: folder_id.clone(),
+                                    prefix: level.prefix.clone(),
+                                    priority: Priority::High,
+                                });
 
-                                    crate::log_debug(&format!("DEBUG [FolderStatusResult]: Triggered browse refresh for prefix={:?}", level.prefix));
-                                }
+                                crate::log_debug(&format!(
+                                    "DEBUG [FolderStatusResult]: Triggered browse refresh for prefix={:?}",
+                                    level.prefix
+                                ));
                             }
                         }
                     }
@@ -549,7 +566,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             error,
         } => {
             if success {
-                crate::log_debug(&format!("DEBUG [RescanResult]: Successfully rescanned folder={}, requesting immediate status update", folder_id));
+                crate::log_debug(&format!(
+                    "DEBUG [RescanResult]: Successfully rescanned folder={}, requesting immediate status update",
+                    folder_id
+                ));
 
                 // Immediately request folder status to detect sequence changes
                 // This makes the rescan feel more responsive
@@ -585,7 +605,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     if app.model.syncthing.devices.is_empty()
                         || app.model.syncthing.device_name.is_none()
                     {
-                        crate::log_debug("DEBUG [SystemStatusResult]: Requesting devices list to update device name");
+                        crate::log_debug(
+                            "DEBUG [SystemStatusResult]: Requesting devices list to update device name",
+                        );
                         let _ = app.api_tx.send(ApiRequest::GetDevices);
                     }
 
@@ -595,17 +617,16 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // We also don't check show_setup_help because user might have dismissed it
                     if app.model.syncthing.folders.is_empty() {
                         crate::log_debug(&format!(
-                        "DEBUG [SystemStatusResult]: Connected with no folders, setting fetch flag (was_disconnected={} show_setup_help={})",
-                        was_disconnected,
-                        app.model.ui.show_setup_help
-                    ));
+                            "DEBUG [SystemStatusResult]: Connected with no folders, setting fetch flag (was_disconnected={} show_setup_help={})",
+                            was_disconnected, app.model.ui.show_setup_help
+                        ));
                         app.model.ui.needs_folder_refresh = true;
                     } else {
                         crate::log_debug(&format!(
-                        "DEBUG [SystemStatusResult]: NOT setting flag - folders.len()={} (was_disconnected={})",
-                        app.model.syncthing.folders.len(),
-                        was_disconnected
-                    ));
+                            "DEBUG [SystemStatusResult]: NOT setting flag - folders.len()={} (was_disconnected={})",
+                            app.model.syncthing.folders.len(),
+                            was_disconnected
+                        ));
                     }
 
                     // Successful API call - mark as connected
@@ -633,9 +654,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     } else {
                         // Already reconnecting, don't override
                         crate::log_debug(&format!(
-                        "DEBUG [SystemStatusResult ERROR]: {} (reconnection active, state unchanged)",
-                        e
-                    ));
+                            "DEBUG [SystemStatusResult ERROR]: {} (reconnection active, state unchanged)",
+                            e
+                        ));
                     }
                 }
             }
@@ -683,7 +704,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 // NOTE: Connection stats failures don't mark the entire connection as Disconnected
                 // This is a non-critical endpoint - other API calls may still be working
                 // Log the error but don't change connection state
-                crate::log_debug(&format!("DEBUG [ConnectionStatsResult ERROR]: {} (non-critical, connection state unchanged)", e));
+                crate::log_debug(&format!(
+                    "DEBUG [ConnectionStatsResult ERROR]: {} (non-critical, connection state unchanged)",
+                    e
+                ));
             }
         },
 
@@ -716,7 +740,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                             ));
                         }
                     } else {
-                        crate::log_debug("DEBUG [DevicesResult]: No system status available yet, cannot extract device name");
+                        crate::log_debug(
+                            "DEBUG [DevicesResult]: No system status available yet, cannot extract device name",
+                        );
                     }
                 }
 
@@ -762,26 +788,26 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // If in breadcrumb view for this folder, apply/reapply filter now that data is ready
             if app.model.navigation.focus_level > 0 {
                 let level_idx = app.model.navigation.focus_level - 1;
-                if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                    if level.folder_id == folder_id {
-                        if app.model.ui.out_of_sync_filter.is_none() {
-                            // First time: activate filter
-                            app.model.ui.out_of_sync_filter =
-                                Some(model::types::OutOfSyncFilterState {
-                                    origin_level: app.model.navigation.focus_level,
-                                    last_refresh: std::time::SystemTime::now(),
-                                });
+                if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx)
+                    && level.folder_id == folder_id
+                {
+                    if app.model.ui.out_of_sync_filter.is_none() {
+                        // First time: activate filter
+                        app.model.ui.out_of_sync_filter =
+                            Some(model::types::OutOfSyncFilterState {
+                                origin_level: app.model.navigation.focus_level,
+                                last_refresh: std::time::SystemTime::now(),
+                            });
 
-                            // Apply filter
-                            app.apply_out_of_sync_filter();
+                        // Apply filter
+                        app.apply_out_of_sync_filter();
 
-                            // Clear loading toast
-                            app.model.ui.toast_message = None;
-                        } else {
-                            // Filter already active: re-apply with fresh cache data
-                            // This handles the case where cache was invalidated and just refreshed
-                            app.apply_out_of_sync_filter();
-                        }
+                        // Clear loading toast
+                        app.model.ui.toast_message = None;
+                    } else {
+                        // Filter already active: re-apply with fresh cache data
+                        // This handles the case where cache was invalidated and just refreshed
+                        app.apply_out_of_sync_filter();
                     }
                 }
             }

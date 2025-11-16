@@ -83,6 +83,12 @@ pub struct UiModel {
     /// Folder update history modal state
     pub folder_history_modal: Option<FolderHistoryModal>,
 
+    /// Per-folder activity tracking (folder_id -> (event_message, timestamp))
+    pub folder_activity: std::collections::HashMap<String, (String, std::time::SystemTime)>,
+
+    /// Device details modal state
+    pub device_details_modal: Option<super::types::DeviceDetailsModal>,
+
     // ============================================
     // VISUAL STATE
     // ============================================
@@ -119,6 +125,8 @@ impl UiModel {
             out_of_sync_filter: None,
             out_of_sync_summary: None,
             folder_history_modal: None,
+            folder_activity: std::collections::HashMap::new(),
+            device_details_modal: None,
             sixel_cleanup_frames: 0,
             image_font_size: None,
             should_quit: false,
@@ -407,5 +415,18 @@ mod tests {
 
         model.search_origin_level = None;
         assert!(model.search_origin_level.is_none());
+    }
+
+    #[test]
+    fn test_folder_activity() {
+        let mut model = UiModel::new(false);
+
+        model.folder_activity.insert(
+            "test-folder".to_string(),
+            ("test.txt synced".to_string(), std::time::SystemTime::now()),
+        );
+
+        assert_eq!(model.folder_activity.len(), 1);
+        assert!(model.folder_activity.contains_key("test-folder"));
     }
 }

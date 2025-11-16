@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -224,6 +224,7 @@ impl CacheDb {
                 receive_only_changed_directories: 0,
                 receive_only_changed_files: 0,
                 receive_only_changed_symlinks: 0,
+                errors: 0,
             })
         });
 
@@ -421,18 +422,18 @@ impl CacheDb {
             )
             .ok();
 
-        if let Some(old_seq) = existing_seq {
-            if old_seq as u64 != folder_sequence {
-                // Sequence changed - delete ALL old cached data for this folder
-                let cleared = tx.execute(
-                    "DELETE FROM browse_cache WHERE folder_id = ?1",
-                    params![folder_id],
-                )?;
-                log_debug(&format!(
-                    "DEBUG [save_browse_items]: Sequence changed ({} -> {}), cleared {} entries for entire folder",
-                    old_seq, folder_sequence, cleared
-                ));
-            }
+        if let Some(old_seq) = existing_seq
+            && old_seq as u64 != folder_sequence
+        {
+            // Sequence changed - delete ALL old cached data for this folder
+            let cleared = tx.execute(
+                "DELETE FROM browse_cache WHERE folder_id = ?1",
+                params![folder_id],
+            )?;
+            log_debug(&format!(
+                "DEBUG [save_browse_items]: Sequence changed ({} -> {}), cleared {} entries for entire folder",
+                old_seq, folder_sequence, cleared
+            ));
         }
 
         // Delete old entries for this specific folder/prefix (in case of same-sequence update)
@@ -468,8 +469,10 @@ impl CacheDb {
                 ]) {
                     Ok(_) => {}
                     Err(e) => {
-                        log_debug(&format!("DEBUG [save_browse_items]: Insert failed at item {}: {} (name={}, type={})",
-                                           idx, e, item.name, item.item_type));
+                        log_debug(&format!(
+                            "DEBUG [save_browse_items]: Insert failed at item {}: {} (name={}, type={})",
+                            idx, e, item.name, item.item_type
+                        ));
                         return Err(e.into());
                     }
                 }
@@ -667,7 +670,10 @@ impl CacheDb {
             params![folder_id, parent_dir],
         )?;
 
-        log_debug(&format!("DEBUG [invalidate_single_file]: Deleted {} sync state entries, {} browse entries for parent dir '{}'", sync_deleted, browse_deleted, parent_dir));
+        log_debug(&format!(
+            "DEBUG [invalidate_single_file]: Deleted {} sync state entries, {} browse entries for parent dir '{}'",
+            sync_deleted, browse_deleted, parent_dir
+        ));
         Ok(())
     }
 

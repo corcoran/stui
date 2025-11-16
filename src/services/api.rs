@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use crate::api::{
     BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, NeedResponse, SyncthingClient,

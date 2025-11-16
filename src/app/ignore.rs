@@ -4,7 +4,7 @@
 //! - Toggle ignore state (add/remove patterns)
 //! - Ignore and delete (immediate action)
 
-use crate::{log_debug, logic, model, services, App, SyncState};
+use crate::{App, SyncState, log_debug, logic, model, services};
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;

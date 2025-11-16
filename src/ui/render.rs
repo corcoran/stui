@@ -94,6 +94,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        &app.model.ui.folder_activity,
+        &app.model.syncthing.last_folder_updates,
+        app.model.syncthing.connected_device_count,
     );
 
     // Determine if search should be visible
@@ -124,25 +127,25 @@ pub fn render(f: &mut Frame, app: &mut App) {
     );
 
     // Render folders pane if visible
-    if layout_info.folders_visible {
-        if let Some(folders_area) = layout_info.folders_area {
-            // Create temporary ListState for rendering
-            let mut temp_state = ratatui::widgets::ListState::default();
-            temp_state.select(app.model.navigation.folders_state_selection);
-            folder_list::render_folder_list(
-                f,
-                folders_area,
-                &app.model.syncthing.folders,
-                &app.model.syncthing.folder_statuses,
-                app.model.syncthing.statuses_loaded,
-                &mut temp_state,
-                app.model.navigation.focus_level == 0,
-                &app.icon_renderer,
-                &app.model.syncthing.last_folder_updates,
-            );
-            // Sync back the selection (though folder_list doesn't usually modify it)
-            app.model.navigation.folders_state_selection = temp_state.selected();
-        }
+    if layout_info.folders_visible
+        && let Some(folders_area) = layout_info.folders_area
+    {
+        // Create temporary ListState for rendering
+        let mut temp_state = ratatui::widgets::ListState::default();
+        temp_state.select(app.model.navigation.folders_state_selection);
+        folder_list::render_folder_list(
+            f,
+            folders_area,
+            &app.model.syncthing.folders,
+            &app.model.syncthing.folder_statuses,
+            app.model.syncthing.statuses_loaded,
+            &mut temp_state,
+            app.model.navigation.focus_level == 0,
+            &app.icon_renderer,
+            &app.model.syncthing.last_folder_updates,
+        );
+        // Sync back the selection (though folder_list doesn't usually modify it)
+        app.model.navigation.folders_state_selection = temp_state.selected();
     }
 
     // Render breadcrumb levels
@@ -264,6 +267,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        &app.model.ui.folder_activity,
+        &app.model.syncthing.last_folder_updates,
+        app.model.syncthing.connected_device_count,
     );
 
     // Render confirmation dialogs if active

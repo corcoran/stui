@@ -6,13 +6,13 @@ use crate::logic::formatting::format_human_size;
 use crate::model::types::FolderHistoryModal;
 use crate::ui::icons::IconRenderer;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
-    Frame,
 };
 
 /// Render the folder update history modal

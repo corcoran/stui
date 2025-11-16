@@ -3,11 +3,11 @@
 //! Renders the search input box with query, match count, and blinking cursor.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Render search input box above legend

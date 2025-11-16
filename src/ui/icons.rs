@@ -15,6 +15,7 @@ pub enum IconMode {
 /// Folder states for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderState {
+    #[allow(dead_code)]
     Loading,
     Paused,
     Syncing,
@@ -239,5 +240,21 @@ impl IconRenderer {
         };
 
         Span::styled(icon, Style::default().fg(color))
+    }
+
+    /// Render clock icon for activity status
+    pub fn render_clock(&self) -> &'static str {
+        match self.mode {
+            IconMode::Emoji => "🕐",
+            IconMode::NerdFont => "\u{F017}", // clock icon
+        }
+    }
+
+    /// Render devices/network icon for device count
+    pub fn render_devices(&self) -> &'static str {
+        match self.mode {
+            IconMode::Emoji => "📡",
+            IconMode::NerdFont => "\u{F6FF}", // network-wired icon
+        }
     }
 }

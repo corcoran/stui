@@ -84,6 +84,12 @@ pub enum CacheInvalidation {
         #[allow(dead_code)]
         timestamp: std::time::SystemTime,
     },
+    /// Activity event for status bar display
+    Activity {
+        folder_id: String,
+        event_message: String,
+        timestamp: std::time::SystemTime,
+    },
 }
 
 /// Spawn the event listener task
@@ -240,7 +246,10 @@ async fn event_listener_loop(
 
                             // Check for missed events (gap in IDs)
                             if event.id != last_event_id + 1 && last_event_id > 0 {
-                                log_debug(&format!("DEBUG [EVENT]: WARNING - Missed events! Last ID: {}, Current ID: {}", last_event_id, event.id));
+                                log_debug(&format!(
+                                    "DEBUG [EVENT]: WARNING - Missed events! Last ID: {}, Current ID: {}",
+                                    last_event_id, event.id
+                                ));
                             }
 
                             // Process events we care about
@@ -249,25 +258,23 @@ async fn event_listener_loop(
                                     // LocalIndexUpdated has a "filenames" array instead of "item"
                                     if let Some(folder_id) =
                                         event.data.get("folder").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(filenames) =
+                                        && let Some(filenames) =
                                             event.data.get("filenames").and_then(|v| v.as_array())
-                                        {
-                                            let timestamp = parse_event_time(&event.time);
-                                            for filename in filenames {
-                                                if let Some(file_path) = filename.as_str() {
-                                                    let invalidation = CacheInvalidation::File {
-                                                        folder_id: folder_id.to_string(),
-                                                        file_path: file_path.to_string(),
-                                                        timestamp,
-                                                    };
+                                    {
+                                        let timestamp = parse_event_time(&event.time);
+                                        for filename in filenames {
+                                            if let Some(file_path) = filename.as_str() {
+                                                let invalidation = CacheInvalidation::File {
+                                                    folder_id: folder_id.to_string(),
+                                                    file_path: file_path.to_string(),
+                                                    timestamp,
+                                                };
 
-                                                    log_debug(&format!(
-                                                        "DEBUG [EVENT]: Sending invalidation: {:?}",
-                                                        invalidation
-                                                    ));
-                                                    let _ = invalidation_tx.send(invalidation);
-                                                }
+                                                log_debug(&format!(
+                                                    "DEBUG [EVENT]: Sending invalidation: {:?}",
+                                                    invalidation
+                                                ));
+                                                let _ = invalidation_tx.send(invalidation);
                                             }
                                         }
                                     }
@@ -275,108 +282,141 @@ async fn event_listener_loop(
                                 "ItemStarted" => {
                                     if let Some(folder_id) =
                                         event.data.get("folder").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(item_path) =
+                                        && let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
-                                        {
-                                            let timestamp = parse_event_time(&event.time);
-                                            let invalidation = CacheInvalidation::ItemStarted {
-                                                folder_id: folder_id.to_string(),
-                                                file_path: item_path.to_string(),
-                                                timestamp,
-                                            };
-                                            log_debug(&format!(
-                                                "DEBUG [EVENT]: ItemStarted: {:?}",
-                                                invalidation
-                                            ));
-                                            let _ = invalidation_tx.send(invalidation);
-                                        }
+                                    {
+                                        let timestamp = parse_event_time(&event.time);
+                                        let invalidation = CacheInvalidation::ItemStarted {
+                                            folder_id: folder_id.to_string(),
+                                            file_path: item_path.to_string(),
+                                            timestamp,
+                                        };
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: ItemStarted: {:?}",
+                                            invalidation
+                                        ));
+                                        let _ = invalidation_tx.send(invalidation);
                                     }
                                 }
                                 "ItemFinished" => {
                                     if let Some(folder_id) =
                                         event.data.get("folder").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(item_path) =
+                                        && let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
-                                        {
-                                            let timestamp = parse_event_time(&event.time);
+                                    {
+                                        let timestamp = parse_event_time(&event.time);
 
-                                            // Send ItemFinished notification
-                                            let finished_invalidation =
-                                                CacheInvalidation::ItemFinished {
-                                                    folder_id: folder_id.to_string(),
-                                                    file_path: item_path.to_string(),
-                                                    timestamp,
-                                                };
-                                            log_debug(&format!(
-                                                "DEBUG [EVENT]: ItemFinished: {:?}",
-                                                finished_invalidation
-                                            ));
-                                            let _ = invalidation_tx.send(finished_invalidation);
-
-                                            // Also send cache invalidation
-                                            let item_type =
-                                                event.data.get("type").and_then(|v| v.as_str());
-                                            let cache_invalidation = if item_type == Some("dir")
-                                                || item_path.ends_with('/')
-                                            {
-                                                CacheInvalidation::Directory {
-                                                    folder_id: folder_id.to_string(),
-                                                    dir_path: item_path.to_string(),
-                                                    timestamp,
-                                                }
-                                            } else {
-                                                CacheInvalidation::File {
-                                                    folder_id: folder_id.to_string(),
-                                                    file_path: item_path.to_string(),
-                                                    timestamp,
-                                                }
+                                        // Send ItemFinished notification
+                                        let finished_invalidation =
+                                            CacheInvalidation::ItemFinished {
+                                                folder_id: folder_id.to_string(),
+                                                file_path: item_path.to_string(),
+                                                timestamp,
                                             };
-                                            log_debug(&format!(
-                                                "DEBUG [EVENT]: Sending cache invalidation: {:?}",
-                                                cache_invalidation
-                                            ));
-                                            let _ = invalidation_tx.send(cache_invalidation);
-                                        }
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: ItemFinished: {:?}",
+                                            finished_invalidation
+                                        ));
+                                        let _ = invalidation_tx.send(finished_invalidation);
+
+                                        // Send Activity event for status bar
+                                        let action = event
+                                            .data
+                                            .get("action")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("synced");
+                                        let item_type =
+                                            event.data.get("type").and_then(|v| v.as_str());
+                                        let item_type_str = if item_type == Some("dir")
+                                            || item_path.ends_with('/')
+                                        {
+                                            "folder"
+                                        } else {
+                                            "file"
+                                        };
+
+                                        // Extract just the filename/dirname for display
+                                        let display_name = item_path
+                                            .trim_end_matches('/')
+                                            .split('/')
+                                            .next_back()
+                                            .unwrap_or(item_path);
+
+                                        let event_message = format!(
+                                            "{} {} '{}'",
+                                            action.to_uppercase(),
+                                            item_type_str,
+                                            display_name
+                                        );
+
+                                        let activity_event = CacheInvalidation::Activity {
+                                            folder_id: folder_id.to_string(),
+                                            event_message,
+                                            timestamp,
+                                        };
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: Activity: {:?}",
+                                            activity_event
+                                        ));
+                                        let _ = invalidation_tx.send(activity_event);
+
+                                        // Also send cache invalidation
+                                        let cache_invalidation = if item_type == Some("dir")
+                                            || item_path.ends_with('/')
+                                        {
+                                            CacheInvalidation::Directory {
+                                                folder_id: folder_id.to_string(),
+                                                dir_path: item_path.to_string(),
+                                                timestamp,
+                                            }
+                                        } else {
+                                            CacheInvalidation::File {
+                                                folder_id: folder_id.to_string(),
+                                                file_path: item_path.to_string(),
+                                                timestamp,
+                                            }
+                                        };
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: Sending cache invalidation: {:?}",
+                                            cache_invalidation
+                                        ));
+                                        let _ = invalidation_tx.send(cache_invalidation);
                                     }
                                 }
                                 "LocalChangeDetected" | "RemoteChangeDetected" => {
                                     if let Some(folder_id) =
                                         event.data.get("folder").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(item_path) =
+                                        && let Some(item_path) =
                                             event.data.get("item").and_then(|v| v.as_str())
+                                    {
+                                        let timestamp = parse_event_time(&event.time);
+                                        // Check if it's a directory
+                                        let item_type =
+                                            event.data.get("type").and_then(|v| v.as_str());
+
+                                        let invalidation = if item_type == Some("dir")
+                                            || item_path.ends_with('/')
                                         {
-                                            let timestamp = parse_event_time(&event.time);
-                                            // Check if it's a directory
-                                            let item_type =
-                                                event.data.get("type").and_then(|v| v.as_str());
+                                            // Directory change - invalidate entire directory
+                                            CacheInvalidation::Directory {
+                                                folder_id: folder_id.to_string(),
+                                                dir_path: item_path.to_string(),
+                                                timestamp,
+                                            }
+                                        } else {
+                                            // File change - invalidate single file
+                                            CacheInvalidation::File {
+                                                folder_id: folder_id.to_string(),
+                                                file_path: item_path.to_string(),
+                                                timestamp,
+                                            }
+                                        };
 
-                                            let invalidation = if item_type == Some("dir")
-                                                || item_path.ends_with('/')
-                                            {
-                                                // Directory change - invalidate entire directory
-                                                CacheInvalidation::Directory {
-                                                    folder_id: folder_id.to_string(),
-                                                    dir_path: item_path.to_string(),
-                                                    timestamp,
-                                                }
-                                            } else {
-                                                // File change - invalidate single file
-                                                CacheInvalidation::File {
-                                                    folder_id: folder_id.to_string(),
-                                                    file_path: item_path.to_string(),
-                                                    timestamp,
-                                                }
-                                            };
-
-                                            log_debug(&format!(
-                                                "DEBUG [EVENT]: Sending invalidation: {:?}",
-                                                invalidation
-                                            ));
-                                            let _ = invalidation_tx.send(invalidation);
-                                        }
+                                        log_debug(&format!(
+                                            "DEBUG [EVENT]: Sending invalidation: {:?}",
+                                            invalidation
+                                        ));
+                                        let _ = invalidation_tx.send(invalidation);
                                     }
                                 }
                                 "RemoteIndexUpdated" => {
