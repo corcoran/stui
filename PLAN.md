@@ -8,10 +8,9 @@
 
 **High Priority:**
 - Remote device panel (name, download/upload rates, shared folders, sync status, out of sync files)
-- Event history viewer with persistent logging
 
 **Medium Priority:**
-- Cross-platform packaging (Linux, macOS, Windows)
+- Taskbar icon (plus ability to launch terminal + app)
 
 **Low Priority:**
 - Syncthing log viewer
