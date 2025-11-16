@@ -177,7 +177,8 @@ jobs:
         run: |
           mkdir -p package/stui
           cp target/release/stui.exe package/stui/
-          cp README.md CHANGELOG.md config.yaml.example package/stui/
+          cp README.md package/stui/
+          cp CHANGELOG.md package/stui/
           cp config.yaml.example package/stui/
           cd package
           Compress-Archive -Path stui -DestinationPath ../stui-windows-x86_64.zip
