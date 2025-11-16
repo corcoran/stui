@@ -21,6 +21,7 @@ pub mod errors;
 pub mod file;
 pub mod file_navigation;
 pub mod folder;
+pub mod folder_card;
 pub mod folder_history;
 pub mod formatting;
 pub mod ignore;

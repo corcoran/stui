@@ -24,15 +24,15 @@ pub fn classify_error(error: &Error) -> ErrorType {
     }
 
     // Check for HTTP status codes (via reqwest error chain)
-    if let Some(reqwest_err) = error.downcast_ref::<reqwest::Error>() {
-        if let Some(status) = reqwest_err.status() {
-            return match status.as_u16() {
-                401 => ErrorType::Unauthorized,
-                404 => ErrorType::NotFound,
-                500..=599 => ErrorType::ServerError,
-                _ => ErrorType::Other,
-            };
-        }
+    if let Some(reqwest_err) = error.downcast_ref::<reqwest::Error>()
+        && let Some(status) = reqwest_err.status()
+    {
+        return match status.as_u16() {
+            401 => ErrorType::Unauthorized,
+            404 => ErrorType::NotFound,
+            500..=599 => ErrorType::ServerError,
+            _ => ErrorType::Other,
+        };
     }
 
     // Network-level errors

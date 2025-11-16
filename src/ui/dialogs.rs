@@ -1,4 +1,5 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -6,13 +7,22 @@ use ratatui::{
         Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Wrap,
     },
-    Frame,
 };
 
 use super::icons::IconRenderer;
 use crate::model::FileInfoPopupState;
 use crate::utils;
-use crate::{api::Device, ImagePreviewState};
+use crate::{ImagePreviewState, api::Device};
+
+/// Create a centered rectangle within the given area
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    Rect {
+        x: (area.width.saturating_sub(width)) / 2,
+        y: (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    }
+}
 
 /// Render the revert confirmation dialog (for restoring deleted files in receive-only folders)
 pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[String]) {
@@ -44,12 +54,7 @@ pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[String]) {
     let base_height = 10;
     let file_lines = changed_files.len().min(5);
     let prompt_height = base_height + file_lines as u16;
-    let prompt_area = Rect {
-        x: (area.width.saturating_sub(prompt_width)) / 2,
-        y: (area.height.saturating_sub(prompt_height)) / 2,
-        width: prompt_width,
-        height: prompt_height,
-    };
+    let prompt_area = centered_rect(area, prompt_width, prompt_height);
 
     let prompt = Paragraph::new(prompt_text)
         .block(
@@ -83,12 +88,7 @@ pub fn render_delete_confirmation(f: &mut Frame, display_name: &str, is_dir: boo
     let area = f.area();
     let prompt_width = 50;
     let prompt_height = 11;
-    let prompt_area = Rect {
-        x: (area.width.saturating_sub(prompt_width)) / 2,
-        y: (area.height.saturating_sub(prompt_height)) / 2,
-        width: prompt_width,
-        height: prompt_height,
-    };
+    let prompt_area = centered_rect(area, prompt_width, prompt_height);
 
     let prompt = Paragraph::new(prompt_text)
         .block(
@@ -121,12 +121,7 @@ pub fn render_pause_resume_confirmation(f: &mut Frame, folder_label: &str, is_pa
     let area = f.area();
     let prompt_width = 50;
     let prompt_height = 10;
-    let prompt_area = Rect {
-        x: (area.width.saturating_sub(prompt_width)) / 2,
-        y: (area.height.saturating_sub(prompt_height)) / 2,
-        width: prompt_width,
-        height: prompt_height,
-    };
+    let prompt_area = centered_rect(area, prompt_width, prompt_height);
 
     let border_color = if is_paused {
         Color::Green
@@ -337,19 +332,17 @@ fn render_metadata_column(
     ]));
 
     // Image resolution (if this is an image with loaded metadata)
-    if state.is_image {
-        if let Some(
+    if state.is_image
+        && let Some(
             crate::ImagePreviewState::Ready { metadata, .. }
             | crate::ImagePreviewState::Failed { metadata },
         ) = image_state_map.get(&state.file_path)
-        {
-            if let Some((width, height)) = metadata.dimensions {
-                lines.push(Line::from(vec![
-                    Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
-                    Span::raw(format!("{}x{}", width, height)),
-                ]));
-            }
-        }
+        && let Some((width, height)) = metadata.dimensions
+    {
+        lines.push(Line::from(vec![
+            Span::styled("Resolution: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}x{}", width, height)),
+        ]));
     }
 
     lines.push(Line::from(""));
@@ -395,31 +388,31 @@ fn render_metadata_column(
         lines.push(Line::from(""));
 
         // Sync status comparison (more user-friendly than sequence numbers)
-        if let Some(local) = &details.local {
-            if let Some(global) = &details.global {
-                let (status_text, sync_state) = if local.sequence == global.sequence {
-                    ("In Sync", crate::api::SyncState::Synced)
-                } else if local.sequence < global.sequence {
-                    ("Behind (needs update)", crate::api::SyncState::OutOfSync)
-                } else {
-                    ("Ahead (local changes)", crate::api::SyncState::OutOfSync)
-                };
+        if let Some(local) = &details.local
+            && let Some(global) = &details.global
+        {
+            let (status_text, sync_state) = if local.sequence == global.sequence {
+                ("In Sync", crate::api::SyncState::Synced)
+            } else if local.sequence < global.sequence {
+                ("Behind (needs update)", crate::api::SyncState::OutOfSync)
+            } else {
+                ("Ahead (local changes)", crate::api::SyncState::OutOfSync)
+            };
 
-                // Get icon span from icon_renderer (returns [file_icon, status_icon])
-                let icon_spans = icon_renderer.item_with_sync_state(false, sync_state);
+            // Get icon span from icon_renderer (returns [file_icon, status_icon])
+            let icon_spans = icon_renderer.item_with_sync_state(false, sync_state);
 
-                let mut status_spans = vec![Span::styled(
-                    "Sync Status: ",
-                    Style::default().fg(Color::Yellow),
-                )];
-                // Add just the status icon (second element, skip the file icon)
-                if icon_spans.len() > 1 {
-                    status_spans.push(icon_spans[1].clone());
-                }
-                status_spans.push(Span::raw(status_text));
-
-                lines.push(Line::from(status_spans));
+            let mut status_spans = vec![Span::styled(
+                "Sync Status: ",
+                Style::default().fg(Color::Yellow),
+            )];
+            // Add just the status icon (second element, skip the file icon)
+            if icon_spans.len() > 1 {
+                status_spans.push(icon_spans[1].clone());
             }
+            status_spans.push(Span::raw(status_text));
+
+            lines.push(Line::from(status_spans));
         }
 
         lines.push(Line::from(""));
@@ -524,7 +517,7 @@ fn render_preview_column(
                 }
                 ImagePreviewState::Ready { .. } => {
                     // Get mutable reference to protocol for rendering
-                    if let Some(ImagePreviewState::Ready {
+                    if let Some(&mut ImagePreviewState::Ready {
                         ref mut protocol,
                         ref metadata,
                     }) = image_state_map.get_mut(&state.file_path)
@@ -869,12 +862,7 @@ pub fn render_rescan_confirmation(f: &mut Frame, folder_label: &str) {
     let area = f.area();
     let dialog_width = 52;
     let dialog_height = 9;
-    let dialog_area = Rect {
-        x: (area.width.saturating_sub(dialog_width)) / 2,
-        y: (area.height.saturating_sub(dialog_height)) / 2,
-        width: dialog_width,
-        height: dialog_height,
-    };
+    let dialog_area = centered_rect(area, dialog_width, dialog_height);
 
     f.render_widget(Clear, dialog_area);
     f.render_widget(paragraph, dialog_area);

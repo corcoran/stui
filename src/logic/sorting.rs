@@ -2,8 +2,8 @@
 //!
 //! Pure functions for comparing browse items across different sort modes.
 
-use crate::api::{BrowseItem, SyncState};
 use crate::SortMode;
+use crate::api::{BrowseItem, SyncState};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -76,11 +76,7 @@ pub fn compare_browse_items(
         }
     };
 
-    if reverse {
-        result.reverse()
-    } else {
-        result
-    }
+    if reverse { result.reverse() } else { result }
 }
 
 #[cfg(test)]

@@ -1,11 +1,11 @@
 use crate::api::SystemStatus;
 use crate::model::syncthing::ConnectionState;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Format uptime seconds into human-readable string (e.g., "3d 15h", "15h 44m", "44m 30s")

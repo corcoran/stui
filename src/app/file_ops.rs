@@ -7,7 +7,7 @@
 //! - Open files/directories with external commands
 //! - Copy paths to clipboard
 
-use crate::{log_debug, logic, services, App};
+use crate::{App, log_debug, logic, services};
 use anyhow::Result;
 use std::time::Instant;
 
@@ -106,7 +106,9 @@ impl App {
 
                     log_debug(&format!(
                         "DEBUG [invalidate_and_refresh_folder]: Level {}: prefix={:?} loading_browse.contains={}",
-                        idx, level.prefix, self.model.performance.loading_browse.contains(&browse_key)
+                        idx,
+                        level.prefix,
+                        self.model.performance.loading_browse.contains(&browse_key)
                     ));
 
                     if !self.model.performance.loading_browse.contains(&browse_key) {
@@ -190,12 +192,16 @@ impl App {
         // Get selected item (respects filtered view if active)
         let selected_idx = match level.selected_index {
             Some(idx) => idx,
-            None => return Ok(()),
+            None => {
+                return Ok(());
+            }
         };
 
         let item = match level.display_items().get(selected_idx) {
             Some(item) => item,
-            None => return Ok(()),
+            None => {
+                return Ok(());
+            }
         };
 
         // Build the full host path
@@ -252,12 +258,16 @@ impl App {
         // Get selected item (respects filtered view if active)
         let selected_idx = match level.selected_index {
             Some(idx) => idx,
-            None => return Ok(()),
+            None => {
+                return Ok(());
+            }
         };
 
         let item = match level.display_items().get(selected_idx) {
             Some(item) => item,
-            None => return Ok(()),
+            None => {
+                return Ok(());
+            }
         };
 
         // Build the full host path
@@ -449,7 +459,10 @@ impl App {
                     .append(true)
                     .open(log_file)
                     .and_then(|mut f| {
-                        writeln!(f, "No clipboard_command configured - set clipboard_command in config.yaml")
+                        writeln!(
+                            f,
+                            "No clipboard_command configured - set clipboard_command in config.yaml"
+                        )
                     });
                 // Show error toast
                 self.model.ui.toast_message = Some((

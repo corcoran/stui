@@ -3,9 +3,9 @@ use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyEvent},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
@@ -201,6 +201,28 @@ impl App {
         }
     }
 
+    /// Invalidate all folder-related caches when folder content changes
+    ///
+    /// This is called by both File and Directory cache invalidation events
+    /// to ensure consistent cache cleanup for any folder mutation.
+    fn invalidate_folder_caches(&mut self, folder_id: &str) {
+        // Invalidate folder status
+        let _ = self.cache.invalidate_folder_status(folder_id);
+
+        // Invalidate out-of-sync cache and refresh summary modal if open
+        self.invalidate_and_refresh_out_of_sync_summary(folder_id);
+
+        // Invalidate local changed cache
+        let _ = self.cache.invalidate_local_changed(folder_id);
+
+        // Request fresh folder status
+        let _ = self
+            .api_tx
+            .send(services::api::ApiRequest::GetFolderStatus {
+                folder_id: folder_id.to_string(),
+            });
+    }
+
     /// Clean up stale pending deletes (older than 60 seconds)
     fn cleanup_stale_pending_deletes(&mut self) {
         let now = Instant::now();
@@ -270,6 +292,39 @@ impl App {
 
     pub fn get_local_state_summary(&self) -> (u64, u64, u64) {
         logic::folder::calculate_local_state_summary(&self.model.syncthing.folder_statuses)
+    }
+
+    /// Refresh device count by querying connections API
+    async fn refresh_device_count(&mut self) {
+        match self.client.get_system_connections().await {
+            Ok(connections) => {
+                // Count connected devices (exclude self, filter by connected status)
+                let my_device_id = self
+                    .model
+                    .syncthing
+                    .system_status
+                    .as_ref()
+                    .map(|s| s.my_id.as_str());
+
+                let connected_count = connections
+                    .connections
+                    .iter()
+                    .filter(|(device_id, conn)| {
+                        conn.connected && Some(device_id.as_str()) != my_device_id
+                    })
+                    .count();
+
+                self.model.syncthing.connected_device_count = Some(connected_count);
+
+                log_debug(&format!(
+                    "Device count refreshed: {} connected",
+                    connected_count
+                ));
+            }
+            Err(e) => {
+                log_debug(&format!("Failed to refresh device count: {}", e));
+            }
+        }
     }
 
     /// Flush pending database writes in a single transaction
@@ -545,14 +600,14 @@ impl App {
     async fn load_folder_statuses(&mut self) {
         for folder in &self.model.syncthing.folders {
             // Try cache first - use it without validation on initial load
-            if !self.model.syncthing.statuses_loaded {
-                if let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id) {
-                    self.model
-                        .syncthing
-                        .folder_statuses
-                        .insert(folder.id.clone(), cached_status);
-                    continue;
-                }
+            if !self.model.syncthing.statuses_loaded
+                && let Ok(Some(cached_status)) = self.cache.get_folder_status(&folder.id)
+            {
+                self.model
+                    .syncthing
+                    .folder_statuses
+                    .insert(folder.id.clone(), cached_status);
+                continue;
             }
 
             // Cache miss or this is a refresh - fetch from API
@@ -561,20 +616,19 @@ impl App {
 
                 // Check if sequence changed from last known value
                 if let Some(&last_seq) = self.model.performance.last_known_sequences.get(&folder.id)
+                    && last_seq != sequence
                 {
-                    if last_seq != sequence {
-                        // Sequence changed! Invalidate cached data for this folder
-                        let _ = self.cache.invalidate_folder(&folder.id);
+                    // Sequence changed! Invalidate cached data for this folder
+                    let _ = self.cache.invalidate_folder(&folder.id);
 
-                        // Clear in-memory sync states for this folder if we're currently viewing it
-                        // This ensures files that changed get refreshed
-                        if !self.model.navigation.breadcrumb_trail.is_empty()
-                            && self.model.navigation.breadcrumb_trail[0].folder_id == folder.id
-                        {
-                            for level in &mut self.model.navigation.breadcrumb_trail {
-                                if level.folder_id == folder.id {
-                                    level.file_sync_states.clear();
-                                }
+                    // Clear in-memory sync states for this folder if we're currently viewing it
+                    // This ensures files that changed get refreshed
+                    if !self.model.navigation.breadcrumb_trail.is_empty()
+                        && self.model.navigation.breadcrumb_trail[0].folder_id == folder.id
+                    {
+                        for level in &mut self.model.navigation.breadcrumb_trail {
+                            if level.folder_id == folder.id {
+                                level.file_sync_states.clear();
                             }
                         }
                     }
@@ -881,6 +935,9 @@ async fn main() -> Result<()> {
     // Initialize app
     let mut app = App::new(config, config_path_str).await?;
 
+    // Load initial device count
+    app.refresh_device_count().await;
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -919,10 +976,10 @@ async fn run_app<B: ratatui::backend::Backend>(
         })?;
 
         // Auto-dismiss toast after 1.5 seconds
-        if let Some((_, timestamp)) = app.model.ui.toast_message {
-            if crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis()) {
-                app.model.ui.toast_message = None;
-            }
+        if let Some((_, timestamp)) = app.model.ui.toast_message
+            && crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis())
+        {
+            app.model.ui.toast_message = None;
         }
 
         if app.model.ui.should_quit {
@@ -969,23 +1026,22 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.image_state_map.insert(file_path.clone(), image_state);
 
             // Update popup if it's still showing the same file
-            if let Some(ref mut popup_state) = app.model.ui.file_info_popup {
-                if popup_state.file_path == file_path {
-                    log_debug(&format!("Updating image state for {}", file_path));
+            if let Some(ref mut popup_state) = app.model.ui.file_info_popup
+                && popup_state.file_path == file_path
+            {
+                log_debug(&format!("Updating image state for {}", file_path));
 
-                    // Update file_content based on image state
-                    if let Some(img_state) = app.image_state_map.get(&file_path) {
-                        match img_state {
-                            ImagePreviewState::Ready { .. } => {
-                                popup_state.file_content =
-                                    Ok("[Image preview - see right panel]".to_string());
-                            }
-                            ImagePreviewState::Failed { .. } => {
-                                popup_state.file_content =
-                                    Err("Image preview unavailable".to_string());
-                            }
-                            _ => {}
+                // Update file_content based on image state
+                if let Some(img_state) = app.image_state_map.get(&file_path) {
+                    match img_state {
+                        ImagePreviewState::Ready { .. } => {
+                            popup_state.file_content =
+                                Ok("[Image preview - see right panel]".to_string());
                         }
+                        ImagePreviewState::Failed { .. } => {
+                            popup_state.file_content = Err("Image preview unavailable".to_string());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1080,6 +1136,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         // System status every 30 seconds, connection stats every 2-3 seconds
         if app.last_system_status_update.elapsed() >= std::time::Duration::from_secs(30) {
             let _ = app.api_tx.send(services::api::ApiRequest::GetSystemStatus);
+            app.refresh_device_count().await;
             app.last_system_status_update = Instant::now();
         }
 
@@ -1167,12 +1224,12 @@ async fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Increased poll timeout from 100ms to 250ms to reduce CPU usage when idle
-        if event::poll(std::time::Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                // Flush before processing user input to ensure consistency
-                app.flush_pending_db_writes();
-                app.handle_key(key).await?;
-            }
+        if event::poll(std::time::Duration::from_millis(250))?
+            && let Event::Key(key) = event::read()?
+        {
+            // Flush before processing user input to ensure consistency
+            app.flush_pending_db_writes();
+            app.handle_key(key).await?;
         }
     }
 

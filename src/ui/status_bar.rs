@@ -2,13 +2,42 @@ use crate::api::{Folder, FolderStatus, SyncState};
 use crate::ui::icons::{FolderState, IconRenderer};
 use crate::utils;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 use std::collections::HashMap;
+
+/// Represents the content for a status bar with left and right sections
+struct StatusContent {
+    left: String,
+    right: String,
+}
+
+impl StatusContent {
+    /// Format status content into a single line with padding
+    fn format(&self, area: Rect) -> String {
+        use unicode_width::UnicodeWidthStr;
+
+        let total_width = area.width.saturating_sub(2) as usize; // Subtract borders
+        let left_width = self.left.width();
+        let right_width = self.right.width();
+        let separator = " │ ";
+        let separator_width = separator.width();
+
+        let padding = total_width.saturating_sub(left_width + right_width + separator_width);
+
+        format!(
+            "{}{}{}{}",
+            self.left,
+            " ".repeat(padding),
+            separator,
+            self.right
+        )
+    }
+}
 
 /// Map SyncState to user-friendly label for file/directory display
 fn map_sync_state_label(sync_state: SyncState) -> &'static str {
@@ -69,6 +98,7 @@ pub fn map_folder_state(
 /// Build the status bar paragraph (reusable for both rendering and height calculation)
 #[allow(clippy::too_many_arguments)]
 pub fn build_status_paragraph(
+    area: Rect,
     icon_renderer: &IconRenderer,
     focus_level: usize,
     folders: &[Folder],
@@ -84,24 +114,40 @@ pub fn build_status_paragraph(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
+    last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
+    connected_device_count: Option<usize>,
 ) -> Paragraph<'static> {
-    let status_line = build_status_line(
-        icon_renderer,
-        focus_level,
-        folders,
-        folder_statuses,
-        folders_state_selected,
-        breadcrumb_folder_label,
-        breadcrumb_folder_id,
-        breadcrumb_item_count,
-        breadcrumb_selected_item,
-        sort_mode,
-        sort_reverse,
-        last_load_time_ms,
-        cache_hit,
-        pending_operations_count,
-        out_of_sync_filter_active,
-    );
+    // Use activity status for folder view, breadcrumb status otherwise
+    let status_line = if focus_level == 0 {
+        let content = build_activity_status(
+            icon_renderer,
+            folders,
+            folders_state_selected,
+            folder_activity,
+            last_folder_updates,
+            connected_device_count,
+        );
+        content.format(area)
+    } else {
+        build_status_line(
+            icon_renderer,
+            focus_level,
+            folders,
+            folder_statuses,
+            folders_state_selected,
+            breadcrumb_folder_label,
+            breadcrumb_folder_id,
+            breadcrumb_item_count,
+            breadcrumb_selected_item,
+            sort_mode,
+            sort_reverse,
+            last_load_time_ms,
+            cache_hit,
+            pending_operations_count,
+            out_of_sync_filter_active,
+        )
+    };
 
     // Parse status_line and color the labels (before colons)
     let status_spans: Vec<Span> = if status_line.is_empty() {
@@ -143,6 +189,88 @@ pub fn build_status_paragraph(
         .block(Block::default().borders(Borders::ALL).title("Status"))
         .style(Style::default().fg(Color::Gray))
         .wrap(Wrap { trim: false })
+}
+
+/// Build activity status content for folder view (focus_level == 0)
+///
+/// Shows recent file activity and connected device count
+fn build_activity_status(
+    icon_renderer: &IconRenderer,
+    folders: &[Folder],
+    folders_state_selected: Option<usize>,
+    folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
+    last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
+    connected_device_count: Option<usize>,
+) -> StatusContent {
+    use crate::logic::formatting::format_time_since;
+
+    // Use icon renderer for symbols
+    let clock_icon = icon_renderer.render_clock();
+    let devices_icon = icon_renderer.render_devices();
+
+    // Determine which activity to show based on selection state
+    let (event, timestamp) = if let Some(selected_idx) = folders_state_selected {
+        // A folder is selected - ONLY show that folder's activity
+        if let Some(folder) = folders.get(selected_idx) {
+            // Try folder_activity first (from live events), fallback to last_folder_updates (from /rest/stats/folder)
+            folder_activity
+                .get(&folder.id)
+                .map(|(event, timestamp)| (Some(event.as_str()), Some(*timestamp)))
+                .or_else(|| {
+                    last_folder_updates
+                        .get(&folder.id)
+                        .map(|(timestamp, filename)| (Some(filename.as_str()), Some(*timestamp)))
+                })
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        }
+    } else {
+        // No folder selected - show nothing
+        (None, None)
+    };
+
+    let left = if let (Some(event), Some(timestamp)) = (event, timestamp) {
+        format!(
+            "{} Last activity: {} • {}",
+            clock_icon,
+            event,
+            format_time_since(timestamp)
+        )
+    } else {
+        format!("{} No recent activity", clock_icon)
+    };
+
+    // Show folder-specific device count if a folder is selected
+    let right = if let Some(selected_idx) = folders_state_selected {
+        if let Some(folder) = folders.get(selected_idx) {
+            let device_count = folder.devices.len();
+            if device_count == 0 {
+                format!("{} Not shared", devices_icon)
+            } else if device_count == 1 {
+                format!("{} Shared with 1 device", devices_icon)
+            } else {
+                format!("{} Shared with {} devices", devices_icon, device_count)
+            }
+        } else {
+            format!("{} ...", devices_icon)
+        }
+    } else {
+        // No folder selected - show global count
+        if let Some(count) = connected_device_count {
+            if count == 0 {
+                format!("{} 0 devices", devices_icon)
+            } else if count == 1 {
+                format!("{} 1 device connected", devices_icon)
+            } else {
+                format!("{} {} devices connected", devices_icon, count)
+            }
+        } else {
+            format!("{} ...", devices_icon)
+        }
+    };
+
+    StatusContent { left, right }
 }
 
 /// Build the status line string (extracted for reuse)
@@ -358,15 +486,15 @@ fn build_status_line(
             metrics.push(format!("Selected: {}", formatted_name));
 
             // Add ignored status if applicable
-            if sync_state == Some(SyncState::Ignored) {
-                if let Some(exists_val) = exists {
-                    let ignored_status = if exists_val {
-                        "Ignored, not deleted!"
-                    } else {
-                        "Ignored"
-                    };
-                    metrics.push(ignored_status.to_string());
-                }
+            if sync_state == Some(SyncState::Ignored)
+                && let Some(exists_val) = exists
+            {
+                let ignored_status = if exists_val {
+                    "Ignored, not deleted!"
+                } else {
+                    "Ignored"
+                };
+                metrics.push(ignored_status.to_string());
             }
         }
 
@@ -396,8 +524,12 @@ pub fn render_status_bar(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
+    last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
+    connected_device_count: Option<usize>,
 ) {
     let status_bar = build_status_paragraph(
+        area,
         icon_renderer,
         focus_level,
         folders,
@@ -413,6 +545,9 @@ pub fn render_status_bar(
         cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        folder_activity,
+        last_folder_updates,
+        connected_device_count,
     );
     f.render_widget(status_bar, area);
 }
@@ -436,25 +571,41 @@ pub fn calculate_status_height(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
+    last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
+    connected_device_count: Option<usize>,
 ) -> u16 {
     // Build status line WITHOUT block borders for accurate line counting
-    let status_line = build_status_line(
-        icon_renderer,
-        focus_level,
-        folders,
-        folder_statuses,
-        folders_state_selected,
-        breadcrumb_folder_label,
-        breadcrumb_folder_id,
-        breadcrumb_item_count,
-        breadcrumb_selected_item,
-        sort_mode,
-        sort_reverse,
-        last_load_time_ms,
-        cache_hit,
-        pending_operations_count,
-        out_of_sync_filter_active,
-    );
+    let area = Rect::new(0, 0, terminal_width, 3); // Dummy rect for width calculation
+    let status_line = if focus_level == 0 {
+        let content = build_activity_status(
+            icon_renderer,
+            folders,
+            folders_state_selected,
+            folder_activity,
+            last_folder_updates,
+            connected_device_count,
+        );
+        content.format(area)
+    } else {
+        build_status_line(
+            icon_renderer,
+            focus_level,
+            folders,
+            folder_statuses,
+            folders_state_selected,
+            breadcrumb_folder_label,
+            breadcrumb_folder_id,
+            breadcrumb_item_count,
+            breadcrumb_selected_item,
+            sort_mode,
+            sort_reverse,
+            last_load_time_ms,
+            cache_hit,
+            pending_operations_count,
+            out_of_sync_filter_active,
+        )
+    };
 
     // Parse status_line and color the labels (same as in build_status_paragraph)
     let status_spans: Vec<Span> = if status_line.is_empty() {

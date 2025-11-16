@@ -7,9 +7,9 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
+use crate::App;
 use crate::api::SyncState;
 use crate::model::{self, ConfirmAction};
-use crate::App;
 
 /// Check if folder history modal should load more files
 ///
@@ -777,16 +777,16 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Esc => {
                 // Exit search mode and clear query
                 app.clear_search(None); // No toast, user explicitly pressed Esc
-                                        // Reload all breadcrumb levels without filter (for fresh data)
+                // Reload all breadcrumb levels without filter (for fresh data)
                 app.refresh_all_breadcrumbs().await?;
                 return Ok(());
             }
             KeyCode::Enter => {
                 // Accept search and exit input mode (keep filtering active)
                 crate::log_debug(&format!(
-                        "DEBUG [keyboard]: Enter pressed in search mode, query='{}', keeping filter active",
-                        app.model.ui.search_query
-                    ));
+                    "DEBUG [keyboard]: Enter pressed in search mode, query='{}', keeping filter active",
+                    app.model.ui.search_query
+                ));
                 app.model.ui.search_mode = false;
                 return Ok(());
             }
@@ -819,28 +819,26 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.model.ui.search_query.push(c);
 
                 // When query reaches 2 characters, trigger recursive prefetch
-                if app.model.ui.search_query.len() == 2 {
-                    if let Some(level) = app
+                if app.model.ui.search_query.len() == 2
+                    && let Some(level) = app
                         .model
                         .navigation
                         .breadcrumb_trail
                         .get(app.model.navigation.focus_level.saturating_sub(1))
-                    {
-                        let folder_id = level.folder_id.clone();
-                        let prefix = level.prefix.clone();
+                {
+                    let folder_id = level.folder_id.clone();
+                    let prefix = level.prefix.clone();
 
-                        crate::log_debug(&format!(
-                                "DEBUG [keyboard]: Search query reached 2 chars, starting prefetch for folder '{}' prefix '{:?}'",
-                                folder_id,
-                                prefix
-                            ));
+                    crate::log_debug(&format!(
+                        "DEBUG [keyboard]: Search query reached 2 chars, starting prefetch for folder '{}' prefix '{:?}'",
+                        folder_id, prefix
+                    ));
 
-                        // Clear previous prefetch tracking for new search
-                        app.model.performance.discovered_dirs.clear();
+                    // Clear previous prefetch tracking for new search
+                    app.model.performance.discovered_dirs.clear();
 
-                        // Start prefetch from current location
-                        app.prefetch_subdirectories_for_search(&folder_id, prefix.as_deref());
-                    }
+                    // Start prefetch from current location
+                    app.prefetch_subdirectories_for_search(&folder_id, prefix.as_deref());
                 }
 
                 // Re-filter current breadcrumb in real-time (only applies filter if >= 2 chars)
@@ -864,7 +862,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         if app.model.navigation.focus_level > 0 && !app.model.ui.search_query.is_empty() {
             crate::log_debug("DEBUG [keyboard]: Clearing search...");
             app.clear_search(None); // No toast, user explicitly pressed Esc
-                                    // Reload all breadcrumb levels without filter (for fresh data)
+            // Reload all breadcrumb levels without filter (for fresh data)
             app.refresh_all_breadcrumbs().await?;
             return Ok(());
         }
@@ -964,10 +962,6 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             // Copy file/directory path (breadcrumbs only)
             let _ = app.copy_to_clipboard();
         }
-        KeyCode::Char('f') if app.model.navigation.focus_level == 0 => {
-            // Open out-of-sync summary modal (only in folder view)
-            app.open_out_of_sync_summary();
-        }
         KeyCode::Char('f') if app.model.navigation.focus_level > 0 => {
             // Toggle out-of-sync filter (only in breadcrumb view)
             app.activate_out_of_sync_filter();
@@ -1038,25 +1032,23 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     .navigation
                     .breadcrumb_trail
                     .get(app.model.navigation.focus_level - 1)
+                    && let Some(selected_idx) = level.selected_index
+                    && let Some(item) = level.display_items().get(selected_idx)
                 {
-                    if let Some(selected_idx) = level.selected_index {
-                        if let Some(item) = level.display_items().get(selected_idx) {
-                            // Construct full path
-                            let file_path = if let Some(prefix) = &level.prefix {
-                                format!("{}{}", prefix, item.name)
-                            } else {
-                                item.name.clone()
-                            };
+                    // Construct full path
+                    let file_path = if let Some(prefix) = &level.prefix {
+                        format!("{}{}", prefix, item.name)
+                    } else {
+                        item.name.clone()
+                    };
 
-                            // Fetch file info and content (await since it's async)
-                            app.fetch_file_info_and_content(
-                                level.folder_id.clone(),
-                                file_path,
-                                item.clone(),
-                            )
-                            .await;
-                        }
-                    }
+                    // Fetch file info and content (await since it's async)
+                    app.fetch_file_info_and_content(
+                        level.folder_id.clone(),
+                        file_path,
+                        item.clone(),
+                    )
+                    .await;
                 }
             }
         }
@@ -1143,28 +1135,26 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     .navigation
                     .breadcrumb_trail
                     .get(app.model.navigation.focus_level - 1)
+                    && let Some(selected_idx) = level.selected_index
+                    && let Some(item) = level.display_items().get(selected_idx)
                 {
-                    if let Some(selected_idx) = level.selected_index {
-                        if let Some(item) = level.display_items().get(selected_idx) {
-                            if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
-                                // File - show preview (same logic as '?' key)
-                                let file_path = if let Some(prefix) = &level.prefix {
-                                    format!("{}{}", prefix, item.name)
-                                } else {
-                                    item.name.clone()
-                                };
+                    if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
+                        // File - show preview (same logic as '?' key)
+                        let file_path = if let Some(prefix) = &level.prefix {
+                            format!("{}{}", prefix, item.name)
+                        } else {
+                            item.name.clone()
+                        };
 
-                                app.fetch_file_info_and_content(
-                                    level.folder_id.clone(),
-                                    file_path,
-                                    item.clone(),
-                                )
-                                .await;
-                            } else {
-                                // Directory - navigate into it
-                                app.enter_directory().await?;
-                            }
-                        }
+                        app.fetch_file_info_and_content(
+                            level.folder_id.clone(),
+                            file_path,
+                            item.clone(),
+                        )
+                        .await;
+                    } else {
+                        // Directory - navigate into it
+                        app.enter_directory().await?;
                     }
                 }
             }

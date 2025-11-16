@@ -10,7 +10,7 @@
 //! 3. Expected: Only "foo" should be visible (it's the only out-of-sync file)
 
 use stui::api::BrowseItem;
-use stui::model::{types::OutOfSyncFilterState, Model};
+use stui::model::{Model, types::OutOfSyncFilterState};
 
 /// Test: Filter state should be tracked when activated
 #[test]

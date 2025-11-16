@@ -180,6 +180,26 @@ pub struct FolderHistoryEntry {
     pub file_size: Option<u64>,
 }
 
+/// Device details modal state
+#[derive(Debug, Clone)]
+pub struct DeviceDetailsModal {
+    pub devices: Vec<DeviceInfo>,
+    pub selected_index: usize,
+}
+
+/// Device information for details modal
+#[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub device_id: String,
+    pub device_name: String,
+    pub connected: bool,
+    pub address: String,
+    pub download_rate: Option<f64>, // bytes/sec
+    pub upload_rate: Option<f64>,   // bytes/sec
+    pub shared_folder_count: usize,
+    pub total_folder_count: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

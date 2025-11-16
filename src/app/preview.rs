@@ -5,7 +5,7 @@
 //! - Image preview with terminal graphics protocols
 //! - Binary file text extraction
 
-use crate::{log_debug, logic, model, App, BrowseItem, Folder, ImageMetadata, ImagePreviewState};
+use crate::{App, BrowseItem, Folder, ImageMetadata, ImagePreviewState, log_debug, logic, model};
 use anyhow::Result;
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@
 //!
 //! Orchestrates fetching file modification times from API and building history modal state.
 
-use crate::{log_debug, logic, model, App};
+use crate::{App, log_debug, logic, model};
 use std::time::SystemTime;
 
 type FileList = Vec<(String, SystemTime, u64)>;
@@ -228,14 +228,14 @@ impl App {
             match dir_index {
                 Some(index) => {
                     // Verify it's actually a directory
-                    if let Some(item) = current_level.items.get(index) {
-                        if item.item_type != "FILE_INFO_TYPE_DIRECTORY" {
-                            self.model.ui.show_toast(format!(
-                                "Could not navigate to {}: '{}' is not a directory",
-                                file_path, dir_name
-                            ));
-                            return Ok(());
-                        }
+                    if let Some(item) = current_level.items.get(index)
+                        && item.item_type != "FILE_INFO_TYPE_DIRECTORY"
+                    {
+                        self.model.ui.show_toast(format!(
+                            "Could not navigate to {}: '{}' is not a directory",
+                            file_path, dir_name
+                        ));
+                        return Ok(());
                     }
 
                     // Set selection to this directory
@@ -426,8 +426,6 @@ mod tests {
 
     #[test]
     fn test_empty_folder_history() {
-        use std::time::SystemTime;
-
         let modal = crate::model::types::FolderHistoryModal {
             folder_id: "test".to_string(),
             folder_label: "Empty Folder".to_string(),

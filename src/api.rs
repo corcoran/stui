@@ -16,6 +16,12 @@ fn log_debug(msg: &str) {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FolderDevice {
+    #[serde(rename = "deviceID")]
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Folder {
     pub id: String,
     pub label: Option<String>,
@@ -24,6 +30,8 @@ pub struct Folder {
     pub paused: bool,
     #[serde(rename = "type")]
     pub folder_type: String, // "sendonly", "sendreceive", "receiveonly"
+    #[serde(default)]
+    pub devices: Vec<FolderDevice>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -199,6 +207,8 @@ pub struct FolderStatus {
     #[allow(dead_code)]
     pub receive_only_changed_symlinks: u64,
     pub receive_only_total_items: u64,
+    #[serde(default)]
+    pub errors: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -224,6 +234,25 @@ pub struct ConnectionTotal {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConnectionStats {
     pub total: ConnectionTotal,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionInfo {
+    pub connected: bool,
+    #[allow(dead_code)]
+    pub address: String,
+    #[allow(dead_code)]
+    pub in_bytes_total: u64,
+    #[allow(dead_code)]
+    pub out_bytes_total: u64,
+    #[allow(dead_code)]
+    pub paused: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectionsResponse {
+    pub connections: std::collections::HashMap<String, ConnectionInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -618,6 +647,25 @@ impl SyncthingClient {
             .context("Failed to parse connection stats")?;
 
         Ok(stats)
+    }
+
+    /// Get system connections (device connectivity and transfer stats)
+    pub async fn get_system_connections(&self) -> Result<ConnectionsResponse> {
+        let url = format!("{}/rest/system/connections", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to send connections request")?;
+
+        let connections: ConnectionsResponse = response
+            .json()
+            .await
+            .context("Failed to parse connections response")?;
+
+        Ok(connections)
     }
 
     /// Fetch folder statistics to get last updated file per folder
@@ -1024,7 +1072,7 @@ mod tests {
         // Test that get_folder_events method exists with correct signature
         // We can't easily test async functions in unit tests without tokio runtime,
         // but we can verify the method exists by calling it in a type-checked way
-        let client = SyncthingClient {
+        let _client = SyncthingClient {
             base_url: "http://localhost:8384".to_string(),
             api_key: "test-key".to_string(),
             client: reqwest::Client::new(),
@@ -1037,5 +1085,39 @@ mod tests {
         let _limit: usize = 100;
         // This would need tokio runtime to actually call:
         // let _ = client.get_folder_events(_since, _limit).await;
+    }
+
+    #[test]
+    fn test_connections_response_parsing() {
+        let json = r#"{
+            "connections": {
+                "DEVICE123-ABC": {
+                    "connected": true,
+                    "address": "192.168.1.10:22000",
+                    "inBytesTotal": 1234567890,
+                    "outBytesTotal": 9876543210,
+                    "paused": false
+                },
+                "DEVICE456-DEF": {
+                    "connected": false,
+                    "address": "",
+                    "inBytesTotal": 0,
+                    "outBytesTotal": 0,
+                    "paused": false
+                }
+            }
+        }"#;
+
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let connections = parsed.get("connections").unwrap();
+        let device1 = connections.get("DEVICE123-ABC").unwrap();
+        assert_eq!(device1.get("connected").unwrap().as_bool().unwrap(), true);
+        assert_eq!(
+            device1.get("address").unwrap().as_str().unwrap(),
+            "192.168.1.10:22000"
+        );
+
+        let device2 = connections.get("DEVICE456-DEF").unwrap();
+        assert_eq!(device2.get("connected").unwrap().as_bool().unwrap(), false);
     }
 }

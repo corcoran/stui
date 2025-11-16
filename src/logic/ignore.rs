@@ -43,10 +43,10 @@ pub fn pattern_matches(pattern: &str, file_path: &str) -> bool {
         }
 
         // Try glob matching
-        if let Ok(pattern_obj) = glob::Pattern::new(pattern_without_slash) {
-            if pattern_obj.matches(file_path.trim_start_matches('/')) {
-                return true;
-            }
+        if let Ok(pattern_obj) = glob::Pattern::new(pattern_without_slash)
+            && pattern_obj.matches(file_path.trim_start_matches('/'))
+        {
+            return true;
         }
     } else {
         // Pattern without / - match anywhere (path components or filename)

@@ -9,7 +9,7 @@
 //! - Preserve selection when switching
 //! - Mutual exclusion (activating one clears the other)
 
-use crate::{api, log_debug, logic, model, services, App};
+use crate::{App, api, log_debug, logic, model, services};
 
 impl App {
     // ============================================================================

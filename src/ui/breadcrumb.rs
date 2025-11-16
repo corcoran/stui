@@ -2,11 +2,11 @@ use super::icons::IconRenderer;
 use crate::api::{BrowseItem, SyncState};
 use ::stui::DisplayMode;
 use ratatui::{
+    Frame,
     layout::{Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
 use unicode_width::UnicodeWidthStr;
 

@@ -98,6 +98,7 @@ pub fn can_delete_file(focus_level: usize, breadcrumb_trail_empty: bool) -> bool
 ///     receive_only_changed_files: 0,
 ///     receive_only_changed_symlinks: 0,
 ///     receive_only_total_items: 5,  // Has local changes
+///     errors: 0,
 /// })));
 ///
 /// // Don't show: in folder list view
@@ -184,6 +185,7 @@ mod tests {
             receive_only_changed_files: 0,
             receive_only_changed_symlinks: 0,
             receive_only_total_items: receive_only_items,
+            errors: 0,
         }
     }
 

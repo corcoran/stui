@@ -6,7 +6,7 @@
 //! - Prefetching subdirectory states
 //! - Tracking ignored file existence
 
-use crate::{log_debug, logic, services, App, SyncState};
+use crate::{App, SyncState, log_debug, logic, services};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -493,49 +493,48 @@ impl App {
         }
 
         let level_idx = self.model.navigation.focus_level - 1;
-        if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-            if let Some(selected_idx) = level.selected_index {
-                if let Some(item) = level.items.get(selected_idx) {
-                    // Check if we already have the sync state cached
-                    if level.file_sync_states.contains_key(&item.name) {
-                        return;
-                    }
-
-                    // Build the file path for the API call
-                    let file_path = if let Some(ref prefix) = level.prefix {
-                        format!("{}{}", prefix, item.name)
-                    } else {
-                        item.name.clone()
-                    };
-
-                    // Create key for tracking in-flight operations
-                    let sync_key = format!("{}:{}", level.folder_id, file_path);
-
-                    // Skip if already loading
-                    if self
-                        .model
-                        .performance
-                        .loading_sync_states
-                        .contains(&sync_key)
-                    {
-                        return;
-                    }
-
-                    // Mark as loading
-                    self.model
-                        .performance
-                        .loading_sync_states
-                        .insert(sync_key.clone());
-
-                    // Send non-blocking request via API service
-                    // Response will be handled by handle_api_response
-                    let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
-                        folder_id: level.folder_id.clone(),
-                        file_path: file_path.clone(),
-                        priority: services::api::Priority::High, // High priority for selected item
-                    });
-                }
+        if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx)
+            && let Some(selected_idx) = level.selected_index
+            && let Some(item) = level.items.get(selected_idx)
+        {
+            // Check if we already have the sync state cached
+            if level.file_sync_states.contains_key(&item.name) {
+                return;
             }
+
+            // Build the file path for the API call
+            let file_path = if let Some(ref prefix) = level.prefix {
+                format!("{}{}", prefix, item.name)
+            } else {
+                item.name.clone()
+            };
+
+            // Create key for tracking in-flight operations
+            let sync_key = format!("{}:{}", level.folder_id, file_path);
+
+            // Skip if already loading
+            if self
+                .model
+                .performance
+                .loading_sync_states
+                .contains(&sync_key)
+            {
+                return;
+            }
+
+            // Mark as loading
+            self.model
+                .performance
+                .loading_sync_states
+                .insert(sync_key.clone());
+
+            // Send non-blocking request via API service
+            // Response will be handled by handle_api_response
+            let _ = self.api_tx.send(services::api::ApiRequest::GetFileInfo {
+                folder_id: level.folder_id.clone(),
+                file_path: file_path.clone(),
+                priority: services::api::Priority::High, // High priority for selected item
+            });
         }
     }
 
@@ -556,8 +555,10 @@ impl App {
                     file_name
                 );
                 let exists = std::path::Path::new(&host_path).exists();
-                log_debug(&format!("DEBUG [update_ignored_exists_for_file]: file_name={} prefix={:?} translated_base_path={} host_path={} exists={}",
-                    file_name, level.prefix, level.translated_base_path, host_path, exists));
+                log_debug(&format!(
+                    "DEBUG [update_ignored_exists_for_file]: file_name={} prefix={:?} translated_base_path={} host_path={} exists={}",
+                    file_name, level.prefix, level.translated_base_path, host_path, exists
+                ));
                 level.ignored_exists.insert(file_name.to_string(), exists);
             } else {
                 // File is no longer ignored - remove from ignored_exists

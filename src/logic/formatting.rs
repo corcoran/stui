@@ -140,6 +140,45 @@ pub fn format_datetime(rfc3339: &str) -> String {
     }
 }
 
+/// Format time since event for status bar
+///
+/// Converts a SystemTime timestamp into a human-readable relative time string.
+///
+/// # Arguments
+/// * `timestamp` - SystemTime of the event
+///
+/// # Returns
+/// Formatted string like "5 sec ago", "2 min ago", "3 hr ago", "Yesterday", or "5 days ago"
+///
+/// # Examples
+/// ```no_run
+/// use std::time::{SystemTime, Duration};
+/// use stui::logic::formatting::format_time_since;
+///
+/// let now = SystemTime::now();
+/// let thirty_secs_ago = now - Duration::from_secs(30);
+/// assert_eq!(format_time_since(thirty_secs_ago), "30 sec ago");
+/// ```
+pub fn format_time_since(timestamp: std::time::SystemTime) -> String {
+    let elapsed = timestamp
+        .elapsed()
+        .unwrap_or(std::time::Duration::from_secs(0));
+
+    let secs = elapsed.as_secs();
+
+    if secs < 60 {
+        format!("{} sec ago", secs)
+    } else if secs < 3600 {
+        format!("{} min ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{} hr ago", secs / 3600)
+    } else if secs < 172800 {
+        "Yesterday".to_string()
+    } else {
+        format!("{} days ago", secs / 86400)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +280,30 @@ mod tests {
     fn test_format_human_size_terabytes() {
         assert_eq!(format_human_size(1099511627776), "1.0T");
         assert_eq!(format_human_size(1649267441664), "1.5T");
+    }
+
+    // ========================================
+    // FORMAT TIME SINCE
+    // ========================================
+
+    #[test]
+    fn test_format_time_since_seconds() {
+        let timestamp = std::time::SystemTime::now() - std::time::Duration::from_secs(30);
+        let formatted = format_time_since(timestamp);
+        assert!(formatted.contains("sec ago"));
+    }
+
+    #[test]
+    fn test_format_time_since_minutes() {
+        let timestamp = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
+        let formatted = format_time_since(timestamp);
+        assert!(formatted.contains("min ago"));
+    }
+
+    #[test]
+    fn test_format_time_since_hours() {
+        let timestamp = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        let formatted = format_time_since(timestamp);
+        assert!(formatted.contains("hr ago"));
     }
 }

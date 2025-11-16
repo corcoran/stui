@@ -148,6 +148,15 @@ ag -C 3 "pattern"
 ag -i "pattern"
 ```
 
+**CRITICAL: Always put ag options BEFORE the pattern, never after files:**
+```bash
+# ✅ CORRECT - options before pattern
+ag -C 3 "pattern" src/
+
+# ❌ WRONG - options after files will fail
+ag "pattern" src/ -C 3
+```
+
 **Use `fd` for finding files:**
 ```bash
 # Find files by name pattern
@@ -410,6 +419,18 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 **UI Layout:** System bar → Main content (folders + breadcrumb panels with smart sizing) → Hotkey legend → Status bar
 
+**Folder List (focus_level == 0):**
+- Card-based rendering with inline stats (3 lines per folder)
+- Shows folder name, state icon, type, size, file count, and status message
+- Out-of-sync folders show detailed breakdown (remote needed, local changes)
+- Dynamic title shows counts (total, synced, syncing, paused)
+
+**Status Bar (context-aware):**
+- **Folder view (focus_level == 0)**: Activity feed + device count
+  - Shows last sync activity with timestamp ("SYNCED file 'example.txt' • 5 sec ago")
+  - Shows connected device count ("3 devices connected")
+- **Breadcrumb view (focus_level > 0)**: Folder/file details + sort mode + filter status
+
 **Key UI features:**
 - Context-aware hotkey legend (folder view vs breadcrumb view)
 - Three-state file info toggle (Off/TimestampOnly/TimestampAndSize)
@@ -452,8 +473,8 @@ CLI flags: `--debug`, `--vim`, `--config <path>`
 - `src/handlers/` - Event handlers: keyboard, api, events
 - `src/services/` - Background: api (async queue), events (long-polling)
 - `src/model/` - Pure state (Elm): syncthing, navigation, ui, performance, types
-- `src/logic/` - Pure business logic (15 modules): file, folder, formatting, ignore, layout, navigation, path, performance, platform, search, sorting, sync_states, ui, errors
-- `src/ui/` - Rendering (13 modules): render, folder_list, breadcrumb, dialogs, icons, legend, search, status_bar, system_bar, out_of_sync_summary, toast, layout
+- `src/logic/` - Pure business logic (16 modules): file, folder, folder_card, formatting, ignore, layout, navigation, path, performance, platform, search, sorting, sync_states, ui, errors
+- `src/ui/` - Rendering (13 modules): render, folder_list (card-based), breadcrumb, dialogs, icons, legend, search, status_bar (activity feed), system_bar, out_of_sync_summary (filter modal), toast, layout
 - `src/api.rs`, `src/cache.rs`, `src/config.rs`, `src/utils.rs` - Core utilities
 
 **Key patterns:** App initialization loads folders, spawns services. Main event loop (~line 909) processes API responses, keyboard, cache events. Keyboard handler has confirmation dialogs first.
@@ -491,6 +512,8 @@ CLI flags: `--debug`, `--vim`, `--config <path>`
 ### Event-Driven Cache Invalidation
 Long-polling `/rest/events` for real-time updates. Granular invalidation (file/dir/folder). Handles LocalIndexUpdated, ItemStarted, ItemFinished. Persistent event ID, auto-recovery.
 
+**Activity Event Deduplication:** Activity events from ItemFinished are deduplicated by timestamp. Only events newer than existing activity are stored, preventing event replay from overwriting fresh data during event stream reconnection.
+
 ### Performance Optimizations
 Async API service with priority queue, cache-first rendering, sequence-based validation, request deduplication, 300ms idle threshold, 250ms poll timeout (~1-2% CPU idle).
 
@@ -505,7 +528,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
 
 ## Current State
 
-**569 tests passing**, zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.9.1.
+**603 tests passing**, zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.10.0.
 
 ## Development Guidelines
 
@@ -543,7 +566,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
     - TDD Approach: Wrote 10 tests first exposing exact bug
     - Test `test_state_already_connected_before_system_status` revealed root cause
     - Solution: Simple 1-line fix guided by tests
-    - Result: All 184 tests pass, bug fixed perfectly on first try
+    - Result: All tests pass, bug fixed perfectly on first try
     - **Lesson: TDD saves time and money**
   - **When Claude forgets to write tests:**
     - User should immediately call it out
@@ -553,7 +576,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
     - Test with real Syncthing Docker instances with large datasets
     - Pure business logic in `src/logic/` should have comprehensive test coverage
     - Model state transitions should have tests in corresponding test modules
-    - Run `cargo test` before committing to ensure all 184+ tests pass
+    - Run `cargo test` before committing to ensure all 603+ tests pass
     - Aim for zero compiler warnings (`cargo build` should be clean)
   - **Test Organization Standards:**
     - **Keep tests inline** using `#[cfg(test)] mod tests` at the bottom of each module
