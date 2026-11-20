@@ -320,6 +320,8 @@ fn is_real_last_file(at: std::time::SystemTime, filename: &str) -> bool {
     !filename.is_empty() && at > std::time::UNIX_EPOCH
 }
 
+const FOLDER_CONFIG_PATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[derive(Clone)]
 pub struct SyncthingClient {
     base_url: String,
@@ -871,6 +873,22 @@ impl SyncthingClient {
 
     /// Set a folder's group (Syncthing 2.1+); "" removes it from its group
     pub async fn set_folder_group(&self, folder_id: &str, group: &str) -> Result<()> {
+        self.patch_folder_config(
+            folder_id,
+            serde_json::json!({ "group": group }),
+            FOLDER_CONFIG_PATCH_TIMEOUT,
+        )
+        .await
+    }
+
+    /// PATCH `/rest/config/folders/<id>` with `payload`. The key handler awaits this, so
+    /// `timeout` bounds how long the UI can block on an unresponsive host.
+    async fn patch_folder_config(
+        &self,
+        folder_id: &str,
+        payload: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<()> {
         let url = format!(
             "{}/rest/config/folders/{}",
             self.base_url,
@@ -881,10 +899,11 @@ impl SyncthingClient {
             .patch(&url)
             .header("X-API-Key", &self.api_key)
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({ "group": group }))
+            .json(&payload)
+            .timeout(timeout)
             .send()
             .await
-            .context("Failed to set folder group")?;
+            .context("Failed to update folder config")?;
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
@@ -1056,6 +1075,30 @@ mod tests {
     fn test_last_file_updates_skips_no_activity_placeholder() {
         let updates = last_file_updates(stats_with("0001-01-01T00:00:00Z", ""));
         assert!(updates.is_empty(), "{:?}", updates);
+    }
+
+    #[tokio::test]
+    async fn test_folder_config_patch_times_out_on_silent_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (_sock, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+        let client = SyncthingClient::new(format!("http://{}", addr), "k".to_string());
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.patch_folder_config(
+                "photos",
+                serde_json::json!({ "group": "Work" }),
+                std::time::Duration::from_millis(200),
+            ),
+        )
+        .await
+        .expect("the request's own timeout ends it, not the test's");
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]

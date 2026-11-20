@@ -620,6 +620,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         }
 
+        ApiResponse::VersionResult { version } => {
+            if let Ok(version) = version {
+                app.model.syncthing.version = Some(version);
+            }
+        }
+
         ApiResponse::SystemStatusResult { status } => {
             match status {
                 Ok(sys_status) => {
@@ -636,6 +642,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         app.model.syncthing.connection_state,
                         ConnectionState::Connected
                     );
+
+                    // Syncthing may have been upgraded while stui was disconnected
+                    if was_disconnected || app.model.syncthing.version.is_none() {
+                        let _ = app.api_tx.send(ApiRequest::GetVersion);
+                    }
 
                     // Always fetch devices list on successful system status (first poll after reconnection)
                     // This ensures we have fresh device list and update device name (in case it changed in GUI)

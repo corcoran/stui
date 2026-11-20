@@ -3935,4 +3935,85 @@ mod tests {
         assert_eq!(kind, crate::model::ToastKind::Error);
         assert_eq!(group_of(&app, "photos").as_deref(), Some("Personal"));
     }
+
+    // ========================================
+    // VERSION ON RECONNECT
+    // ========================================
+
+    fn system_status_ok() -> crate::services::api::ApiResponse {
+        crate::services::api::ApiResponse::SystemStatusResult {
+            status: Ok(crate::api::SystemStatus {
+                my_id: "MLCMR7B".to_string(),
+                uptime: 10,
+                start_time: String::new(),
+            }),
+        }
+    }
+
+    fn version_requested(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+    ) -> bool {
+        let mut found = false;
+        while let Ok(req) = rx.try_recv() {
+            if matches!(req, crate::services::api::ApiRequest::GetVersion) {
+                found = true;
+            }
+        }
+        found
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_requests_version() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.model.syncthing.folders = vec![media_folder()];
+        app.model.syncthing.version = Some("v2.0.16".to_string());
+        app.model.syncthing.connection_state =
+            crate::model::syncthing::ConnectionState::Connecting {
+                attempt: 1,
+                last_error: None,
+                next_retry_secs: 5,
+            };
+
+        crate::handlers::api::handle_api_response(&mut app, system_status_ok());
+
+        assert!(
+            version_requested(&mut rx),
+            "reconnect should refetch the version"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_status_without_known_version_requests_it() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.model.syncthing.folders = vec![media_folder()];
+        app.model.syncthing.connection_state = crate::model::syncthing::ConnectionState::Connected;
+
+        crate::handlers::api::handle_api_response(&mut app, system_status_ok());
+
+        assert!(version_requested(&mut rx));
+    }
+
+    #[tokio::test]
+    async fn test_connected_status_with_known_version_does_not_refetch() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.model.syncthing.folders = vec![media_folder()];
+        app.model.syncthing.version = Some("v2.1.7".to_string());
+        app.model.syncthing.connection_state = crate::model::syncthing::ConnectionState::Connected;
+
+        crate::handlers::api::handle_api_response(&mut app, system_status_ok());
+
+        assert!(!version_requested(&mut rx));
+    }
+
+    #[tokio::test]
+    async fn test_version_result_stores_version() {
+        let mut app = create_test_app();
+        crate::handlers::api::handle_api_response(
+            &mut app,
+            crate::services::api::ApiResponse::VersionResult {
+                version: Ok("v2.1.7".to_string()),
+            },
+        );
+        assert_eq!(app.model.syncthing.version.as_deref(), Some("v2.1.7"));
+    }
 }

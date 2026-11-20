@@ -67,6 +67,7 @@ pub(crate) enum RequestKey {
         folder_id: String,
     },
     SystemStatus,
+    Version,
     ConnectionStats,
     Devices,
     NeededFiles {
@@ -116,6 +117,9 @@ pub enum ApiRequest {
 
     /// Get system status (device info, uptime)
     GetSystemStatus,
+
+    /// Get the Syncthing version string
+    GetVersion,
 
     /// Get global connection/transfer statistics
     GetConnectionStats,
@@ -189,6 +193,7 @@ impl ApiRequest {
                 prefix: None,
             },
             ApiRequest::GetSystemStatus => RequestKey::SystemStatus,
+            ApiRequest::GetVersion => RequestKey::Version,
             ApiRequest::GetConnectionStats => RequestKey::ConnectionStats,
             ApiRequest::GetDevices => RequestKey::Devices,
             ApiRequest::GetNeededFiles {
@@ -251,6 +256,10 @@ pub enum ApiResponse {
 
     SystemStatusResult {
         status: Result<SystemStatus, anyhow::Error>,
+    },
+
+    VersionResult {
+        version: Result<String, anyhow::Error>,
     },
 
     ConnectionStatsResult {
@@ -467,6 +476,10 @@ impl ApiService {
 
                 ApiResponse::SystemStatusResult { status }
             }
+
+            ApiRequest::GetVersion => ApiResponse::VersionResult {
+                version: client.get_version().await,
+            },
 
             ApiRequest::GetConnectionStats => {
                 let stats = client.get_connection_stats().await;
