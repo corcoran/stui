@@ -296,6 +296,21 @@ pub struct FolderStats {
     pub last_scan: String,
 }
 
+/// Each folder's most recent file change as (time, path). Folders with no activity or an
+/// unparseable time are left out.
+pub(crate) fn last_file_updates(
+    stats: std::collections::HashMap<String, FolderStats>,
+) -> std::collections::HashMap<String, (std::time::SystemTime, String)> {
+    stats
+        .into_iter()
+        .filter_map(|(folder_id, folder_stats)| {
+            let at = crate::services::events::try_parse_event_time(&folder_stats.last_file.at)?;
+            is_real_last_file(at, &folder_stats.last_file.filename)
+                .then_some((folder_id, (at, folder_stats.last_file.filename)))
+        })
+        .collect()
+}
+
 /// False for the placeholder `lastFile` Syncthing reports for folders with no activity
 /// (`at: "0001-01-01T00:00:00Z"`, `filename: ""`).
 fn is_real_last_file(at: std::time::SystemTime, filename: &str) -> bool {
@@ -754,21 +769,8 @@ impl SyncthingClient {
             .await
             .context("Failed to parse folder stats")?;
 
-        let mut updates: HashMap<String, (std::time::SystemTime, String)> = HashMap::new();
-
-        for (folder_id, folder_stats) in stats {
-            // Parse the timestamp
-            let timestamp =
-                crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
-
-            // Include deleted files too (matches the web GUI); skip folders with no activity
-            if !is_real_last_file(timestamp, &folder_stats.last_file.filename) {
-                continue;
-            }
-            updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
-        }
-
-        Ok(updates)
+        // Deleted files count too, matching the web GUI
+        Ok(last_file_updates(stats))
     }
 
     /// Fetch folder events from Syncthing event stream
@@ -974,6 +976,40 @@ mod tests {
         assert!(is_real_last_file(parse("2024-05-01T12:00:00Z"), "a/b.txt"));
     }
 
+    fn stats_with(at: &str, filename: &str) -> std::collections::HashMap<String, FolderStats> {
+        std::collections::HashMap::from([(
+            "docs".to_string(),
+            FolderStats {
+                last_file: LastFileInfo {
+                    at: at.to_string(),
+                    filename: filename.to_string(),
+                    deleted: false,
+                },
+                last_scan: String::new(),
+            },
+        )])
+    }
+
+    #[test]
+    fn test_last_file_updates_keeps_real_entry() {
+        let updates = last_file_updates(stats_with("2024-05-01T12:00:00Z", "a/b.txt"));
+        let (at, file) = updates.get("docs").expect("real entry kept");
+        assert_eq!(*at, parse("2024-05-01T12:00:00Z"));
+        assert_eq!(file, "a/b.txt");
+    }
+
+    #[test]
+    fn test_last_file_updates_skips_malformed_time() {
+        let updates = last_file_updates(stats_with("garbage", "a/b.txt"));
+        assert!(updates.is_empty(), "{:?}", updates);
+    }
+
+    #[test]
+    fn test_last_file_updates_skips_no_activity_placeholder() {
+        let updates = last_file_updates(stats_with("0001-01-01T00:00:00Z", ""));
+        assert!(updates.is_empty(), "{:?}", updates);
+    }
+
     #[tokio::test]
     async fn test_get_needed_files_builds_correct_url() {
         // This is a basic smoke test - full integration test requires real Syncthing
@@ -1037,14 +1073,7 @@ mod tests {
             "Deleted flag should be true"
         );
 
-        // Test conversion to HashMap (simulating what get_folder_stats does)
-        let mut updates: HashMap<String, (std::time::SystemTime, String)> = HashMap::new();
-        for (folder_id, folder_stats) in stats {
-            // Include all files, even deleted ones - matches Syncthing web GUI behavior
-            let timestamp =
-                crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
-            updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
-        }
+        let updates = last_file_updates(stats);
 
         // Should have all 3 folders (including deleted one - matches web GUI behavior)
         assert_eq!(

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🐛 Bug Fixes
 
 - Scrolling to the bottom of a text preview reaches the last line when long lines wrap
+- A last-activity time that can't be parsed no longer shows as "just now"; the folder shows no last activity instead
 
 ---
 

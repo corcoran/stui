@@ -30,17 +30,22 @@ fn parse_event_time(time_str: &str) -> SystemTime {
     parse_event_time_public(time_str)
 }
 
+/// RFC3339 timestamp from Syncthing, or `None` if it doesn't parse
+pub fn try_parse_event_time(time_str: &str) -> Option<SystemTime> {
+    DateTime::parse_from_rfc3339(time_str)
+        .ok()
+        .map(SystemTime::from)
+}
+
 /// Public version of parse_event_time for use in other modules
 pub fn parse_event_time_public(time_str: &str) -> SystemTime {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(time_str) {
-        SystemTime::from(dt)
-    } else {
+    try_parse_event_time(time_str).unwrap_or_else(|| {
         log_debug(&format!(
             "DEBUG [EVENT]: Failed to parse timestamp '{}', using current time",
             time_str
         ));
         SystemTime::now()
-    }
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -468,6 +473,24 @@ mod tests {
             diff.as_secs() < 1,
             "Invalid timestamp should fall back to current time"
         );
+    }
+
+    #[test]
+    fn test_try_parse_event_time_valid() {
+        let parsed = try_parse_event_time("2025-11-09T23:24:15Z").expect("valid RFC3339");
+        assert_eq!(
+            parsed
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1762730655
+        );
+    }
+
+    #[test]
+    fn test_try_parse_event_time_invalid_is_none() {
+        assert_eq!(try_parse_event_time("not-a-timestamp"), None);
+        assert_eq!(try_parse_event_time(""), None);
     }
 
     #[test]
