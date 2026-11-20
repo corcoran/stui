@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.13.0] - 2026-11-20
+
 ### ✨ New Features
 
 - **Markdown preview**: `.md` files render in the preview with headings, emphasis, lists, quotes, code blocks, links and tables. Press `r` to switch to the raw source
