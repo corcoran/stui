@@ -25,7 +25,6 @@
 - `parse_event_time_public` falls back to `SystemTime::now()` for an unparseable timestamp, so a malformed `lastFile.at` shows as "just now"
 - While a folder is syncing, `overlay_syncing_states` clones each breadcrumb level's state map every frame. Fine at normal sizes, costly for directories with tens of thousands of entries. Computing per visible row with `item_sync_state` would avoid it
 - `toggle_ignore` sets the "Cannot un-ignore: deletion in progress" toast itself instead of returning a result for `handlers/keyboard.rs` to report
-- `create_test_app_with_api_rx` passes `SyncthingClient::new` its `base_url` and `api_key` in swapped order. Harmless for current tests
 
 ---
 

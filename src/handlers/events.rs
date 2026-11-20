@@ -254,6 +254,18 @@ mod tests {
         App,
         tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
     ) {
+        // Nothing listens on port 9, so stray requests fail at once and never reach a
+        // real Syncthing on the default port
+        create_test_app_at("http://127.0.0.1:9")
+    }
+
+    /// Test app whose API client talks to `base_url`
+    fn create_test_app_at(
+        base_url: &str,
+    ) -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+    ) {
         use crate::SyncthingClient;
         use crate::cache::CacheDb;
         use crate::config::Config;
@@ -264,7 +276,7 @@ mod tests {
 
         let config = Config {
             api_key: "test-key".to_string(),
-            base_url: "http://localhost:8384".to_string(),
+            base_url: base_url.to_string(),
             path_map: HashMap::new(),
             vim_mode: false,
             icon_mode: "emoji".to_string(),
@@ -274,7 +286,7 @@ mod tests {
             image_protocol: "auto".to_string(),
         };
 
-        let client = SyncthingClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
         let cache = CacheDb::new_in_memory().expect("Failed to create test cache");
         let (api_tx, api_request_rx) = tokio::sync::mpsc::unbounded_channel();
         let (_api_response_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3503,5 +3515,53 @@ mod tests {
             app.model.ui.vim_command_state,
             crate::model::VimCommandState::None
         );
+    }
+
+    // ========================================
+    // TEST APP
+    // ========================================
+
+    /// Stub server that records the first request it receives, headers included
+    async fn spawn_capturing_stub() -> (String, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+        let captured_for_task = captured.clone();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                *captured_for_task.lock().unwrap() =
+                    Some(String::from_utf8_lossy(&buf[..n]).to_string());
+                let _ = sock
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        (format!("http://{}", addr), captured)
+    }
+
+    #[tokio::test]
+    async fn test_test_app_client_uses_configured_url_and_key() {
+        let (stub_url, captured) = spawn_capturing_stub().await;
+        let (app, _rx) = create_test_app_at(&stub_url);
+
+        let _ = app.client.get_file_info("media", "a.txt").await;
+
+        let request = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the client should send its request to the configured base URL")
+            .to_lowercase();
+        assert!(request.starts_with("get /rest/db/file?"), "{}", request);
+        assert!(request.contains("x-api-key: test-key"), "{}", request);
+    }
+
+    #[test]
+    fn test_default_test_app_never_targets_local_syncthing() {
+        let app = create_test_app();
+        assert!(!app.base_url.contains(":8384"), "{}", app.base_url);
     }
 }
