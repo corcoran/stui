@@ -235,7 +235,7 @@ mod tests {
         // Should match either /foo or /foo/bar (both are parents)
         let matched = result.unwrap();
         assert!(
-            matched == *"/foo" || matched == *"/foo/bar",
+            matched == std::path::Path::new("/foo") || matched == std::path::Path::new("/foo/bar"),
             "Should match one of the parent paths"
         );
     }
