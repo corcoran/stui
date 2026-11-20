@@ -12,10 +12,10 @@ Nothing here touches a real Syncthing instance or `~/.config/stui`. Everything r
 Linux with Docker and a Wayland-capable GPU stack. On Arch:
 
 ```
-sudo pacman -S sway kitty grim wf-recorder gifski perl-image-exiftool imagemagick ffmpeg jq
+sudo pacman -S sway kitty grim wf-recorder gifski perl-image-exiftool imagemagick ffmpeg jq ttf-jetbrains-mono-nerd
 ```
 
-The font in `kitty.conf` is JetBrainsMono Nerd Font Mono. `record.sh` checks for the tools and prints what's missing.
+The font in `kitty.conf` is JetBrainsMono Nerd Font Mono (`ttf-jetbrains-mono-nerd`). `record.sh` checks for the tools and prints what's missing.
 
 ## Regenerating README assets
 
