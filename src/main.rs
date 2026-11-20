@@ -8,7 +8,8 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -143,6 +144,10 @@ pub struct App {
     dir_child_states: DirChildStates,
     /// Folder whose preview still needs `ensure_need_index`, run once input goes idle
     pending_preview_need: Option<String>,
+    /// `terminal_title` from the config
+    terminal_title_enabled: bool,
+    /// Last title written to the terminal
+    last_terminal_title: Option<String>,
     last_db_flush: Instant,
     last_reconnect_attempt: Instant,
     reconnect_delay: Duration,
@@ -571,6 +576,8 @@ impl App {
             last_directory_update: Instant::now(),
             dir_child_states: HashMap::new(),
             pending_preview_need: None,
+            terminal_title_enabled: config.terminal_title,
+            last_terminal_title: None,
             last_db_flush: Instant::now(),
             last_reconnect_attempt: Instant::now(),
             reconnect_delay: Duration::from_secs(5), // Start with 5s
@@ -951,6 +958,12 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let title_enabled = app.terminal_title_enabled;
+    if title_enabled {
+        // Save the current title on the terminal's title stack; terminals without one ignore it
+        write!(stdout, "\x1b[22;0t")?;
+        stdout.flush()?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -959,6 +972,10 @@ async fn main() -> Result<()> {
 
     // Cleanup terminal
     disable_raw_mode()?;
+    if title_enabled {
+        // Restore the title saved at startup
+        write!(terminal.backend_mut(), "\x1b[23;0t")?;
+    }
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
@@ -986,6 +1003,16 @@ where
         terminal.draw(|f| {
             ui::render(f, app);
         })?;
+
+        let title = logic::ui::terminal_title(&app.model);
+        if let Some(title) = logic::ui::title_to_send(
+            app.terminal_title_enabled,
+            app.last_terminal_title.as_deref(),
+            &title,
+        ) {
+            let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(&title));
+            app.last_terminal_title = Some(title);
+        }
 
         // Auto-dismiss toast after 1.5 seconds
         if app.model.ui.should_dismiss_toast() {

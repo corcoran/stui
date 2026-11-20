@@ -443,7 +443,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, image preview settings
+YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, image preview settings, `terminal_title`
 
 CLI flags: `--debug`, `--vim`, `--config <path>`
 

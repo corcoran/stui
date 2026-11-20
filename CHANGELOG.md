@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ New Features
+
+- **Terminal title**: The terminal or tab title follows where you are (`stui · Projects/website`, or the file while previewing) and goes back to the previous title on exit. Set `terminal_title: false` to leave the title alone
+
 ### 🐛 Bug Fixes
 
 - The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README

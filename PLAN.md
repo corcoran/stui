@@ -10,7 +10,6 @@
 - Syncthing log viewer
 
 **Medium Priority:**
-- Set the terminal title (OSC 2) to the current context: folder, directory path, or the file being previewed. Restore the previous title on exit
 - Tell local deletions apart in Receive Only folders: a file deleted locally (`deleted: true` in `/rest/db/localchanged`) shows the same local-change icon as an edit or addition, and its preview just says "File not found on disk". Mark deletions differently in the file list, and have the preview say it was deleted on this device and that `R` restores it from the other devices (e.g. `Documents/manuals/router-setup.txt` in the demo)
 - `blockIndexing` toggle (Syncthing v2.1.0+): per-folder bool, defaults to true. Off shrinks the Syncthing database but loses block reuse across files. Fits next to the folder type menu
 - Taskbar icon (plus ability to launch terminal + app)

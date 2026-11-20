@@ -204,6 +204,38 @@ pub fn should_dismiss_toast(elapsed_millis: u128) -> bool {
     elapsed_millis >= 1000
 }
 
+/// Terminal title for the current view: `stui` in the folder list, then the folder label
+/// and path (`stui · Projects/website`), ending in the file name while previewing.
+pub fn terminal_title(model: &crate::model::Model) -> String {
+    let nav = &model.navigation;
+    let Some(level) = nav
+        .focus_level
+        .checked_sub(1)
+        .and_then(|i| nav.breadcrumb_trail.get(i))
+    else {
+        return "stui".to_string();
+    };
+    let path = match &model.ui.file_info_popup {
+        Some(popup) => popup.file_path.clone(),
+        None => level
+            .prefix
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches('/')
+            .to_string(),
+    };
+    if path.is_empty() {
+        format!("stui · {}", level.folder_label)
+    } else {
+        format!("stui · {}/{}", level.folder_label, path)
+    }
+}
+
+/// The title to write, if any: only when titles are enabled and it changed since `last`
+pub fn title_to_send(enabled: bool, last: Option<&str>, current: &str) -> Option<String> {
+    (enabled && last != Some(current)).then(|| current.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +556,99 @@ mod tests {
             all_files_sorted: None,
         });
         assert!(modal_open(&model));
+    }
+
+    // ========================================
+    // TERMINAL TITLE
+    // ========================================
+
+    fn level(label: &str, prefix: Option<&str>) -> crate::model::BreadcrumbLevel {
+        crate::model::BreadcrumbLevel {
+            folder_id: label.to_lowercase(),
+            folder_label: label.to_string(),
+            folder_path: "/data".to_string(),
+            prefix: prefix.map(str::to_string),
+            items: vec![],
+            filtered_items: None,
+            selected_index: None,
+            file_sync_states: Default::default(),
+            direct_states: Default::default(),
+            ignored_exists: Default::default(),
+            translated_base_path: "/data".to_string(),
+        }
+    }
+
+    fn model_in(levels: Vec<crate::model::BreadcrumbLevel>) -> Model {
+        let mut model = Model::new(false);
+        model.navigation.focus_level = levels.len();
+        model.navigation.breadcrumb_trail = levels;
+        model
+    }
+
+    fn preview(model: &mut Model, file_path: &str) {
+        model.ui.file_info_popup = Some(crate::model::FileInfoPopupState {
+            folder_id: "projects".to_string(),
+            file_path: file_path.to_string(),
+            browse_item: crate::api::BrowseItem {
+                name: file_path.rsplit('/').next().unwrap().to_string(),
+                item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                mod_time: String::new(),
+                size: 0,
+            },
+            file_details: None,
+            file_content: Ok(String::new()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 0,
+            raw_view: false,
+        });
+    }
+
+    #[test]
+    fn test_terminal_title_folder_list() {
+        assert_eq!(terminal_title(&Model::new(false)), "stui");
+    }
+
+    #[test]
+    fn test_terminal_title_folder_root_and_nested_path() {
+        let root = model_in(vec![level("Projects", None)]);
+        assert_eq!(terminal_title(&root), "stui · Projects");
+
+        let nested = model_in(vec![
+            level("Projects", None),
+            level("Projects", Some("website/")),
+        ]);
+        assert_eq!(terminal_title(&nested), "stui · Projects/website");
+    }
+
+    #[test]
+    fn test_terminal_title_preview_names_the_file() {
+        let mut model = model_in(vec![
+            level("Projects", None),
+            level("Projects", Some("website/")),
+        ]);
+        preview(&mut model, "website/deploy.md");
+        assert_eq!(terminal_title(&model), "stui · Projects/website/deploy.md");
+    }
+
+    #[test]
+    fn test_terminal_title_keeps_spaces_and_non_ascii() {
+        let model = model_in(vec![
+            level("Фото и видео", None),
+            level("Фото и видео", Some("2024 trip/")),
+        ]);
+        assert_eq!(terminal_title(&model), "stui · Фото и видео/2024 trip");
+    }
+
+    #[test]
+    fn test_title_to_send() {
+        assert_eq!(title_to_send(true, None, "stui"), Some("stui".to_string()));
+        assert_eq!(title_to_send(true, Some("stui"), "stui"), None);
+        assert_eq!(
+            title_to_send(true, Some("stui"), "stui · Projects"),
+            Some("stui · Projects".to_string())
+        );
+        assert_eq!(title_to_send(false, None, "stui"), None);
     }
 }

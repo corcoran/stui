@@ -19,6 +19,9 @@ pub struct Config {
     pub image_preview_enabled: bool,
     #[serde(default = "default_image_protocol")]
     pub image_protocol: String,
+    /// Show the current folder, path or previewed file in the terminal title
+    #[serde(default = "default_terminal_title")]
+    pub terminal_title: bool,
 }
 
 fn default_icon_mode() -> String {
@@ -29,6 +32,30 @@ fn default_image_preview_enabled() -> bool {
     true
 }
 
+fn default_terminal_title() -> bool {
+    true
+}
+
 fn default_image_protocol() -> String {
     "auto".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL: &str = "api_key: k\nbase_url: http://127.0.0.1:8384\npath_map: {}\n";
+
+    #[test]
+    fn test_terminal_title_defaults_on() {
+        let config: Config = serde_yaml::from_str(MINIMAL).unwrap();
+        assert!(config.terminal_title);
+    }
+
+    #[test]
+    fn test_terminal_title_can_be_turned_off() {
+        let yaml = format!("{}terminal_title: false\n", MINIMAL);
+        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        assert!(!config.terminal_title);
+    }
 }

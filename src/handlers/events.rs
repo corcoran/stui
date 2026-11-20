@@ -284,6 +284,7 @@ mod tests {
             clipboard_command: None,
             image_preview_enabled: false,
             image_protocol: "auto".to_string(),
+            terminal_title: false,
         };
 
         let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
@@ -316,6 +317,8 @@ mod tests {
             last_directory_update: std::time::Instant::now(),
             dir_child_states: HashMap::new(),
             pending_preview_need: None,
+            terminal_title_enabled: false,
+            last_terminal_title: None,
             last_db_flush: std::time::Instant::now(),
             last_reconnect_attempt: std::time::Instant::now(),
             reconnect_delay: Duration::from_secs(1),
