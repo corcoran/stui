@@ -528,7 +528,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
 
 ## Current State
 
-**603 tests passing**, zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.10.0.
+**1163 tests passing** (`cargo test` total across lib, bin and integration targets), zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.11.1.
 
 ## Development Guidelines
 
@@ -598,6 +598,17 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
       - `src/logic/navigation.rs` - 14 tests in 4 sections (Next Selection, Prev Selection, Edge Cases, Find Item By Name)
     - **Benefits:** Tests can be collapsed by section in IDEs, clear grouping makes finding related tests easy, maintains locality with implementation code
 - **Debug Mode**: Use `--debug` flag for verbose logging to `/tmp/stui-debug.log`
+
+### Visual Verification (headless kitty)
+
+Claude can drive stui and look at it: `demo/` runs a throwaway two-node Syncthing with seeded states and a headless sway + kitty session, and screenshots can be viewed with the Read tool. Unit tests share the code's assumptions, so this catches what they miss.
+
+- **For any change to rendering, icons, sync states, navigation, or popups**, after the unit tests pass, capture before/after screenshots (old binary vs new) and compare them for the intended change and for regressions
+- Ask before `cargo build --release`
+- Never touch the user's real `syncthing` container or `~/.config/stui`; the demo only uses compose project `stui-demo`
+- Don't write ad-hoc shots to `docs/assets/`; those are the README assets, regenerated with `demo/record.sh`
+
+How-to, helpers, seeded data, and gotchas: `demo/README.md`.
 
 ### Adding New Features - Common Patterns
 

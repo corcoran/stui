@@ -1,0 +1,30 @@
+name: stui-demo
+services:
+  nas:
+    image: syncthing/syncthing:2.1.7
+    hostname: nas
+    environment:
+      PUID: "${DEMO_UID}"
+      PGID: "${DEMO_GID}"
+      TZ: "${DEMO_TZ}"
+      STGUIAPIKEY: stui-demo-nas-key
+      STNOUPGRADE: "1"
+    volumes:
+      - ./.run/nas/config:/var/syncthing/config
+      - ./.run/nas/data:/data
+    ports:
+      - "127.0.0.1:18385:8384"
+  laptop:
+    image: syncthing/syncthing:2.1.7
+    hostname: laptop
+    environment:
+      PUID: "${DEMO_UID}"
+      PGID: "${DEMO_GID}"
+      TZ: "${DEMO_TZ}"
+      STGUIAPIKEY: stui-demo-laptop-key
+      STNOUPGRADE: "1"
+    volumes:
+      - ./.run/laptop/config:/var/syncthing/config
+      - ./.run/laptop/data:/data
+    ports:
+      - "127.0.0.1:18384:8384"

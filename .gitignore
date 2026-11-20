@@ -1,3 +1,6 @@
 /target
 docs/plans/
 .claude/
+demo/.run/
+demo/stui.yaml
+docs/assets/hero.mp4
