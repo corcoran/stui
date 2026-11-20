@@ -23,7 +23,6 @@
 ### Known Bugs
 
 - While a folder is syncing, `overlay_syncing_states` clones each breadcrumb level's state map every frame. Fine at normal sizes, costly for directories with tens of thousands of entries. Computing per visible row with `item_sync_state` would avoid it
-- `toggle_ignore` sets the "Cannot un-ignore: deletion in progress" toast itself instead of returning a result for `handlers/keyboard.rs` to report
 
 ---
 

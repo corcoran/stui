@@ -3564,4 +3564,41 @@ mod tests {
         let app = create_test_app();
         assert!(!app.base_url.contains(":8384"), "{}", app.base_url);
     }
+
+    // ========================================
+    // UN-IGNORE BLOCKED BY PENDING DELETE
+    // ========================================
+
+    #[tokio::test]
+    async fn test_toggle_ignore_blocked_by_pending_delete_returns_path_without_toast() {
+        let (mut app, _rx) = app_viewing_ignored_item(&["/a.mkv"]).await;
+        app.add_pending_delete(
+            "media".to_string(),
+            std::path::PathBuf::from("/data/media/a.mkv"),
+        );
+
+        let result = app.toggle_ignore().await.unwrap();
+
+        assert_eq!(
+            result,
+            crate::app::ignore::IgnoreToggle::BlockedByPendingDelete(std::path::PathBuf::from(
+                "/data/media/a.mkv"
+            ))
+        );
+        assert!(app.model.ui.toast_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_i_on_item_pending_delete_shows_blocked_toast() {
+        let (mut app, _rx) = app_viewing_ignored_item(&["/a.mkv"]).await;
+        app.add_pending_delete("media".to_string(), std::path::PathBuf::from("/data/media"));
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        let (message, _) = app.model.ui.toast_message.clone().expect("toast shown");
+        assert_eq!(
+            message,
+            "Cannot un-ignore: deletion in progress for /data/media"
+        );
+    }
 }

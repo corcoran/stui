@@ -8,7 +8,7 @@ use crate::logic::ignore::{ScanScope, scan_scope_for_pattern};
 use crate::{App, SyncState, log_debug, logic, model, services};
 use anyhow::Result;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const UNIGNORE_FOLLOW_UP_DELAY: Duration = Duration::from_secs(2);
 
@@ -21,6 +21,8 @@ pub(crate) enum IgnoreToggle {
     Unignored(String),
     /// Several patterns match; the pattern selection menu is open.
     ChoosePattern,
+    /// Un-ignore refused: this pending deletion covers the item.
+    BlockedByPendingDelete(PathBuf),
 }
 
 impl App {
@@ -81,16 +83,11 @@ impl App {
 
             // Check if this path or any parent is pending deletion
             if let Some(pending_path) = self.is_path_or_parent_pending(&folder_id, &path_buf) {
-                let message = format!(
-                    "Cannot un-ignore: deletion in progress for {}",
-                    pending_path.display()
-                );
-                self.model.ui.toast_message = Some((message, Instant::now()));
                 log_debug(&format!(
                     "Blocked un-ignore: path {:?} is pending deletion",
                     pending_path
                 ));
-                return Ok(IgnoreToggle::Unchanged);
+                return Ok(IgnoreToggle::BlockedByPendingDelete(pending_path));
             }
 
             // File is ignored - find matching patterns and remove them

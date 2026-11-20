@@ -902,10 +902,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('i') => {
             // Toggle ignore state (add or remove from .stignore)
-            if let Ok(crate::app::ignore::IgnoreToggle::Unignored(item_name)) =
-                app.toggle_ignore().await
-            {
-                app.model.ui.show_toast(unignore_toast(&item_name));
+            match app.toggle_ignore().await {
+                Ok(crate::app::ignore::IgnoreToggle::Unignored(item_name)) => {
+                    app.model.ui.show_toast(unignore_toast(&item_name));
+                }
+                Ok(crate::app::ignore::IgnoreToggle::BlockedByPendingDelete(path)) => {
+                    app.model.ui.show_toast(format!(
+                        "Cannot un-ignore: deletion in progress for {}",
+                        path.display()
+                    ));
+                }
+                _ => {}
             }
         }
         KeyCode::Char('I') => {
