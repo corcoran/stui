@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.12.0] - 2026-11-20
+
 ### ✨ New Features
 
 - **Syncing icons for files in transfer**: Files Syncthing is downloading show 🔄 right away, even if stui started mid-transfer. Sorting by sync state groups them too
