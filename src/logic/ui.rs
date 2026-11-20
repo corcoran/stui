@@ -14,6 +14,8 @@ pub fn modal_open(model: &crate::model::Model) -> bool {
         || ui.show_setup_help
         || ui.pattern_selection.is_some()
         || ui.folder_type_selection.is_some()
+        || ui.folder_group_menu.is_some()
+        || ui.group_name_input.is_some()
         || ui.file_info_popup.is_some()
         || ui.folder_history_modal.is_some()
 }
@@ -388,6 +390,28 @@ mod tests {
     #[test]
     fn test_modal_open_false_with_no_popups() {
         assert!(!modal_open(&Model::new(false)));
+    }
+
+    #[test]
+    fn test_modal_open_with_group_dialogs() {
+        use crate::model::types::{FolderGroupMenuState, GroupNameInputState};
+        let menu = FolderGroupMenuState {
+            folder_id: "a".to_string(),
+            folder_label: "A".to_string(),
+            current_group: String::new(),
+            options: vec![],
+            selected_index: 0,
+        };
+        let mut model = Model::new(false);
+        model.ui.folder_group_menu = Some(menu.clone());
+        assert!(modal_open(&model));
+        model.ui.folder_group_menu = None;
+        model.ui.group_name_input = Some(GroupNameInputState {
+            menu,
+            text: String::new(),
+            show_empty_hint: false,
+        });
+        assert!(modal_open(&model));
     }
 
     #[test]

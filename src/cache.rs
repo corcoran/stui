@@ -1066,6 +1066,38 @@ mod tests {
     }
 
     // ========================================
+    // CACHED FOLDER GROUPS
+    // ========================================
+
+    #[test]
+    fn test_cached_folders_without_group_read_as_none() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT OR REPLACE INTO cached_folders (id, data) VALUES (1, ?1)",
+                params![r#"[{"id":"a","label":"A","path":"/a","paused":false,"type":"sendreceive","devices":[]}]"#],
+            )
+            .unwrap();
+        assert_eq!(cache.get_all_folders().unwrap()[0].group, None);
+    }
+
+    #[test]
+    fn test_cached_folders_keep_group() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        let folder: crate::api::Folder = serde_json::from_value(serde_json::json!({
+            "id": "a", "label": "A", "path": "/a", "paused": false,
+            "type": "sendreceive", "group": "Work"
+        }))
+        .unwrap();
+        cache.save_folders(&[folder]).unwrap();
+        assert_eq!(
+            cache.get_all_folders().unwrap()[0].group.as_deref(),
+            Some("Work")
+        );
+    }
+
+    // ========================================
     // FOLDER STATUS ROUND TRIP
     // ========================================
 
@@ -1086,6 +1118,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
         let card = crate::logic::folder_card::calculate_folder_card_state(&folder, Some(&loaded));
         assert!(

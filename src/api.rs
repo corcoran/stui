@@ -32,6 +32,9 @@ pub struct Folder {
     pub folder_type: String, // "sendonly", "sendreceive", "receiveonly"
     #[serde(default)]
     pub devices: Vec<FolderDevice>,
+    /// Syncthing 2.1+ folder group; `None` when Syncthing doesn't send the field
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -863,6 +866,30 @@ impl SyncthingClient {
             );
         }
 
+        Ok(())
+    }
+
+    /// Set a folder's group (Syncthing 2.1+); "" removes it from its group
+    pub async fn set_folder_group(&self, folder_id: &str, group: &str) -> Result<()> {
+        let url = format!(
+            "{}/rest/config/folders/{}",
+            self.base_url,
+            urlencoding::encode(folder_id)
+        );
+        let response = self
+            .client
+            .patch(&url)
+            .header("X-API-Key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "group": group }))
+            .send()
+            .await
+            .context("Failed to set folder group")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("{} - {}", status, text);
+        }
         Ok(())
     }
 

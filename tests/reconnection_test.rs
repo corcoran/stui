@@ -82,6 +82,7 @@ fn test_folder_population_dismisses_setup_help() {
             folder_type: "sendreceive".to_string(),
             paused: false,
             devices: vec![],
+            group: None,
         },
         stui::api::Folder {
             id: "test-folder-2".to_string(),
@@ -90,6 +91,7 @@ fn test_folder_population_dismisses_setup_help() {
             folder_type: "sendreceive".to_string(),
             paused: false,
             devices: vec![],
+            group: None,
         },
     ];
 
@@ -146,6 +148,7 @@ fn test_complete_reconnection_flow() {
         folder_type: "sendreceive".to_string(),
         paused: false,
         devices: vec![],
+        group: None,
     }];
 
     if !model.syncthing.folders.is_empty() {
@@ -184,6 +187,7 @@ fn test_reconnection_with_existing_folders_no_flag() {
         folder_type: "sendreceive".to_string(),
         paused: false,
         devices: vec![],
+        group: None,
     }];
     model.ui.needs_folder_refresh = false;
 
@@ -366,6 +370,7 @@ fn test_complete_flow_after_dismissed_dialog() {
         folder_type: "sendreceive".to_string(),
         paused: false,
         devices: vec![],
+        group: None,
     }];
 
     // Select first folder

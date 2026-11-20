@@ -160,6 +160,9 @@ pub struct SyncthingModel {
     /// Version of the connected Syncthing, e.g. "v2.1.7"
     pub version: Option<String>,
 
+    /// Folder ids in Syncthing's config order; `folders` is reordered by group
+    pub folder_config_order: Vec<String>,
+
     /// Connection statistics (download/upload rates)
     pub connection_stats: Option<ConnectionStats>,
 
@@ -219,6 +222,7 @@ impl SyncthingModel {
             },
             system_status: None,
             version: None,
+            folder_config_order: Vec::new(),
             connection_stats: None,
             last_connection_stats: None,
             device_name: None,

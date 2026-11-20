@@ -18,6 +18,36 @@ fn should_load_more_history(modal: &crate::model::types::FolderHistoryModal) -> 
     near_bottom && !modal.loading && modal.has_more
 }
 
+/// Set the menu's folder to `group`, then regroup the list and report the outcome.
+/// Choosing the folder's current group sends nothing.
+async fn apply_folder_group(
+    app: &mut App,
+    menu: &crate::model::types::FolderGroupMenuState,
+    group: String,
+) {
+    if group == menu.current_group {
+        return;
+    }
+    match app.client.set_folder_group(&menu.folder_id, &group).await {
+        Ok(()) => {
+            app.model.set_folder_group(&menu.folder_id, &group);
+            if group.is_empty() {
+                app.model
+                    .ui
+                    .show_success(format!("{} removed from its group", menu.folder_label));
+            } else {
+                app.model
+                    .ui
+                    .show_success(format!("{} moved to {}", menu.folder_label, group));
+            }
+        }
+        Err(e) => app
+            .model
+            .ui
+            .show_error(format!("Failed to set group: {}", e)),
+    }
+}
+
 /// Handle keyboard input
 ///
 /// Processes all keyboard events and dispatches to appropriate actions.
@@ -265,7 +295,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 // Immediately reload folder list to update paused state
                                 match app.client.get_folders().await {
                                     Ok(folders) => {
-                                        app.model.syncthing.folders = folders;
+                                        app.model.set_folders(folders);
                                     }
                                     Err(e) => {
                                         crate::log_debug(&format!(
@@ -573,6 +603,78 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
     }
 
+    // Handle new group name input (before the menu it was opened from)
+    if let Some(input) = &mut app.model.ui.group_name_input {
+        match key.code {
+            KeyCode::Esc => {
+                let menu = input.menu.clone();
+                app.model.ui.group_name_input = None;
+                app.model.ui.folder_group_menu = Some(menu);
+            }
+            KeyCode::Enter => {
+                let existing =
+                    crate::logic::folder_groups::group_names(&app.model.syncthing.folders);
+                match crate::logic::folder_groups::resolve_group_name(&input.text, &existing) {
+                    Some(name) => {
+                        let menu = input.menu.clone();
+                        app.model.ui.group_name_input = None;
+                        apply_folder_group(app, &menu, name).await;
+                    }
+                    None => input.show_empty_hint = true,
+                }
+            }
+            KeyCode::Backspace => {
+                input.text.pop();
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.text.push(c);
+                input.show_empty_hint = false;
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // Handle folder group menu
+    if let Some(menu) = &mut app.model.ui.folder_group_menu {
+        use crate::model::types::GroupMenuOption;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                menu.selected_index = menu.selected_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if menu.selected_index + 1 < menu.options.len() {
+                    menu.selected_index += 1;
+                }
+            }
+            KeyCode::Esc => app.model.ui.folder_group_menu = None,
+            KeyCode::Enter => {
+                let menu = menu.clone();
+                app.model.ui.folder_group_menu = None;
+                match menu.options.get(menu.selected_index) {
+                    Some(GroupMenuOption::NewGroup) => {
+                        app.model.ui.group_name_input =
+                            Some(crate::model::types::GroupNameInputState {
+                                menu,
+                                text: String::new(),
+                                show_empty_hint: false,
+                            });
+                    }
+                    Some(GroupMenuOption::Group(name)) => {
+                        let name = name.clone();
+                        apply_folder_group(app, &menu, name).await;
+                    }
+                    Some(GroupMenuOption::NoGroup) => {
+                        apply_folder_group(app, &menu, String::new()).await
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // Handle folder type selection menu
     if let Some(type_state) = &mut app.model.ui.folder_type_selection {
         match key.code {
@@ -618,7 +720,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         // Immediately reload folder list to update folder type
                         match app.client.get_folders().await {
                             Ok(folders) => {
-                                app.model.syncthing.folders = folders;
+                                app.model.set_folders(folders);
                             }
                             Err(e) => {
                                 crate::log_debug(&format!(
@@ -947,6 +1049,38 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         current_type: folder.folder_type.clone(),
                         selected_index,
                     });
+            }
+        }
+        KeyCode::Char('e') if app.model.navigation.focus_level == 0 => {
+            if let Some(folder) = app.model.selected_folder() {
+                if crate::logic::folder_groups::groups_supported(&app.model.syncthing.folders) {
+                    let current_group = folder.group.clone().unwrap_or_default();
+                    let options = crate::logic::folder_groups::group_menu_options(
+                        &app.model.syncthing.folders,
+                    );
+                    let current_option = if current_group.is_empty() {
+                        crate::model::types::GroupMenuOption::NoGroup
+                    } else {
+                        crate::model::types::GroupMenuOption::Group(current_group.clone())
+                    };
+                    let selected_index = options
+                        .iter()
+                        .position(|o| *o == current_option)
+                        .unwrap_or(0);
+                    app.model.ui.folder_group_menu =
+                        Some(crate::model::types::FolderGroupMenuState {
+                            folder_id: folder.id.clone(),
+                            folder_label: folder.label.clone().unwrap_or_else(|| folder.id.clone()),
+                            current_group,
+                            options,
+                            selected_index,
+                        });
+                } else {
+                    let message = crate::logic::folder_groups::groups_unsupported_message(
+                        app.model.syncthing.version.as_deref(),
+                    );
+                    app.model.ui.show_warning(message);
+                }
             }
         }
         KeyCode::Char('c') if app.model.navigation.focus_level > 0 => {

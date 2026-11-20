@@ -1,6 +1,7 @@
 use super::icons::{FolderState, IconRenderer};
 use crate::api::{Folder, FolderStatus};
 use crate::logic::folder_card::{FolderCardState, calculate_folder_card_state, card_lines};
+use crate::logic::folder_groups::{FolderRow, folder_rows, groups_supported, row_of_folder};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -27,14 +28,36 @@ pub fn render_folder_list(
     let inner_width = area.width.saturating_sub(2);
     let title = folder_list_title(folders, folder_statuses, inner_width);
 
-    let folder_items: Vec<ListItem> = folders
+    let compact = groups_supported(folders);
+    let rows = folder_rows(folders);
+    let folder_items: Vec<ListItem> = rows
         .iter()
-        .map(|folder| {
-            let status = folder_statuses.get(&folder.id);
-            let card_state = calculate_folder_card_state(folder, status);
-            render_folder_card(folder, status, &card_state, icon_renderer, inner_width)
+        .map(|row| match row {
+            FolderRow::Header(name) => render_group_header(name, inner_width),
+            FolderRow::Folder(idx) => {
+                let folder = &folders[*idx];
+                let status = folder_statuses.get(&folder.id);
+                let card_state = calculate_folder_card_state(folder, status);
+                render_folder_card(
+                    folder,
+                    status,
+                    &card_state,
+                    icon_renderer,
+                    inner_width,
+                    compact,
+                )
+            }
         })
         .collect();
+
+    // Selection is a folder index; the List needs the row it sits on
+    let mut row_state = ListState::default()
+        .with_offset(folders_state.offset())
+        .with_selected(
+            folders_state
+                .selected()
+                .and_then(|idx| row_of_folder(&rows, idx)),
+        );
 
     let highlight = if is_focused {
         Style::default()
@@ -60,7 +83,33 @@ pub fn render_folder_list(
         )
         .highlight_style(highlight);
 
-    f.render_stateful_widget(folders_list, area, folders_state);
+    f.render_stateful_widget(folders_list, area, &mut row_state);
+}
+
+/// A dim group header line, `── Name ───…`, filling `inner_width` columns
+fn render_group_header(name: &str, inner_width: u16) -> ListItem<'static> {
+    let width = inner_width as usize;
+    let prefix = format!("── {} ", name);
+    let text = if prefix.width() >= width {
+        let mut cut = String::new();
+        for ch in prefix.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if cut.width() + cw > width.saturating_sub(1) {
+                break;
+            }
+            cut.push(ch);
+        }
+        if width > 0 {
+            cut.push('…');
+        }
+        cut
+    } else {
+        format!("{}{}", prefix, "─".repeat(width - prefix.width()))
+    };
+    ListItem::new(Line::from(Span::styled(
+        text,
+        Style::default().fg(Color::DarkGray),
+    )))
 }
 
 /// Folder list title with counts, shortened to fit `inner_width` columns
@@ -143,6 +192,7 @@ fn render_folder_card(
     state: &FolderCardState,
     icon_renderer: &IconRenderer,
     inner_width: u16,
+    compact: bool,
 ) -> ListItem<'static> {
     let mut line1 = icon_renderer.folder_with_status(card_state_to_folder_state(state));
     line1.push(Span::raw(" "));
@@ -174,8 +224,10 @@ fn render_folder_card(
         lines.push(Line::from(format!("     {}", pending)));
     }
 
-    // Blank separator between folders
-    lines.push(Line::from(""));
+    // Without group headers, a blank line is what separates cards
+    if !compact {
+        lines.push(Line::from(""));
+    }
 
     ListItem::new(lines)
 }
@@ -194,12 +246,13 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         }
     }
 
     fn render_card_text(mode: IconMode, state: &FolderCardState) -> String {
         let renderer = IconRenderer::new(mode, IconTheme::default());
-        let item = render_folder_card(&test_folder(), None, state, &renderer, 58);
+        let item = render_folder_card(&test_folder(), None, state, &renderer, 58, false);
         let backend = TestBackend::new(60, 4);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -434,5 +487,110 @@ mod tests {
             " Folders (5 · 2 synced · 1 syncing) "
         );
         assert_eq!(folder_list_title(&folders, &statuses, 20), " Folders 5 ");
+    }
+
+    // ========================================
+    // GROUP HEADERS
+    // ========================================
+
+    fn with_groups(folders: Vec<Folder>, groups: &[(&str, &str)]) -> Vec<Folder> {
+        let grouped = folders
+            .into_iter()
+            .map(|mut f| {
+                let group = groups
+                    .iter()
+                    .find(|(id, _)| *id == f.id)
+                    .map_or("", |(_, g)| *g);
+                f.group = Some(group.to_string());
+                f
+            })
+            .collect();
+        crate::logic::folder_groups::order_by_group(grouped)
+    }
+
+    fn demo_grouped() -> (Vec<Folder>, HashMap<String, FolderStatus>) {
+        let (folders, statuses) = demo();
+        let groups = [
+            ("photos", "Personal"),
+            ("vault", "Personal"),
+            ("projects", "Work"),
+        ];
+        (with_groups(folders, &groups), statuses)
+    }
+
+    /// Rows that are group headers: they start with "── " just inside the left border
+    fn header_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+        (1..buf.area.height.saturating_sub(1))
+            .map(|y| row_text(buf, y))
+            .filter(|row| row.chars().skip(1).take(3).collect::<String>() == "── ")
+            .collect()
+    }
+
+    #[test]
+    fn test_headers_shown_when_supported() {
+        let (folders, statuses) = demo_grouped();
+        let buf = draw(58, &folders, &statuses, None, true);
+        let headers = header_rows(&buf);
+        assert_eq!(headers.len(), 3, "{:?}", headers);
+        assert!(headers[0].contains("Personal"));
+        assert!(headers[1].contains("Work"));
+        assert!(headers[2].contains("Ungrouped"));
+        let y = find_row(&buf, "── Work");
+        assert_eq!(buf[(1, y)].fg, Color::DarkGray);
+    }
+
+    #[test]
+    fn test_single_ungrouped_header_when_no_groups() {
+        let (folders, statuses) = demo();
+        let folders = with_groups(folders, &[]);
+        let buf = draw(58, &folders, &statuses, None, true);
+        let headers = header_rows(&buf);
+        assert_eq!(headers.len(), 1, "{:?}", headers);
+        assert!(headers[0].contains("Ungrouped"));
+    }
+
+    #[test]
+    fn test_no_headers_on_older_syncthing() {
+        let (folders, statuses) = demo();
+        let buf = draw(58, &folders, &statuses, None, true);
+        assert!(header_rows(&buf).is_empty());
+        let detail = find_row(&buf, "⇅ Send & Receive · 2.7 MB");
+        assert_eq!(
+            find_row(&buf, "Projects"),
+            detail + 2,
+            "blank line between cards"
+        );
+    }
+
+    #[test]
+    fn test_compact_cards_when_supported() {
+        let (folders, statuses) = demo_grouped();
+        let buf = draw(58, &folders, &statuses, None, true);
+        let detail = find_row(&buf, "⇅ Send & Receive · 2.7 MB");
+        assert_eq!(
+            find_row(&buf, "Vault"),
+            detail + 1,
+            "no blank line between cards"
+        );
+    }
+
+    #[test]
+    fn test_highlight_follows_folder_not_row() {
+        let (folders, statuses) = demo_grouped();
+        assert_eq!(folders[2].id, "projects");
+        let buf = draw(58, &folders, &statuses, Some(2), true);
+        let y = find_row(&buf, "Projects");
+        assert_eq!(buf[(1, y)].bg, Color::DarkGray);
+    }
+
+    #[test]
+    fn test_long_group_header_truncates() {
+        let mut solo = folder("photos", "Photos", "sendreceive", false);
+        solo.group = Some("Фото и видео ".repeat(10));
+        let buf = draw(30, &[solo], &HashMap::new(), None, true);
+        let headers = header_rows(&buf);
+        assert_eq!(headers.len(), 1);
+        assert!(headers[0].contains('…'), "{}", headers[0]);
+        assert!(headers[0].ends_with('│'), "{}", headers[0]);
     }
 }

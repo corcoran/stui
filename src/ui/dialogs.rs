@@ -237,6 +237,83 @@ pub fn render_folder_type_selection(
     f.render_stateful_widget(menu, menu_area, state);
 }
 
+fn centered_menu_area(area: Rect, width: u16, height: u16) -> Rect {
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width: width.min(area.width),
+        height: height.min(area.height),
+    }
+}
+
+/// Folder group menu: existing groups, "No group" and "New group…"
+pub fn render_folder_group_menu(f: &mut Frame, menu: &crate::model::types::FolderGroupMenuState) {
+    use crate::model::types::GroupMenuOption;
+    let items: Vec<ListItem> = menu
+        .options
+        .iter()
+        .map(|option| {
+            let (label, is_current) = match option {
+                GroupMenuOption::Group(name) => (name.clone(), *name == menu.current_group),
+                GroupMenuOption::NoGroup => ("No group".to_string(), menu.current_group.is_empty()),
+                GroupMenuOption::NewGroup => ("New group…".to_string(), false),
+            };
+            if is_current {
+                ListItem::new(Span::styled(
+                    format!("{}  (current)", label),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::ITALIC),
+                ))
+            } else {
+                ListItem::new(Span::styled(label, Style::default().fg(Color::White)))
+            }
+        })
+        .collect();
+
+    let height = (menu.options.len() as u16).saturating_add(2).max(5);
+    let area = centered_menu_area(f.area(), 50, height);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Folder group: {}", menu.folder_label))
+                .title_bottom("↑↓ select, Enter apply, Esc cancel")
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("► ");
+    let mut state = ListState::default();
+    state.select(Some(menu.selected_index));
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+/// One-line input for a new group name
+pub fn render_group_name_input(f: &mut Frame, input: &crate::model::types::GroupNameInputState) {
+    let area = centered_menu_area(f.area(), 50, 4);
+    let mut lines = vec![Line::from(format!("{}█", input.text))];
+    if input.show_empty_hint {
+        lines.push(Line::from(Span::styled(
+            "Name can't be empty",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!("New group for {}", input.menu.folder_label))
+            .title_bottom("Enter save, Esc back")
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(paragraph, area);
+}
+
 /// Render the file information popup with metadata and preview
 #[allow(clippy::too_many_arguments)]
 pub fn render_file_info(
@@ -1019,5 +1096,46 @@ mod tests {
             })
             .collect();
         assert!(shows(&rows, "Modified By: nas"), "{:?}", rows);
+    }
+
+    // ========================================
+    // FOLDER GROUP MENU
+    // ========================================
+
+    #[test]
+    fn test_group_menu_renders_title_options_and_current() {
+        use crate::model::types::{FolderGroupMenuState, GroupMenuOption as O};
+        let menu = FolderGroupMenuState {
+            folder_id: "projects".to_string(),
+            folder_label: "Projects".to_string(),
+            current_group: "Work".to_string(),
+            options: vec![
+                O::Group("Personal".into()),
+                O::Group("Work".into()),
+                O::NoGroup,
+                O::NewGroup,
+            ],
+            selected_index: 1,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|f| render_folder_group_menu(f, &menu))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        for text in [
+            "Folder group: Projects",
+            "Work  (current)",
+            "No group",
+            "New group…",
+        ] {
+            assert!(shows(&rows, text), "{:?} missing in {:?}", text, rows);
+        }
     }
 }

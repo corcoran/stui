@@ -26,6 +26,33 @@ pub struct PatternSelectionState {
 }
 
 /// Folder type selection menu state
+/// One row of the folder group menu
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupMenuOption {
+    Group(String),
+    NoGroup,
+    NewGroup,
+}
+
+/// Folder group menu opened with `e` in the folder view
+#[derive(Debug, Clone)]
+pub struct FolderGroupMenuState {
+    pub folder_id: String,
+    pub folder_label: String,
+    /// "" when the folder has no group
+    pub current_group: String,
+    pub options: Vec<GroupMenuOption>,
+    pub selected_index: usize,
+}
+
+/// Name input for a new group; `menu` is restored on Esc
+#[derive(Debug, Clone)]
+pub struct GroupNameInputState {
+    pub menu: FolderGroupMenuState,
+    pub text: String,
+    pub show_empty_hint: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct FolderTypeSelectionState {
     pub folder_id: String,

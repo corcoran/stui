@@ -159,8 +159,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
             &app.icon_renderer,
             &app.model.syncthing.last_folder_updates,
         );
-        // Sync back the selection (though folder_list doesn't usually modify it)
-        app.model.navigation.folders_state_selection = temp_state.selected();
     }
 
     // Render breadcrumb levels
@@ -356,6 +354,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
         if let Some(selected) = temp_state.selected() {
             type_state.selected_index = selected;
         }
+    }
+
+    if let Some(menu) = &app.model.ui.folder_group_menu {
+        dialogs::render_folder_group_menu(f, menu);
+    }
+    if let Some(input) = &app.model.ui.group_name_input {
+        dialogs::render_group_name_input(f, input);
     }
 
     // Render file info popup if active

@@ -3536,7 +3536,7 @@ mod tests {
                 *captured_for_task.lock().unwrap() =
                     Some(String::from_utf8_lossy(&buf[..n]).to_string());
                 let _ = sock
-                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
                     .await;
             }
         });
@@ -3660,5 +3660,279 @@ mod tests {
             message
         );
         assert_eq!(kind, crate::model::ToastKind::Error);
+    }
+
+    // ========================================
+    // GROUPED FOLDER LIST SELECTION
+    // ========================================
+
+    #[tokio::test]
+    async fn test_grouped_selection_does_not_drift() {
+        let mut app = create_test_app();
+        let folder = |id: &str, group: &str| -> crate::api::Folder {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "label": id, "path": "/data", "paused": false,
+                "type": "sendreceive", "group": group
+            }))
+            .unwrap()
+        };
+        app.model.set_folders(vec![
+            folder("docs", ""),
+            folder("photos", "Personal"),
+            folder("projects", "Work"),
+            folder("vault", "Personal"),
+            folder("media", ""),
+        ]);
+        app.model.navigation.folders_state_selection = Some(4);
+        app.model.navigation.focus_level = 0;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+
+        for _ in 0..2 {
+            terminal.draw(|f| crate::ui::render(f, &mut app)).unwrap();
+        }
+
+        assert_eq!(app.model.navigation.folders_state_selection, Some(4));
+        assert_eq!(app.model.syncthing.folders[4].id, "media");
+    }
+
+    // ========================================
+    // FOLDER GROUP EDITOR
+    // ========================================
+
+    fn grouped_folder(id: &str, label: &str, group: Option<&str>) -> crate::api::Folder {
+        let mut json = serde_json::json!({
+            "id": id, "label": label, "path": "/data", "paused": false, "type": "sendreceive"
+        });
+        if let Some(group) = group {
+            json["group"] = serde_json::json!(group);
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    /// Folder view on the 2.1 demo folders with `select` selected
+    fn app_with_groups(mut app: App, select: &str) -> App {
+        app.model.set_folders(vec![
+            grouped_folder("docs", "Documents", Some("")),
+            grouped_folder("photos", "Photos", Some("Personal")),
+            grouped_folder("projects", "Projects", Some("Work")),
+        ]);
+        let idx = app
+            .model
+            .syncthing
+            .folders
+            .iter()
+            .position(|f| f.id == select)
+            .unwrap();
+        app.model.navigation.folders_state_selection = Some(idx);
+        app.model.navigation.focus_level = 0;
+        app
+    }
+
+    fn group_of(app: &App, id: &str) -> Option<String> {
+        app.model
+            .syncthing
+            .folders
+            .iter()
+            .find(|f| f.id == id)
+            .unwrap()
+            .group
+            .clone()
+    }
+
+    async fn captured_after_wait(
+        captured: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    ) -> Option<String> {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        captured.lock().unwrap().clone()
+    }
+
+    async fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, crossterm::event::KeyCode::Char(c)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_e_on_older_syncthing_warns_with_version_and_sends_nothing() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        app.model
+            .set_folders(vec![grouped_folder("docs", "Documents", None)]);
+        app.model.navigation.folders_state_selection = Some(0);
+        app.model.syncthing.version = Some("v2.0.3".to_string());
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+
+        let (message, kind) = toast_of(&app);
+        assert_eq!(
+            message,
+            "Folder groups need Syncthing 2.1 or newer (this device runs v2.0.3)"
+        );
+        assert_eq!(kind, crate::model::ToastKind::Warning);
+        assert!(app.model.ui.folder_group_menu.is_none());
+        assert_eq!(captured_after_wait(&captured).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_e_opens_menu_with_current_selected() {
+        let mut app = app_with_groups(create_test_app(), "projects");
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+
+        let menu = app.model.ui.folder_group_menu.as_ref().expect("menu open");
+        use crate::model::types::GroupMenuOption as O;
+        assert_eq!(
+            menu.options,
+            [
+                O::Group("Personal".into()),
+                O::Group("Work".into()),
+                O::NoGroup,
+                O::NewGroup
+            ]
+        );
+        assert_eq!(menu.selected_index, 1);
+        assert_eq!(menu.folder_label, "Projects");
+    }
+
+    #[tokio::test]
+    async fn test_menu_apply_sends_patch_and_regroups() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "photos");
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+        press(&mut app, crossterm::event::KeyCode::Char('j')).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let request = captured.lock().unwrap().clone().expect("PATCH sent");
+        assert!(
+            request.starts_with("PATCH /rest/config/folders/photos"),
+            "{}",
+            request
+        );
+        assert!(request.contains(r#""group":"Work""#), "{}", request);
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Photos moved to Work".to_string(),
+                crate::model::ToastKind::Success
+            )
+        );
+        assert_eq!(group_of(&app, "photos").as_deref(), Some("Work"));
+        assert!(app.model.ui.folder_group_menu.is_none());
+        assert_eq!(app.model.selected_folder().unwrap().id, "photos");
+    }
+
+    #[tokio::test]
+    async fn test_menu_apply_current_sends_nothing() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "photos");
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        assert!(app.model.ui.folder_group_menu.is_none());
+        assert_eq!(captured_after_wait(&captured).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_no_group_toast() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "photos");
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+        press(&mut app, crossterm::event::KeyCode::Down).await;
+        press(&mut app, crossterm::event::KeyCode::Down).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let request = captured.lock().unwrap().clone().expect("PATCH sent");
+        assert!(request.contains(r#""group":"""#), "{}", request);
+        assert_eq!(toast_of(&app).0, "Photos removed from its group");
+        assert_eq!(group_of(&app, "photos").as_deref(), Some(""));
+    }
+
+    async fn open_new_group_input(app: &mut App) {
+        press(app, crossterm::event::KeyCode::Char('e')).await;
+        for _ in 0..3 {
+            press(app, crossterm::event::KeyCode::Down).await;
+        }
+        press(app, crossterm::event::KeyCode::Enter).await;
+        assert!(app.model.ui.group_name_input.is_some(), "input open");
+    }
+
+    #[tokio::test]
+    async fn test_new_group_input_flow() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "docs");
+        open_new_group_input(&mut app).await;
+
+        type_text(&mut app, "Clx").await;
+        press(&mut app, crossterm::event::KeyCode::Backspace).await;
+        type_text(&mut app, "ients jeq").await;
+        for _ in 0..4 {
+            press(&mut app, crossterm::event::KeyCode::Backspace).await;
+        }
+        assert!(
+            !app.model.ui.should_quit,
+            "q typed into the name, not a shortcut"
+        );
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let request = captured.lock().unwrap().clone().expect("PATCH sent");
+        assert!(request.contains(r#""group":"Clients""#), "{}", request);
+        assert!(app.model.ui.group_name_input.is_none());
+        assert_eq!(toast_of(&app).0, "Documents moved to Clients");
+    }
+
+    #[tokio::test]
+    async fn test_new_group_empty_shows_hint() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "docs");
+        open_new_group_input(&mut app).await;
+
+        type_text(&mut app, "   ").await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let input = app.model.ui.group_name_input.as_ref().expect("still open");
+        assert!(input.show_empty_hint);
+        assert_eq!(captured_after_wait(&captured).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_new_group_reuses_existing_case() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let mut app = app_with_groups(create_test_app_at(&url).0, "docs");
+        open_new_group_input(&mut app).await;
+
+        type_text(&mut app, "work").await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let request = captured.lock().unwrap().clone().expect("PATCH sent");
+        assert!(request.contains(r#""group":"Work""#), "{}", request);
+    }
+
+    #[tokio::test]
+    async fn test_new_group_esc_returns_to_menu() {
+        let mut app = app_with_groups(create_test_app(), "docs");
+        open_new_group_input(&mut app).await;
+
+        press(&mut app, crossterm::event::KeyCode::Esc).await;
+
+        assert!(app.model.ui.group_name_input.is_none());
+        assert!(app.model.ui.folder_group_menu.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_set_group_failure_shows_error() {
+        let mut app = app_with_groups(create_test_app(), "photos");
+
+        press(&mut app, crossterm::event::KeyCode::Char('e')).await;
+        press(&mut app, crossterm::event::KeyCode::Char('j')).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        let (message, kind) = toast_of(&app);
+        assert!(message.starts_with("Failed to set group:"), "{}", message);
+        assert_eq!(kind, crate::model::ToastKind::Error);
+        assert_eq!(group_of(&app, "photos").as_deref(), Some("Personal"));
     }
 }

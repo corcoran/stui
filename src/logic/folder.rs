@@ -195,6 +195,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         }
     }
 

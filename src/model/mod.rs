@@ -53,6 +53,46 @@ impl Model {
         }
     }
 
+    /// Replace the folder list with `folders` in Syncthing's config order, ordered by group,
+    /// keeping the selection on the same folder id. A selected folder that's gone selects
+    /// the first folder, or nothing when empty.
+    pub fn set_folders(&mut self, folders: Vec<crate::api::Folder>) {
+        self.syncthing.folder_config_order = folders.iter().map(|f| f.id.clone()).collect();
+        self.reorder_folders(folders);
+    }
+
+    /// Set one folder's group, regrouping the list from Syncthing's config order
+    pub fn set_folder_group(&mut self, folder_id: &str, group: &str) {
+        let mut folders = self.syncthing.folders.clone();
+        if let Some(folder) = folders.iter_mut().find(|f| f.id == folder_id) {
+            folder.group = Some(group.to_string());
+        }
+        let order = &self.syncthing.folder_config_order;
+        folders.sort_by_key(|f| {
+            order
+                .iter()
+                .position(|id| *id == f.id)
+                .unwrap_or(usize::MAX)
+        });
+        self.reorder_folders(folders);
+    }
+
+    fn reorder_folders(&mut self, folders: Vec<crate::api::Folder>) {
+        let selected_id = self.selected_folder().map(|f| f.id.clone());
+        let had_selection = self.navigation.folders_state_selection.is_some();
+        self.syncthing.folders = crate::logic::folder_groups::order_by_group(folders);
+        self.navigation.folders_state_selection = match selected_id {
+            Some(id) => self
+                .syncthing
+                .folders
+                .iter()
+                .position(|f| f.id == id)
+                .or((!self.syncthing.folders.is_empty()).then_some(0)),
+            None if had_selection && !self.syncthing.folders.is_empty() => Some(0),
+            None => None,
+        };
+    }
+
     /// Get currently selected folder (if any)
     pub fn selected_folder(&self) -> Option<&crate::api::Folder> {
         self.navigation
@@ -114,6 +154,95 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================
+    // SET FOLDERS
+    // ========================================
+
+    fn gf(id: &str, group: Option<&str>) -> crate::api::Folder {
+        let mut json = serde_json::json!({
+            "id": id, "label": id, "path": "/data", "paused": false, "type": "sendreceive"
+        });
+        if let Some(group) = group {
+            json["group"] = serde_json::json!(group);
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn folder_ids(model: &Model) -> Vec<String> {
+        model
+            .syncthing
+            .folders
+            .iter()
+            .map(|f| f.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn test_set_folders_orders_and_keeps_selected_id() {
+        let mut model = Model::new(false);
+        let folders = vec![
+            gf("docs", Some("")),
+            gf("media", Some("")),
+            gf("projects", Some("Work")),
+        ];
+        model.syncthing.folders = folders.clone();
+        model.navigation.folders_state_selection = Some(1);
+
+        model.set_folders(folders);
+
+        assert_eq!(folder_ids(&model), ["projects", "docs", "media"]);
+        assert_eq!(model.navigation.folders_state_selection, Some(2));
+    }
+
+    #[test]
+    fn test_set_folders_selected_folder_removed_selects_first() {
+        let mut model = Model::new(false);
+        model.syncthing.folders = vec![gf("docs", None), gf("media", None)];
+        model.navigation.folders_state_selection = Some(1);
+
+        model.set_folders(vec![gf("docs", None), gf("projects", None)]);
+
+        assert_eq!(model.navigation.folders_state_selection, Some(0));
+    }
+
+    #[test]
+    fn test_set_folders_empty_clears_selection() {
+        let mut model = Model::new(false);
+        model.syncthing.folders = vec![gf("docs", None)];
+        model.navigation.folders_state_selection = Some(0);
+
+        model.set_folders(vec![]);
+
+        assert_eq!(model.navigation.folders_state_selection, None);
+    }
+
+    #[test]
+    fn test_set_folder_group_keeps_config_order_within_group() {
+        let mut model = Model::new(false);
+        model.set_folders(vec![
+            gf("docs", Some("")),
+            gf("media", Some("")),
+            gf("photos", Some("")),
+            gf("vault", Some("")),
+        ]);
+        model.navigation.folders_state_selection = Some(2);
+
+        model.set_folder_group("photos", "Work");
+        assert_eq!(folder_ids(&model), ["photos", "docs", "media", "vault"]);
+        assert_eq!(model.navigation.folders_state_selection, Some(0));
+
+        model.set_folder_group("photos", "");
+        assert_eq!(folder_ids(&model), ["docs", "media", "photos", "vault"]);
+        assert_eq!(model.navigation.folders_state_selection, Some(2));
+    }
+
+    #[test]
+    fn test_set_folders_without_selection_stays_unselected() {
+        let mut model = Model::new(false);
+        model.set_folders(vec![gf("docs", None)]);
+        assert_eq!(model.navigation.folders_state_selection, None);
+    }
 
     #[test]
     fn test_model_creation() {

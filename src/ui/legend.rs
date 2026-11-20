@@ -47,6 +47,8 @@ fn build_hotkey_spans(
             Span::raw(":Updates  "),
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Change Type  "),
+            Span::styled("e", Style::default().fg(Color::Yellow)),
+            Span::raw(":Group  "),
             Span::styled("p", Style::default().fg(Color::Yellow)),
             Span::raw(":Pause/Resume  "),
             Span::styled("o", Style::default().fg(Color::Yellow)),

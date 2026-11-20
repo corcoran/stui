@@ -6,8 +6,9 @@
 use std::time::Instant;
 
 use super::types::{
-    ConfirmAction, FileInfoPopupState, FolderHistoryModal, FolderTypeSelectionState,
-    OutOfSyncFilterState, PatternSelectionState, VimCommandState,
+    ConfirmAction, FileInfoPopupState, FolderGroupMenuState, FolderHistoryModal,
+    FolderTypeSelectionState, GroupNameInputState, OutOfSyncFilterState, PatternSelectionState,
+    VimCommandState,
 };
 use crate::{DisplayMode, SortMode};
 
@@ -60,6 +61,12 @@ pub struct UiModel {
 
     /// Folder type selection menu
     pub folder_type_selection: Option<FolderTypeSelectionState>,
+
+    /// Folder group menu (`e` in the folder view)
+    pub folder_group_menu: Option<FolderGroupMenuState>,
+
+    /// New group name input opened from the folder group menu
+    pub group_name_input: Option<GroupNameInputState>,
 
     /// File info popup (metadata + preview)
     pub file_info_popup: Option<FileInfoPopupState>,
@@ -127,6 +134,8 @@ impl UiModel {
             confirm_action: None,
             pattern_selection: None,
             folder_type_selection: None,
+            folder_group_menu: None,
+            group_name_input: None,
             file_info_popup: None,
             show_setup_help: false,
             config_path: String::new(),
@@ -150,6 +159,8 @@ impl UiModel {
         self.confirm_action.is_some()
             || self.pattern_selection.is_some()
             || self.folder_type_selection.is_some()
+            || self.folder_group_menu.is_some()
+            || self.group_name_input.is_some()
             || self.file_info_popup.is_some()
             || self.show_setup_help
             || self.search_mode
@@ -160,6 +171,8 @@ impl UiModel {
         self.confirm_action = None;
         self.pattern_selection = None;
         self.folder_type_selection = None;
+        self.folder_group_menu = None;
+        self.group_name_input = None;
         self.file_info_popup = None;
         self.show_setup_help = false;
         self.search_mode = false;

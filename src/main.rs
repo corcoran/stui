@@ -533,7 +533,7 @@ impl App {
         let mut model = model::Model::new(config.vim_mode);
         model.ui.display_mode = DisplayMode::TimestampAndSize; // Start with most info
         model.ui.sort_mode = SortMode::Alphabetical;
-        model.syncthing.folders = folders.clone();
+        model.set_folders(folders.clone());
         model.syncthing.devices = devices;
         model.syncthing.connection_state = initial_connection_state.clone();
         model.ui.config_path = config_path;
@@ -1124,7 +1124,7 @@ where
             match app.client.get_folders().await {
                 Ok(folders) => {
                     let _ = app.cache.save_folders(&folders);
-                    app.model.syncthing.folders = folders;
+                    app.model.set_folders(folders);
 
                     // If we now have folders, load their statuses and select first one
                     if !app.model.syncthing.folders.is_empty() {

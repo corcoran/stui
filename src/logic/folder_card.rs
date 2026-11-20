@@ -401,6 +401,7 @@ mod tests {
             paused: true,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         let state = calculate_folder_card_state(&folder, None);
@@ -416,6 +417,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         let state = calculate_folder_card_state(&folder, None);
@@ -431,6 +433,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         let status = FolderStatus {
@@ -478,6 +481,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         let mut status = FolderStatus {
@@ -543,6 +547,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         // Test syncing with remote needed files
@@ -621,6 +626,7 @@ mod tests {
             paused: false,
             folder_type: "sendreceive".to_string(),
             devices: vec![],
+            group: None,
         };
 
         let status = FolderStatus {
