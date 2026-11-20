@@ -157,6 +157,9 @@ pub struct SyncthingModel {
     /// System status (device name, uptime, etc.)
     pub system_status: Option<SystemStatus>,
 
+    /// Version of the connected Syncthing, e.g. "v2.1.7"
+    pub version: Option<String>,
+
     /// Connection statistics (download/upload rates)
     pub connection_stats: Option<ConnectionStats>,
 
@@ -215,6 +218,7 @@ impl SyncthingModel {
                 next_retry_secs: 5,
             },
             system_status: None,
+            version: None,
             connection_stats: None,
             last_connection_stats: None,
             device_name: None,

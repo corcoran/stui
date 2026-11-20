@@ -73,6 +73,7 @@ fn render_connection_status(state: &ConnectionState) -> Vec<Span<'_>> {
 }
 
 /// Render the system info bar at the top of the screen
+#[allow(clippy::too_many_arguments)]
 pub fn render_system_bar(
     f: &mut Frame,
     area: Rect,
@@ -81,6 +82,7 @@ pub fn render_system_bar(
     device_name: Option<&str>,
     local_state_summary: (u64, u64, u64), // (files, dirs, bytes)
     last_transfer_rates: Option<(f64, f64)>, // (download, upload) in bytes/sec
+    version: Option<&str>,
 ) {
     let system_line = if let (true, Some(sys_status)) = (
         matches!(connection_state, ConnectionState::Connected),
@@ -92,6 +94,9 @@ pub fn render_system_bar(
 
         let mut spans = render_connection_status(connection_state);
         spans.push(Span::raw(device_name.unwrap_or("Unknown")));
+        if let Some(version) = version {
+            spans.push(Span::raw(format!(" · Syncthing {}", version)));
+        }
         spans.push(Span::raw(" | "));
         spans.push(Span::styled("Up:", Style::default().fg(Color::Yellow)));
         spans.push(Span::raw(format!(" {}", uptime_str)));
@@ -180,4 +185,50 @@ pub fn render_system_bar(
         .style(Style::default().fg(Color::Gray));
 
     f.render_widget(system_widget, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn text_row(version: Option<&str>) -> String {
+        let status = SystemStatus {
+            my_id: "MLCMR7B".to_string(),
+            uptime: 1500,
+            start_time: String::new(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                render_system_bar(
+                    f,
+                    f.area(),
+                    &ConnectionState::Connected,
+                    Some(&status),
+                    Some("laptop"),
+                    (42, 9, 1024),
+                    None,
+                    version,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.width)
+            .map(|x| buf[(x, 1)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_system_bar_shows_syncthing_version() {
+        let row = text_row(Some("v2.1.7"));
+        assert!(row.contains("laptop · Syncthing v2.1.7 |"), "{}", row);
+    }
+
+    #[test]
+    fn test_system_bar_without_version_is_unchanged() {
+        let row = text_row(None);
+        assert!(row.contains("laptop | Up:"), "{}", row);
+        assert!(!row.contains("Syncthing"), "{}", row);
+    }
 }

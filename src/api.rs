@@ -691,6 +691,27 @@ impl SyncthingClient {
         Ok(())
     }
 
+    /// Syncthing's version string, e.g. `"v2.1.7"`
+    pub async fn get_version(&self) -> Result<String> {
+        #[derive(Deserialize)]
+        struct VersionResponse {
+            version: String,
+        }
+        let url = format!("{}/rest/system/version", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .context("Failed to fetch Syncthing version")?;
+        let version: VersionResponse = response
+            .json()
+            .await
+            .context("Failed to parse Syncthing version")?;
+        Ok(version.version)
+    }
+
     pub async fn get_system_status(&self) -> Result<SystemStatus> {
         let url = format!("{}/rest/system/status", self.base_url);
         let response = self
@@ -1008,6 +1029,35 @@ mod tests {
     fn test_last_file_updates_skips_no_activity_placeholder() {
         let updates = last_file_updates(stats_with("0001-01-01T00:00:00Z", ""));
         assert!(updates.is_empty(), "{:?}", updates);
+    }
+
+    #[tokio::test]
+    async fn test_get_version_reads_version_field() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let body = r#"{"version":"v2.1.7","longVersion":"syncthing v2.1.7"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            sock.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let client = SyncthingClient::new(format!("http://{}", addr), "k".to_string());
+
+        assert_eq!(client.get_version().await.unwrap(), "v2.1.7");
+        let request = server.await.unwrap();
+        assert!(
+            request.starts_with("GET /rest/system/version"),
+            "{}",
+            request
+        );
     }
 
     #[tokio::test]

@@ -597,6 +597,10 @@ impl App {
             app.model.syncthing.system_status = Some(sys_status);
         }
 
+        if let Ok(version) = app.client.get_version().await {
+            app.model.syncthing.version = Some(version);
+        }
+
         if let Ok(conn_stats) = app.client.get_connection_stats().await {
             app.model.syncthing.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
             app.model.syncthing.connection_stats = Some(conn_stats);
@@ -1114,6 +1118,9 @@ where
         // Check if we need to fetch folders after reconnection
         if app.model.ui.needs_folder_refresh {
             app.model.ui.needs_folder_refresh = false;
+            if let Ok(version) = app.client.get_version().await {
+                app.model.syncthing.version = Some(version);
+            }
             match app.client.get_folders().await {
                 Ok(folders) => {
                     let _ = app.cache.save_folders(&folders);

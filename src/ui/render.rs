@@ -138,6 +138,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.syncthing.device_name.as_deref(),
         (total_files, total_dirs, total_bytes),
         app.model.syncthing.last_transfer_rates,
+        app.model.syncthing.version.as_deref(),
     );
 
     // Render folders pane if visible
