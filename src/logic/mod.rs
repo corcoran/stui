@@ -9,6 +9,7 @@
 //! - ignore: Pattern matching for .stignore rules
 //! - layout: UI layout calculations and constraints
 //! - navigation: Navigation selection calculations
+//! - need_paging: Paging of the need list behind the out-of-sync filter
 //! - path: Path mapping and translation utilities
 //! - performance: Batching and performance optimizations
 //! - platform: Terminal detection for image previews
@@ -27,6 +28,7 @@ pub mod formatting;
 pub mod ignore;
 pub mod layout;
 pub mod navigation;
+pub mod need_paging;
 pub mod path;
 pub mod performance;
 pub mod platform;

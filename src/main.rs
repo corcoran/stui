@@ -219,8 +219,7 @@ impl App {
         // Invalidate folder status
         let _ = self.cache.invalidate_folder_status(folder_id);
 
-        // Invalidate out-of-sync cache and refresh summary modal if open
-        self.invalidate_and_refresh_out_of_sync_summary(folder_id);
+        self.note_need_list_changed(folder_id);
 
         // Invalidate local changed cache
         let _ = self.cache.invalidate_local_changed(folder_id);
@@ -811,24 +810,6 @@ impl App {
         sync_states
     }
 
-    /// Invalidate out-of-sync cache and refresh summary modal if open
-    ///
-    /// This is the single operation for "folder's out-of-sync state changed".
-    /// Invalidates cache AND triggers refresh of summary modal (if open).
-    fn invalidate_and_refresh_out_of_sync_summary(&mut self, folder_id: &str) {
-        // Invalidate cache
-        let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
-
-        // If summary modal is open, refresh it
-        if self.model.ui.out_of_sync_summary.is_some() {
-            let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
-                folder_id: folder_id.to_string(),
-                page: None,
-                perpage: Some(1000),
-            });
-        }
-    }
-
     /// Refresh current breadcrumb without search filter (restore original items)
     async fn refresh_current_breadcrumb(&mut self) -> Result<()> {
         if self.model.navigation.focus_level == 0 {
@@ -873,56 +854,6 @@ impl App {
     /// Delegated to handlers::keyboard module
     async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         handlers::handle_key(self, key).await
-    }
-
-    pub fn open_out_of_sync_summary(&mut self) {
-        use crate::model::types::OutOfSyncSummaryState;
-        use crate::services::api::ApiRequest;
-        use std::collections::{HashMap, HashSet};
-
-        // Initialize summary state
-        let mut summary_state = OutOfSyncSummaryState {
-            selected_index: 0,
-            breakdowns: HashMap::new(),
-            loading: HashSet::new(),
-        };
-
-        // For each folder, check status and queue requests if needed
-        for folder in &self.model.syncthing.folders {
-            let folder_id = folder.id.clone();
-
-            // Check if folder has out-of-sync items (from cached status)
-            if let Some(status) = self.model.syncthing.folder_statuses.get(&folder_id) {
-                let has_needed = status.need_total_items > 0;
-                let has_local_changes = status.receive_only_total_items > 0;
-
-                if has_needed || has_local_changes {
-                    // Queue GetNeededFiles request for remote changes
-                    // TODO: Local changes (receive-only deletions) require /rest/db/localchanged API
-                    //       Currently only shows remote out-of-sync items from /rest/db/need
-                    summary_state.loading.insert(folder_id.clone());
-
-                    let _ = self.api_tx.send(ApiRequest::GetNeededFiles {
-                        folder_id: folder_id.clone(),
-                        page: None,
-                        perpage: Some(1000), // Get all items
-                    });
-                }
-
-                if !has_needed && !has_local_changes {
-                    // All synced - set empty breakdown
-                    summary_state
-                        .breakdowns
-                        .insert(folder_id, Default::default());
-                }
-            }
-        }
-
-        self.model.ui.out_of_sync_summary = Some(summary_state);
-    }
-
-    pub fn close_out_of_sync_summary(&mut self) {
-        self.model.ui.out_of_sync_summary = None;
     }
 }
 
@@ -1239,6 +1170,7 @@ where
                     });
                 }
             }
+            app.tick_need_walks();
             app.last_status_update = Instant::now();
         }
 

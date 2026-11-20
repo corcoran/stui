@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use super::types::{
     ConfirmAction, FileInfoPopupState, FolderHistoryModal, FolderTypeSelectionState,
-    OutOfSyncFilterState, OutOfSyncSummaryState, PatternSelectionState, VimCommandState,
+    OutOfSyncFilterState, PatternSelectionState, VimCommandState,
 };
 use crate::{DisplayMode, SortMode};
 
@@ -72,13 +72,10 @@ pub struct UiModel {
     pub search_origin_level: Option<usize>,
 
     // ============================================
-    // OUT-OF-SYNC FILTER & SUMMARY
+    // OUT-OF-SYNC FILTER
     // ============================================
     /// Out-of-sync filter state (hierarchical breadcrumb filter)
     pub out_of_sync_filter: Option<OutOfSyncFilterState>,
-
-    /// Out-of-sync summary modal state
-    pub out_of_sync_summary: Option<OutOfSyncSummaryState>,
 
     /// Folder update history modal state
     pub folder_history_modal: Option<FolderHistoryModal>,
@@ -123,7 +120,6 @@ impl UiModel {
             search_query: String::new(),
             search_origin_level: None,
             out_of_sync_filter: None,
-            out_of_sync_summary: None,
             folder_history_modal: None,
             folder_activity: std::collections::HashMap::new(),
             device_details_modal: None,

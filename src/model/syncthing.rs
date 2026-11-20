@@ -66,6 +66,58 @@ pub struct NeedFetch {
     pub failed: bool,
 }
 
+/// Progressive fetch ("walk") of a folder's full /rest/db/need list for the out-of-sync filter.
+/// One page is in flight at a time; responses whose `generation` or `sequence`
+/// differ from this entry are dropped. A finished entry stays while the filter reads
+/// it: its cached rows don't expire, and it restarts once per sequence change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeedPaging {
+    /// Identifies the walk; a restart gets a new one. Cached rows are tagged with it.
+    pub generation: u64,
+    /// Folder sequence the walk started at
+    pub sequence: u64,
+    /// When the walk started
+    pub started_at: Instant,
+    /// Needed item count from the folder status
+    pub total: u64,
+    /// Distinct entries this walk has cached
+    pub loaded: u64,
+    /// Last page received (0: page 1 still in flight)
+    pub last_page: u32,
+    /// Reached the end of the list, the page cap, or a failed page
+    pub finished: bool,
+    /// Stopped before the end of the list (page cap reached or a page failed)
+    pub partial: bool,
+    /// The need list changed during the walk; restart once it finishes
+    pub dirty: bool,
+    /// A filter toggle waits for page 1
+    pub pending_toggle: bool,
+    /// Last filter re-apply during the walk
+    pub last_apply: Option<Instant>,
+    /// Last TTL refresh of the cached rows
+    pub last_touch: Option<Instant>,
+}
+
+impl NeedPaging {
+    /// A walk whose page 1 is in flight
+    pub fn new(generation: u64, sequence: u64, total: u64, started_at: Instant) -> Self {
+        Self {
+            generation,
+            sequence,
+            started_at,
+            total,
+            loaded: 0,
+            last_page: 0,
+            finished: false,
+            partial: false,
+            dirty: false,
+            pending_toggle: false,
+            last_apply: None,
+            last_touch: None,
+        }
+    }
+}
+
 impl NeedFetch {
     /// A fresh, outstanding request sent at `at`
     pub fn new(at: Instant, sequence: u64) -> Self {
@@ -136,6 +188,12 @@ pub struct SyncthingModel {
     /// Out-of-sync paths per folder, used to derive states of items never fetched
     pub need_index: HashMap<String, NeedIndex>,
 
+    /// Paged need-list fetches feeding the out-of-sync filter, per folder
+    pub need_paging: HashMap<String, NeedPaging>,
+
+    /// Generation handed to the next `NeedPaging`
+    pub need_paging_generation: u64,
+
     /// Folder sequence of the latest /rest/db/localchanged request feeding `need_index`
     pub local_changed_requested: HashMap<String, u64>,
 
@@ -166,6 +224,8 @@ impl SyncthingModel {
             syncing_files: HashMap::new(),
             need_fetches: HashMap::new(),
             need_index: HashMap::new(),
+            need_paging: HashMap::new(),
+            need_paging_generation: 0,
             local_changed_requested: HashMap::new(),
             local_changed_failed_at: HashMap::new(),
         }

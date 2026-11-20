@@ -97,7 +97,10 @@ impl App {
 
         // Invalidate cache
         let _ = self.cache.invalidate_folder(folder_id);
-        let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
+        // A need-list walk keeps its rows current through restarts and sweeps
+        if !self.model.syncthing.need_paging.contains_key(folder_id) {
+            let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
+        }
 
         // Clear discovered directories (force re-discovery)
         self.model

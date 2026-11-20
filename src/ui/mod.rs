@@ -20,7 +20,6 @@ pub mod folder_list;
 pub mod icons;
 pub mod layout;
 pub mod legend;
-pub mod out_of_sync_summary;
 pub mod render;
 pub mod search;
 pub mod status_bar;
@@ -39,10 +38,6 @@ mod tests {
     fn test_ui_text_has_no_emoji_presentation_selector() {
         let files = [
             ("dialogs.rs", include_str!("dialogs.rs")),
-            (
-                "out_of_sync_summary.rs",
-                include_str!("out_of_sync_summary.rs"),
-            ),
             ("icons.rs", include_str!("icons.rs")),
         ];
         for (name, src) in files {

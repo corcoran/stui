@@ -1,4 +1,5 @@
 use crate::api::{Folder, FolderStatus, SyncState};
+use crate::logic::need_paging::NeedPagingProgress;
 use crate::ui::icons::{FolderState, IconRenderer};
 use crate::utils;
 use ratatui::{
@@ -118,6 +119,7 @@ pub fn build_status_paragraph(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    out_of_sync_filter_progress: Option<NeedPagingProgress>,
     folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
     last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
     connected_device_count: Option<usize>,
@@ -150,6 +152,7 @@ pub fn build_status_paragraph(
             cache_hit,
             pending_operations_count,
             out_of_sync_filter_active,
+            out_of_sync_filter_progress,
         )
     };
 
@@ -295,6 +298,7 @@ fn build_status_line(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    out_of_sync_filter_progress: Option<NeedPagingProgress>,
 ) -> String {
     if focus_level == 0 {
         // Show selected folder status
@@ -432,7 +436,14 @@ fn build_status_line(
             } else {
                 "Filter: Active"
             };
-            metrics.push(filter_desc.to_string());
+            metrics.push(match out_of_sync_filter_progress {
+                Some(progress) => format!(
+                    "{} ({})",
+                    filter_desc,
+                    crate::logic::need_paging::format_need_paging_progress(&progress)
+                ),
+                None => filter_desc.to_string(),
+            });
         }
 
         // Show pending operations count if any
@@ -528,6 +539,7 @@ pub fn render_status_bar(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    out_of_sync_filter_progress: Option<NeedPagingProgress>,
     folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
     last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
     connected_device_count: Option<usize>,
@@ -549,6 +561,7 @@ pub fn render_status_bar(
         cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        out_of_sync_filter_progress,
         folder_activity,
         last_folder_updates,
         connected_device_count,
@@ -575,6 +588,7 @@ pub fn calculate_status_height(
     cache_hit: Option<bool>,
     pending_operations_count: usize,
     out_of_sync_filter_active: bool,
+    out_of_sync_filter_progress: Option<NeedPagingProgress>,
     folder_activity: &HashMap<String, (String, std::time::SystemTime)>,
     last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
     connected_device_count: Option<usize>,
@@ -608,6 +622,7 @@ pub fn calculate_status_height(
             cache_hit,
             pending_operations_count,
             out_of_sync_filter_active,
+            out_of_sync_filter_progress,
         )
     };
 
@@ -794,6 +809,70 @@ mod tests {
         assert_eq!(label, "Starting");
     }
 
+    // ========================================
+    // OUT-OF-SYNC FILTER LABEL
+    // ========================================
+
+    fn filter_status_line(progress: Option<NeedPagingProgress>) -> String {
+        let icon_renderer = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        build_status_line(
+            &icon_renderer,
+            1,
+            &[],
+            &HashMap::new(),
+            None,
+            Some("Media".to_string()),
+            None,
+            Some(5),
+            None,
+            "A-Z",
+            false,
+            None,
+            None,
+            0,
+            true,
+            progress,
+        )
+    }
+
+    #[test]
+    fn test_filter_label_shows_paging_progress() {
+        let status = filter_status_line(Some(NeedPagingProgress {
+            loaded: 2000,
+            total: 5400,
+            partial: false,
+        }));
+        assert!(
+            status.contains("Filter: Active (loading 2000/5400)"),
+            "{}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_filter_label_shows_partial_list() {
+        let status = filter_status_line(Some(NeedPagingProgress {
+            loaded: 100_000,
+            total: 250_000,
+            partial: true,
+        }));
+        assert!(
+            status.contains("Filter: Active (partial 100000/250000)"),
+            "{}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_filter_label_plain_without_paging() {
+        let status = filter_status_line(None);
+        assert!(status.contains("Filter: Active"));
+        assert!(!status.contains('('), "{}", status);
+    }
+
     // Tests for file/directory state display in breadcrumb view
     #[test]
     fn test_file_state_display_synced() {
@@ -823,6 +902,7 @@ mod tests {
             None,
             0,
             false, // out_of_sync_filter_active
+            None,
         );
         assert!(status.contains("📄✅ Synced"));
         assert!(status.contains("Selected: test.txt"));
@@ -855,6 +935,7 @@ mod tests {
             None,
             0,
             false, // out_of_sync_filter_active
+            None,
         );
         assert!(status.contains("📄❗ Out of Sync"));
         assert!(status.contains("Selected: test.txt"));
@@ -887,6 +968,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄💻 Local Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -919,6 +1001,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄⛅ Remote Only"));
         assert!(status.contains("Selected: test.txt"));
@@ -951,6 +1034,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄🔄 Syncing"));
         assert!(status.contains("Selected: test.txt"));
@@ -984,6 +1068,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📁✅ Synced"));
         assert!(status.contains("Selected: subdir/"));
@@ -1016,6 +1101,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄🔇 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -1049,6 +1135,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄🚫 Ignored"));
         assert!(status.contains("Selected: test.txt"));
@@ -1083,6 +1170,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(status.contains("📄❓ Unknown"));
         assert!(status.contains("Selected: test.txt"));
@@ -1111,6 +1199,7 @@ mod tests {
             None,
             0,
             false,
+            None,
         );
         assert!(!status.contains("Synced"));
         assert!(!status.contains("Out of Sync"));

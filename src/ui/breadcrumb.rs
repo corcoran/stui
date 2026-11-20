@@ -193,20 +193,15 @@ pub fn render_breadcrumb_panel(
     let list_items: Vec<ListItem> = display_items
         .iter()
         .map(|item| {
-            // Use cached state directly (directories show their own metadata state, not aggregate)
-            let sync_state = file_sync_states
-                .get(&item.name)
-                .copied()
-                .unwrap_or(SyncState::Unknown);
-
-            // Build icon as spans (for coloring)
             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
-            let icon_spans: Vec<Span> = if sync_state == SyncState::Ignored {
-                // Use pre-computed ignored_exists value (checked when state was set)
-                let exists = ignored_exists.get(&item.name).copied().unwrap_or(false);
-                icon_renderer.ignored_item(is_directory, exists)
-            } else {
-                icon_renderer.item_with_sync_state(is_directory, sync_state)
+            let icon_spans: Vec<Span> = match file_sync_states.get(&item.name).copied() {
+                None => icon_renderer.item_loading(is_directory),
+                Some(SyncState::Ignored) => {
+                    // Use pre-computed ignored_exists value (checked when state was set)
+                    let exists = ignored_exists.get(&item.name).copied().unwrap_or(false);
+                    icon_renderer.ignored_item(is_directory, exists)
+                }
+                Some(state) => icon_renderer.item_with_sync_state(is_directory, state),
             };
 
             build_list_item(

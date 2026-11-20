@@ -142,6 +142,19 @@ impl IconRenderer {
         spans
     }
 
+    /// Render an item whose sync state hasn't loaded yet: the file or folder icon
+    /// and a blank as wide as a status icon, so the row doesn't shift when the
+    /// state arrives. `?` stays reserved for a known Unknown state.
+    pub fn item_loading(&self, is_dir: bool) -> Vec<Span<'static>> {
+        let item_icon = if is_dir {
+            self.folder_icon()
+        } else {
+            self.file_icon()
+        };
+        let blank = " ".repeat(self.status_icon(StatusType::Synced).width());
+        vec![item_icon, Span::raw(blank)]
+    }
+
     /// Render an ignored item (shows special indicator based on existence)
     /// Follows pattern: <file|dir><status>
     /// - exists: <file|dir>🔇  (e.g., 📄🔇 or 📁🔇) - muted/ignored but present
@@ -285,5 +298,44 @@ mod tests {
     fn test_render_warning_nerdfont_mode() {
         let r = IconRenderer::new(IconMode::NerdFont, IconTheme::default());
         assert_eq!(r.render_warning(), "\u{F071}");
+    }
+
+    // ========================================
+    // LOADING PLACEHOLDER
+    // ========================================
+
+    fn text_of(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn width_of(spans: &[Span]) -> usize {
+        spans.iter().map(|s| s.width()).sum()
+    }
+
+    #[test]
+    fn test_item_loading_has_no_status_glyph() {
+        for mode in [IconMode::Emoji, IconMode::NerdFont] {
+            let r = IconRenderer::new(mode, IconTheme::default());
+            for is_dir in [true, false] {
+                let loading = text_of(&r.item_loading(is_dir));
+                let unknown = text_of(&r.item_with_sync_state(is_dir, SyncState::Unknown));
+                assert_ne!(loading, unknown, "{mode:?} dir={is_dir}");
+                assert!(!loading.contains('\u{2753}') && !loading.contains('\u{F128}'));
+            }
+        }
+    }
+
+    #[test]
+    fn test_item_loading_matches_status_icon_width() {
+        for mode in [IconMode::Emoji, IconMode::NerdFont] {
+            let r = IconRenderer::new(mode, IconTheme::default());
+            for is_dir in [true, false] {
+                assert_eq!(
+                    width_of(&r.item_loading(is_dir)),
+                    width_of(&r.item_with_sync_state(is_dir, SyncState::Synced)),
+                    "{mode:?} dir={is_dir}"
+                );
+            }
+        }
     }
 }

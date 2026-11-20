@@ -71,6 +71,8 @@ pub(crate) enum RequestKey {
     Devices,
     NeededFiles {
         folder_id: String,
+        generation: u64,
+        page: u32,
     },
     LocalChanged {
         folder_id: String,
@@ -121,11 +123,15 @@ pub enum ApiRequest {
     /// Get list of all devices
     GetDevices,
 
-    /// Get needed files (out-of-sync items)
+    /// One page of /rest/db/need for the out-of-sync filter. `generation` and
+    /// `sequence` come from the folder's `NeedPaging` and identify the fetch the page belongs to.
+    /// Pages after the first are low priority.
     GetNeededFiles {
         folder_id: String,
-        page: Option<u32>,
-        perpage: Option<u32>,
+        page: u32,
+        perpage: u32,
+        generation: u64,
+        sequence: u64,
     },
 
     /// Get local changed files (receive-only folders)
@@ -151,6 +157,7 @@ impl ApiRequest {
             ApiRequest::GetFileInfo { priority, .. } => *priority,
             // Folder status polling is medium priority (background refresh)
             ApiRequest::GetFolderStatus { .. } => Priority::Medium,
+            ApiRequest::GetNeededFiles { page, .. } if *page > 1 => Priority::Low,
             // All other operations (SystemStatus, Devices, Rescan, etc) are high priority
             _ => Priority::High,
         }
@@ -184,8 +191,15 @@ impl ApiRequest {
             ApiRequest::GetSystemStatus => RequestKey::SystemStatus,
             ApiRequest::GetConnectionStats => RequestKey::ConnectionStats,
             ApiRequest::GetDevices => RequestKey::Devices,
-            ApiRequest::GetNeededFiles { folder_id, .. } => RequestKey::NeededFiles {
+            ApiRequest::GetNeededFiles {
+                folder_id,
+                generation,
+                page,
+                ..
+            } => RequestKey::NeededFiles {
                 folder_id: folder_id.clone(),
+                generation: *generation,
+                page: *page,
             },
             ApiRequest::GetLocalChanged { folder_id } => RequestKey::LocalChanged {
                 folder_id: folder_id.clone(),
@@ -249,7 +263,11 @@ pub enum ApiResponse {
 
     NeededFiles {
         folder_id: String,
-        response: crate::api::NeedResponse,
+        generation: u64,
+        sequence: u64,
+        page: u32,
+        perpage: u32,
+        response: Result<NeedResponse, anyhow::Error>,
     },
 
     LocalChanged {
@@ -466,29 +484,25 @@ impl ApiService {
                 folder_id,
                 page,
                 perpage,
+                generation,
+                sequence,
             } => {
-                match client.get_needed_files(&folder_id, page, perpage).await {
-                    Ok(response) => ApiResponse::NeededFiles {
-                        folder_id: folder_id.clone(),
-                        response,
-                    },
-                    Err(e) => {
-                        log_debug(&format!(
-                            "Failed to get needed files for {}: {}",
-                            folder_id, e
-                        ));
-                        // Return empty response on error
-                        ApiResponse::NeededFiles {
-                            folder_id,
-                            response: NeedResponse {
-                                progress: vec![],
-                                queued: vec![],
-                                rest: vec![],
-                                page: 0,
-                                perpage: 0,
-                            },
-                        }
-                    }
+                let response = client
+                    .get_needed_files(&folder_id, Some(page), Some(perpage))
+                    .await;
+                if let Err(e) = &response {
+                    log_debug(&format!(
+                        "Failed to get needed files for {} page {}: {}",
+                        folder_id, page, e
+                    ));
+                }
+                ApiResponse::NeededFiles {
+                    folder_id,
+                    generation,
+                    sequence,
+                    page,
+                    perpage,
+                    response,
                 }
             }
 

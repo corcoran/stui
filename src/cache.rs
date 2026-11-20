@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use crate::api::{BrowseItem, FolderStatus, NeedResponse, SyncState};
-use crate::model::types::FolderSyncBreakdown;
 use crate::utils;
 
 fn log_debug(msg: &str) {
@@ -34,7 +33,11 @@ impl CacheDb {
         let cache_dir = Self::get_cache_dir()?;
         std::fs::create_dir_all(&cache_dir)?;
 
-        let db_path = cache_dir.join("cache.db");
+        Self::open_at(&cache_dir.join("cache.db"))
+    }
+
+    /// Open (or create) the cache database at `db_path`
+    fn open_at(db_path: &std::path::Path) -> Result<Self> {
         let conn = Connection::open(db_path)?;
 
         // Enable Write-Ahead Logging for better concurrency
@@ -45,6 +48,8 @@ impl CacheDb {
         cache.init_schema()?;
         cache.ensure_out_of_sync_columns()?;
         cache.ensure_local_changed_columns()?;
+        // Walk tags restart at 1 every session, so old rows would pass for the new walk's
+        cache.conn.execute("DELETE FROM need_entries", [])?;
 
         Ok(cache)
     }
@@ -105,6 +110,17 @@ impl CacheDb {
                 file_path TEXT NOT NULL,
                 file_sequence INTEGER NOT NULL,
                 sync_state TEXT NOT NULL,
+                PRIMARY KEY (folder_id, file_path)
+            ) WITHOUT ROWID;
+
+            -- Out-of-sync entries from /rest/db/need, tagged with the walk that cached them.
+            -- Kept apart from sync_states so a folder's sync-state wipe leaves them alone.
+            CREATE TABLE IF NOT EXISTS need_entries (
+                folder_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                category TEXT NOT NULL,
+                cached_at INTEGER NOT NULL,
+                walk INTEGER NOT NULL,
                 PRIMARY KEY (folder_id, file_path)
             ) WITHOUT ROWID;
 
@@ -507,9 +523,7 @@ impl CacheDb {
         }
     }
 
-    /// Save sync state for a single file
-    ///
-    /// IMPORTANT: Uses UPSERT to preserve need_category and need_cached_at columns
+    /// Save sync state for a single file. Upserts, so the row's local-change columns survive.
     pub fn save_sync_state(
         &self,
         folder_id: &str,
@@ -524,7 +538,7 @@ impl CacheDb {
              DO UPDATE SET
                 file_sequence = excluded.file_sequence,
                 sync_state = excluded.sync_state
-                -- Explicitly preserve need_category and need_cached_at by not updating them",
+                -- Leaves the other columns alone",
             params![
                 folder_id,
                 file_path,
@@ -536,11 +550,8 @@ impl CacheDb {
         Ok(())
     }
 
-    /// Save multiple sync states in a single transaction for better performance
-    ///
-    /// IMPORTANT: This uses UPSERT to preserve need_category and need_cached_at columns
-    /// when updating existing rows. This prevents race conditions where cache_needed_files()
-    /// sets need_category, then save_sync_states_batch() clears it.
+    /// Save multiple sync states in a single transaction. Upserts, so each row's local-change
+    /// columns survive.
     pub fn save_sync_states_batch(
         &self,
         states: &[(String, String, SyncState, u64)], // (folder_id, file_path, state, sequence)
@@ -558,7 +569,7 @@ impl CacheDb {
         let tx = self.conn.unchecked_transaction()?;
 
         {
-            // Use INSERT ... ON CONFLICT to preserve need_category and need_cached_at
+            // INSERT ... ON CONFLICT leaves the row's other columns alone
             let mut stmt = tx.prepare(
                 "INSERT INTO sync_states (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
                  VALUES (?1, ?2, ?3, ?4, NULL, NULL)
@@ -566,7 +577,7 @@ impl CacheDb {
                  DO UPDATE SET
                     file_sequence = excluded.file_sequence,
                     sync_state = excluded.sync_state
-                    -- Explicitly preserve need_category and need_cached_at by not updating them"
+                    -- Leaves the other columns alone"
             )?;
 
             for (folder_id, file_path, state, seq) in states {
@@ -777,43 +788,63 @@ impl CacheDb {
         Ok(())
     }
 
-    pub fn cache_needed_files(&self, folder_id: &str, need_response: &NeedResponse) -> Result<()> {
+    /// Cache one need page as rows tagged with `walk`. Returns how many entries weren't yet
+    /// cached by that walk.
+    pub fn cache_needed_files(
+        &self,
+        folder_id: &str,
+        need_response: &NeedResponse,
+        walk: u64,
+    ) -> Result<u64> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
+        let walk = walk as i64;
 
-        // Process progress array (downloading)
-        for file in &need_response.progress {
-            self.conn.execute(
-                "INSERT OR REPLACE INTO sync_states
-                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
-                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                params![folder_id, &file.name, "Syncing", "downloading", now],
+        let entries = need_response
+            .progress
+            .iter()
+            .map(|f| (f, "Syncing", "downloading"))
+            .chain(
+                need_response
+                    .queued
+                    .iter()
+                    .map(|f| (f, "RemoteOnly", "queued")),
+            )
+            .chain(
+                need_response
+                    .rest
+                    .iter()
+                    .map(|f| (f, "RemoteOnly", "remote_only")),
+            );
+
+        // One transaction per page: a 1000-entry page is otherwise 1000 commits on the UI thread
+        let tx = self.conn.unchecked_transaction()?;
+        let mut new_rows = 0u64;
+        {
+            // An entry this walk already wrote is left alone, so the change count is the number
+            // of entries new to the walk
+            let mut need_stmt = tx.prepare(
+                "INSERT INTO need_entries (folder_id, file_path, category, cached_at, walk)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(folder_id, file_path) DO UPDATE SET
+                     category = excluded.category,
+                     cached_at = excluded.cached_at,
+                     walk = excluded.walk
+                 WHERE need_entries.walk IS NOT excluded.walk",
             )?;
-        }
-
-        // Process queued array
-        for file in &need_response.queued {
-            self.conn.execute(
-                "INSERT OR REPLACE INTO sync_states
-                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
-                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                params![folder_id, &file.name, "RemoteOnly", "queued", now],
+            let mut state_stmt = tx.prepare(
+                "INSERT OR REPLACE INTO sync_states (folder_id, file_path, file_sequence, sync_state)
+                 VALUES (?1, ?2, 0, ?3)",
             )?;
+            for (file, state, category) in entries {
+                new_rows +=
+                    need_stmt.execute(params![folder_id, &file.name, category, now, walk])? as u64;
+                state_stmt.execute(params![folder_id, &file.name, state])?;
+            }
         }
-
-        // Process rest array (categorize as remote_only or modified based on local state)
-        for file in &need_response.rest {
-            // For now, mark as remote_only (we'll refine categorization later)
-            self.conn.execute(
-                "INSERT OR REPLACE INTO sync_states
-                 (folder_id, file_path, file_sequence, sync_state, need_category, need_cached_at)
-                 VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                params![folder_id, &file.name, "RemoteOnly", "remote_only", now],
-            )?;
-        }
-
-        Ok(())
+        tx.commit()?;
+        Ok(new_rows)
     }
 
     pub fn cache_local_changed_files(&self, folder_id: &str, file_paths: &[String]) -> Result<()> {
@@ -844,70 +875,70 @@ impl CacheDb {
         Ok(())
     }
 
-    pub fn get_folder_sync_breakdown(&self, folder_id: &str) -> Result<FolderSyncBreakdown> {
+    /// Restart the TTL of the folder's cached need entries. Rows refreshed in the last 10s are
+    /// left alone. Returns the rows written.
+    pub fn touch_out_of_sync_categories(&self, folder_id: &str) -> Result<usize> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
-
-        let ttl = 30; // 30 seconds
-        let cutoff = now - ttl;
-
-        let mut breakdown = FolderSyncBreakdown::default();
-
-        // First, get counts from need_category (remote changes from /rest/db/need)
-        let mut stmt = self.conn.prepare(
-            "SELECT need_category, COUNT(*)
-             FROM sync_states
-             WHERE folder_id = ?1
-               AND need_category IS NOT NULL
-               AND need_cached_at > ?2
-             GROUP BY need_category",
+        let written = self.conn.execute(
+            "UPDATE need_entries SET cached_at = ?2
+             WHERE folder_id = ?1 AND cached_at < ?2 - 10",
+            params![folder_id, now],
         )?;
+        Ok(written)
+    }
 
-        let rows = stmt.query_map(params![folder_id, cutoff], |row| {
-            let category: String = row.get(0)?;
-            let count: usize = row.get(1)?;
-            Ok((category, count))
+    /// Drop need entries not cached by `walk` (the walk saw the whole list)
+    pub fn sweep_need_rows(&self, folder_id: &str, walk: u64) -> Result<usize> {
+        let swept = self.conn.execute(
+            "DELETE FROM need_entries WHERE folder_id = ?1 AND walk IS NOT ?2",
+            params![folder_id, walk as i64],
+        )?;
+        Ok(swept)
+    }
+
+    /// Drop the need entry of one path
+    pub fn clear_need_path(&self, folder_id: &str, file_path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM need_entries WHERE folder_id = ?1 AND file_path = ?2",
+            params![folder_id, file_path],
+        )?;
+        Ok(())
+    }
+
+    /// Like `get_out_of_sync_items`, ignoring the TTL
+    pub fn get_all_out_of_sync_items(&self, folder_id: &str) -> Result<HashMap<String, String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path, category FROM need_entries WHERE folder_id = ?1")?;
+        let rows = stmt.query_map(params![folder_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
+        rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+            .map_err(Into::into)
+    }
 
-        for row in rows {
-            let (category, count) = row?;
-            match category.as_str() {
-                "downloading" => breakdown.downloading = count,
-                "queued" => breakdown.queued = count,
-                "remote_only" => breakdown.remote_only = count,
-                "modified" => breakdown.modified = count,
-                "local_only" => breakdown.local_only = count,
-                _ => {}
-            }
-        }
-
-        // Also count files with sync_state = 'LocalOnly' (local changes not in /rest/db/need)
-        let local_only_count: usize = self.conn.query_row(
-            "SELECT COUNT(*)
-             FROM sync_states
-             WHERE folder_id = ?1
-               AND sync_state = 'LocalOnly'",
-            params![folder_id],
-            |row| row.get(0),
-        )?;
-
-        breakdown.local_only += local_only_count;
-
-        Ok(breakdown)
+    /// Backdate the folder's need entries by `secs`
+    #[cfg(test)]
+    pub fn age_need_rows(&self, folder_id: &str, secs: i64) {
+        self.conn
+            .execute(
+                "UPDATE need_entries SET cached_at = cached_at - ?2 WHERE folder_id = ?1",
+                params![folder_id, secs],
+            )
+            .unwrap();
     }
 
     pub fn invalidate_out_of_sync_categories(&self, folder_id: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE sync_states
-             SET need_category = NULL, need_cached_at = NULL
-             WHERE folder_id = ?1",
+            "DELETE FROM need_entries WHERE folder_id = ?1",
             params![folder_id],
         )?;
         Ok(())
     }
 
-    /// Get all out-of-sync items for a folder (items with need_category set)
+    /// Need entries of a folder cached within the last 30s
     /// Returns map of file_path -> category
     pub fn get_out_of_sync_items(&self, folder_id: &str) -> Result<HashMap<String, String>> {
         let now = std::time::SystemTime::now()
@@ -918,11 +949,10 @@ impl CacheDb {
         let cutoff = now - ttl;
 
         let mut stmt = self.conn.prepare(
-            "SELECT file_path, need_category
-             FROM sync_states
+            "SELECT file_path, category
+             FROM need_entries
              WHERE folder_id = ?1
-               AND need_category IS NOT NULL
-               AND need_cached_at > ?2",
+               AND cached_at > ?2",
         )?;
 
         let rows = stmt.query_map(params![folder_id, cutoff], |row| {
@@ -1108,11 +1138,15 @@ mod tests {
         };
 
         cache
-            .cache_needed_files("test-folder", &need_response)
+            .cache_needed_files("test-folder", &need_response, 0)
             .unwrap();
 
-        // Verify categories were stored
-        // (We'll implement get_folder_sync_breakdown next to verify)
+        let items = cache.get_out_of_sync_items("test-folder").unwrap();
+        assert_eq!(
+            items.get("downloading.txt").map(String::as_str),
+            Some("downloading")
+        );
+        assert_eq!(items.get("queued.txt").map(String::as_str), Some("queued"));
     }
 
     #[test]
@@ -1138,7 +1172,7 @@ mod tests {
         };
 
         cache
-            .cache_needed_files("test-folder", &need_response)
+            .cache_needed_files("test-folder", &need_response, 0)
             .unwrap();
 
         // Verify need_category was set
@@ -1185,44 +1219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_folder_sync_breakdown_counts_categories() {
-        let cache = CacheDb::new_in_memory().unwrap();
-
-        // Setup test data
-        let need_response = NeedResponse {
-            progress: vec![
-                FileInfo {
-                    name: "file1.txt".to_string(),
-                    ..Default::default()
-                },
-                FileInfo {
-                    name: "file2.txt".to_string(),
-                    ..Default::default()
-                },
-            ],
-            queued: vec![FileInfo {
-                name: "file3.txt".to_string(),
-                ..Default::default()
-            }],
-            rest: vec![],
-            page: 1,
-            perpage: 100,
-        };
-
-        cache
-            .cache_needed_files("test-folder", &need_response)
-            .unwrap();
-
-        let breakdown = cache.get_folder_sync_breakdown("test-folder").unwrap();
-
-        assert_eq!(breakdown.downloading, 2);
-        assert_eq!(breakdown.queued, 1);
-        assert_eq!(breakdown.remote_only, 0);
-        assert_eq!(breakdown.modified, 0);
-        assert_eq!(breakdown.local_only, 0);
-    }
-
-    #[test]
     fn test_invalidate_out_of_sync_categories_clears_data() {
         let cache = CacheDb::new_in_memory().unwrap();
 
@@ -1238,18 +1234,210 @@ mod tests {
         };
 
         cache
-            .cache_needed_files("test-folder", &need_response)
+            .cache_needed_files("test-folder", &need_response, 0)
             .unwrap();
 
-        let before = cache.get_folder_sync_breakdown("test-folder").unwrap();
-        assert_eq!(before.downloading, 1);
+        let before = cache.get_out_of_sync_items("test-folder").unwrap();
+        assert_eq!(
+            before.get("file1.txt").map(String::as_str),
+            Some("downloading")
+        );
 
         cache
             .invalidate_out_of_sync_categories("test-folder")
             .unwrap();
 
-        let after = cache.get_folder_sync_breakdown("test-folder").unwrap();
-        assert_eq!(after.downloading, 0);
+        assert!(
+            cache
+                .get_out_of_sync_items("test-folder")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_touch_out_of_sync_categories_keeps_earlier_pages_fresh() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        let need_response = NeedResponse {
+            progress: vec![],
+            queued: vec![],
+            rest: vec![FileInfo {
+                name: "page1.txt".to_string(),
+                ..Default::default()
+            }],
+            page: 1,
+            perpage: 1,
+        };
+        cache
+            .cache_needed_files("test-folder", &need_response, 0)
+            .unwrap();
+        // Age the row past the TTL
+        cache.age_need_rows("test-folder", 3600);
+        assert!(
+            cache
+                .get_out_of_sync_items("test-folder")
+                .unwrap()
+                .is_empty()
+        );
+
+        cache.touch_out_of_sync_categories("test-folder").unwrap();
+
+        assert!(
+            cache
+                .get_out_of_sync_items("test-folder")
+                .unwrap()
+                .contains_key("page1.txt")
+        );
+    }
+
+    fn rest_page(names: &[&str]) -> NeedResponse {
+        NeedResponse {
+            progress: vec![],
+            queued: vec![],
+            rest: names
+                .iter()
+                .map(|n| FileInfo {
+                    name: n.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            page: 1,
+            perpage: 1000,
+        }
+    }
+
+    fn need_paths(cache: &CacheDb, folder: &str) -> Vec<String> {
+        let mut paths: Vec<String> = cache
+            .get_all_out_of_sync_items(folder)
+            .unwrap()
+            .into_keys()
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn test_reopened_cache_drops_previous_session_need_entries() {
+        let dir = std::env::temp_dir().join(format!(
+            "stui-cache-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cache.db");
+        {
+            let cache = CacheDb::open_at(&path).unwrap();
+            cache
+                .cache_needed_files("f", &rest_page(&["a", "b"]), 1)
+                .unwrap();
+        }
+
+        let cache = CacheDb::open_at(&path).unwrap();
+        let leftover = need_paths(&cache, "f");
+        let new_rows = cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+        drop(cache);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            leftover.is_empty(),
+            "previous session rows shown: {:?}",
+            leftover
+        );
+        assert_eq!(new_rows, 1, "walk 1 must count its entries as new");
+    }
+
+    #[test]
+    fn test_invalidate_folder_keeps_need_entries() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+
+        cache.invalidate_folder("f").unwrap();
+
+        assert_eq!(need_paths(&cache, "f"), vec!["a"]);
+        assert_eq!(cache.get_sync_state_unvalidated("f", "a").unwrap(), None);
+    }
+
+    #[test]
+    fn test_touch_skips_rows_refreshed_within_interval() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+        assert_eq!(cache.touch_out_of_sync_categories("f").unwrap(), 0);
+
+        cache.age_need_rows("f", 15);
+        assert_eq!(cache.touch_out_of_sync_categories("f").unwrap(), 1);
+        assert_eq!(cache.touch_out_of_sync_categories("f").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_cache_needed_files_counts_new_rows_per_walk() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        assert_eq!(
+            cache
+                .cache_needed_files("f", &rest_page(&["a", "b"]), 1)
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            cache
+                .cache_needed_files("f", &rest_page(&["b", "c"]), 1)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            cache
+                .cache_needed_files("f", &rest_page(&["a"]), 2)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_sweep_drops_rows_of_older_walks() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["a", "b"]), 1)
+            .unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["b"]), 2)
+            .unwrap();
+        cache
+            .cache_needed_files("g", &rest_page(&["a"]), 1)
+            .unwrap();
+
+        assert_eq!(cache.sweep_need_rows("f", 2).unwrap(), 1);
+
+        assert_eq!(need_paths(&cache, "f"), vec!["b"]);
+        assert_eq!(need_paths(&cache, "g"), vec!["a"]);
+    }
+
+    #[test]
+    fn test_clear_need_path_drops_one_entry() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["a", "b"]), 1)
+            .unwrap();
+
+        cache.clear_need_path("f", "a").unwrap();
+
+        assert_eq!(need_paths(&cache, "f"), vec!["b"]);
+    }
+
+    #[test]
+    fn test_all_out_of_sync_items_ignore_ttl() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+        cache.age_need_rows("f", 3600);
+
+        assert!(cache.get_out_of_sync_items("f").unwrap().is_empty());
+        assert_eq!(need_paths(&cache, "f"), vec!["a"]);
     }
 
     #[test]

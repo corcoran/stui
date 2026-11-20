@@ -217,6 +217,7 @@ impl App {
         if self.model.ui.out_of_sync_filter.is_some() {
             self.clear_out_of_sync_filter(true, Some("Filter cleared - search active"));
         }
+        self.cancel_pending_toggle();
 
         // Activate search mode
         self.model.ui.search_mode = true;
@@ -248,6 +249,305 @@ impl App {
     // OUT-OF-SYNC FILTER FUNCTIONALITY
     // ============================================================================
 
+    fn folder_sequence_and_need(&self, folder_id: &str) -> (u64, u64) {
+        self.model
+            .syncthing
+            .folder_statuses
+            .get(folder_id)
+            .map(|s| (s.sequence, s.need_total_items))
+            .unwrap_or((0, 0))
+    }
+
+    /// Start a new walk of the folder's need list at page 1, superseding any current one
+    fn start_need_walk(&mut self, folder_id: &str) {
+        let (sequence, total) = self.folder_sequence_and_need(folder_id);
+        self.model.syncthing.need_paging_generation += 1;
+        let generation = self.model.syncthing.need_paging_generation;
+        self.model.syncthing.need_paging.insert(
+            folder_id.to_string(),
+            model::syncthing::NeedPaging::new(
+                generation,
+                sequence,
+                total,
+                std::time::Instant::now(),
+            ),
+        );
+        let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+            folder_id: folder_id.to_string(),
+            page: 1,
+            perpage: logic::need_paging::NEED_LIST_PER_PAGE,
+            generation,
+            sequence,
+        });
+    }
+
+    /// Make sure a walk of the folder's need list exists for its current sequence. No-op when
+    /// one is running or finished at that sequence; a walk still running at an older sequence
+    /// is marked dirty and restarts when it ends.
+    pub(crate) fn request_need_list(&mut self, folder_id: &str) {
+        let (sequence, _) = self.folder_sequence_and_need(folder_id);
+        match self.model.syncthing.need_paging.get_mut(folder_id) {
+            Some(paging) if paging.sequence == sequence => {}
+            Some(paging) if !paging.finished => paging.dirty = true,
+            _ => self.start_need_walk(folder_id),
+        }
+    }
+
+    /// The folder's need list changed (a file event or a finished download). The walk is marked
+    /// dirty and restarts once it has finished and the restart interval allows (see
+    /// `maybe_restart_need_list`). Without a walk the cached rows are dropped.
+    pub(crate) fn note_need_list_changed(&mut self, folder_id: &str) {
+        match self.model.syncthing.need_paging.get_mut(folder_id) {
+            Some(paging) => paging.dirty = true,
+            None => {
+                let _ = self.cache.invalidate_out_of_sync_categories(folder_id);
+            }
+        }
+    }
+
+    /// Restart a finished walk whose list may have changed, at most once per
+    /// `NEED_LIST_RESTART_INTERVAL`. Called on folder status polls, the main loop tick, and when a
+    /// walk ends.
+    pub(crate) fn maybe_restart_need_list(&mut self, folder_id: &str) {
+        let (sequence, _) = self.folder_sequence_and_need(folder_id);
+        let restart = self
+            .model
+            .syncthing
+            .need_paging
+            .get(folder_id)
+            .is_some_and(|paging| {
+                logic::need_paging::should_restart_need_walk(
+                    paging,
+                    sequence,
+                    std::time::Instant::now(),
+                )
+            });
+        if restart && self.need_paging_wanted(folder_id) {
+            log_debug(&format!(
+                "DEBUG [NeededFiles]: restarting walk folder={} seq={}",
+                folder_id, sequence
+            ));
+            self.start_need_walk(folder_id);
+        }
+    }
+
+    /// Drop a filter toggle still waiting for page 1. Returns whether one was pending.
+    fn cancel_pending_toggle(&mut self) -> bool {
+        let mut cancelled = false;
+        for paging in self.model.syncthing.need_paging.values_mut() {
+            cancelled |= std::mem::take(&mut paging.pending_toggle);
+        }
+        if cancelled {
+            self.prune_need_paging();
+        }
+        cancelled
+    }
+
+    /// Retry deferred restarts of every walk; idle folders get no status polls to do it
+    pub(crate) fn tick_need_walks(&mut self) {
+        let folders: Vec<String> = self.model.syncthing.need_paging.keys().cloned().collect();
+        for folder_id in folders {
+            self.maybe_restart_need_list(&folder_id);
+        }
+    }
+
+    /// Need rows the filter reads. While a walk exists the rows don't expire: the walk's
+    /// restarts and sweeps keep them current.
+    pub(crate) fn cached_need_items(
+        &self,
+        folder_id: &str,
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        if self.model.syncthing.need_paging.contains_key(folder_id) {
+            self.cache.get_all_out_of_sync_items(folder_id)
+        } else {
+            self.cache.get_out_of_sync_items(folder_id)
+        }
+    }
+
+    /// Take one need page: cache it, refresh the filter (throttled mid-walk), and
+    /// request the next page or end the walk. Returns whether the page turned the filter on.
+    pub(crate) fn continue_need_list(
+        &mut self,
+        folder_id: &str,
+        generation: u64,
+        sequence: u64,
+        page: u32,
+        perpage: u32,
+        response: anyhow::Result<api::NeedResponse>,
+    ) -> bool {
+        use logic::need_paging::{self as paging_logic, NextNeedPage};
+
+        // Dropped when the walk was stopped or restarted
+        if !paging_logic::accept_need_page(
+            self.model.syncthing.need_paging.get(folder_id),
+            generation,
+            sequence,
+        ) {
+            log_debug(&format!(
+                "DEBUG [NeededFiles]: dropping superseded page folder={} page={} generation={} seq={}",
+                folder_id, page, generation, sequence
+            ));
+            return false;
+        }
+        let response = match response {
+            Ok(response) => response,
+            Err(e) => {
+                log_debug(&format!(
+                    "DEBUG [NeededFiles ERROR]: folder={} page={} error={}",
+                    folder_id, page, e
+                ));
+                if page > 1 {
+                    // Pages cached before the failure may still be waiting on a throttled apply
+                    if self
+                        .model
+                        .navigation
+                        .current_level()
+                        .is_some_and(|level| level.folder_id == folder_id)
+                        && self.model.ui.out_of_sync_filter.is_some()
+                    {
+                        self.apply_out_of_sync_filter();
+                    }
+                    if let Some(paging) = self.model.syncthing.need_paging.get_mut(folder_id) {
+                        paging.finished = true;
+                        paging.partial = true;
+                    }
+                } else {
+                    self.model.syncthing.need_paging.remove(folder_id);
+                }
+                return false;
+            }
+        };
+
+        let new_rows = self
+            .cache
+            .cache_needed_files(folder_id, &response, generation)
+            .unwrap_or_else(|e| {
+                log_debug(&format!(
+                    "Failed to cache needed files for {}: {}",
+                    folder_id, e
+                ));
+                0
+            });
+        let (_, status_total) = self.folder_sequence_and_need(folder_id);
+        let has_status = self.model.syncthing.folder_statuses.contains_key(folder_id);
+        let now = std::time::Instant::now();
+        let Some(paging) = self.model.syncthing.need_paging.get_mut(folder_id) else {
+            return false;
+        };
+        let total = if has_status {
+            status_total
+        } else {
+            paging.total
+        };
+        let next = paging_logic::advance_need_paging(
+            paging,
+            page,
+            logic::sync_states::need_entry_count(&response),
+            new_rows,
+            total,
+            perpage,
+            paging_logic::NEED_LIST_MAX_PAGES,
+        );
+        let touch = paging_logic::should_touch_need_rows(paging.last_touch, now);
+        if touch {
+            paging.last_touch = Some(now);
+        }
+        let reapply =
+            page == 1 || paging_logic::should_reapply_need_page(paging.last_apply, now, next);
+        if reapply {
+            paging.last_apply = Some(now);
+        }
+        let pending_toggle = reapply && std::mem::take(&mut paging.pending_toggle);
+        // Only a short page proves the walk saw the whole list; a status total can be stale-low
+        let complete = next == NextNeedPage::Done
+            && logic::sync_states::need_entry_count(&response) < u64::from(perpage);
+        log_debug(&format!(
+            "DEBUG [NeededFiles]: folder={} page={} loaded={}/{} next={:?} reapply={}",
+            folder_id, page, paging.loaded, paging.total, next, reapply
+        ));
+
+        if touch {
+            let _ = self.cache.touch_out_of_sync_categories(folder_id);
+        }
+        if complete {
+            let _ = self.cache.sweep_need_rows(folder_id, generation);
+        }
+
+        let mut activated = false;
+        if reapply {
+            let viewing_folder = self
+                .model
+                .navigation
+                .current_level()
+                .is_some_and(|level| level.folder_id == folder_id);
+            if viewing_folder {
+                if self.model.ui.out_of_sync_filter.is_some() {
+                    self.apply_out_of_sync_filter();
+                } else if pending_toggle {
+                    self.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
+                        origin_level: self.model.navigation.focus_level,
+                        last_refresh: std::time::SystemTime::now(),
+                        pending_selection: None,
+                    });
+                    self.apply_out_of_sync_filter();
+                    activated = true;
+                }
+            }
+        }
+
+        if !self.need_paging_wanted(folder_id) {
+            self.model.syncthing.need_paging.remove(folder_id);
+            return activated;
+        }
+        match next {
+            NextNeedPage::Fetch(next_page) => {
+                let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
+                    folder_id: folder_id.to_string(),
+                    page: next_page,
+                    perpage,
+                    generation,
+                    sequence,
+                });
+            }
+            NextNeedPage::Done | NextNeedPage::Capped => self.maybe_restart_need_list(folder_id),
+        }
+        activated
+    }
+
+    /// Whether the filter (active, or waiting on a toggle's page 1) still reads
+    /// the folder's need list
+    pub(crate) fn need_paging_wanted(&self, folder_id: &str) -> bool {
+        let toggle_pending = self
+            .model
+            .syncthing
+            .need_paging
+            .get(folder_id)
+            .is_some_and(|p| p.pending_toggle);
+        (self.model.ui.out_of_sync_filter.is_some() || toggle_pending)
+            && self.model.navigation.focus_level > 0
+            && self
+                .model
+                .navigation
+                .breadcrumb_trail
+                .first()
+                .is_some_and(|level| level.folder_id == folder_id)
+    }
+
+    /// Stop the need-list fetches nothing reads any more
+    pub(crate) fn prune_need_paging(&mut self) {
+        let unwanted: Vec<String> = self
+            .model
+            .syncthing
+            .need_paging
+            .keys()
+            .filter(|id| !self.need_paging_wanted(id))
+            .cloned()
+            .collect();
+        for id in unwanted {
+            self.model.syncthing.need_paging.remove(&id);
+        }
+    }
+
     /// Apply out-of-sync filter to current breadcrumb level
     ///
     /// Shows only files/directories that:
@@ -265,7 +565,7 @@ impl App {
         let folder_id = self.model.navigation.breadcrumb_trail[0].folder_id.clone();
 
         // Get out-of-sync items from cache (once for entire folder)
-        let out_of_sync_items = match self.cache.get_out_of_sync_items(&folder_id) {
+        let out_of_sync_items = match self.cached_need_items(&folder_id) {
             Ok(items) => items,
             Err(e) => {
                 log_debug(&format!("Cache query failed for out-of-sync items: {}", e));
@@ -294,11 +594,7 @@ impl App {
             if any_filtered {
                 // Filter already active but cache is empty (likely just invalidated)
                 // Queue fresh NeededFiles request to refresh cache
-                let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
-                    folder_id: folder_id.clone(),
-                    page: None,
-                    perpage: Some(1000),
-                });
+                self.request_need_list(&folder_id);
 
                 // Also queue GetLocalChanged for receive-only folders
                 let is_receive_only = self
@@ -325,6 +621,11 @@ impl App {
                 return;
             }
         }
+
+        // Directory prefixes with an out-of-sync descendant, built once for every level
+        let dir_prefixes = logic::need_paging::out_of_sync_dir_prefixes(
+            out_of_sync_items.keys().chain(local_changed_items.iter()),
+        );
 
         // Apply filter to ALL breadcrumb levels
         let num_levels = self.model.navigation.breadcrumb_trail.len();
@@ -366,12 +667,9 @@ impl App {
                         format!("{}/", full_path)
                     };
 
-                    out_of_sync_items
-                        .keys()
-                        .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
-                        || local_changed_items
-                            .iter()
-                            .any(|path| path.starts_with(&dir_prefix) || path == &full_path)
+                    dir_prefixes.contains(&dir_prefix)
+                        || out_of_sync_items.contains_key(&full_path)
+                        || local_changed_items.contains(&full_path)
                 } else {
                     // For files: direct match in either remote or local
                     out_of_sync_items.contains_key(&full_path)
@@ -383,6 +681,17 @@ impl App {
                 }
             }
 
+            // A selection waiting on another level's items no longer applies
+            if level_idx == self.model.navigation.focus_level - 1
+                && let Some(filter) = &mut self.model.ui.out_of_sync_filter
+                && filter
+                    .pending_selection
+                    .as_ref()
+                    .is_some_and(|p| p.prefix != prefix)
+            {
+                filter.pending_selection = None;
+            }
+
             // Update level with filtered items
             let level = &mut self.model.navigation.breadcrumb_trail[level_idx];
 
@@ -392,16 +701,31 @@ impl App {
                 level.filtered_items = Some(filtered);
             }
 
-            // Restore selection to same item name if possible (only for current level)
+            // Restore selection to same item name if possible (only for current level). An item
+            // a later need page may still bring in is remembered and selected when it appears.
             if level_idx == self.model.navigation.focus_level - 1 && level.filtered_items.is_some()
             {
-                // Filter is active - try to restore previous selection
-                level.selected_index = if let Some(name) = selected_name {
-                    logic::navigation::find_item_index_by_name(level.display_items(), &name)
-                        .or(Some(0)) // If not found, default to first item
-                } else {
-                    Some(0) // No previous selection, default to first item
-                };
+                let names: Vec<&str> = level
+                    .display_items()
+                    .iter()
+                    .map(|item| item.name.as_str())
+                    .collect();
+                let pending = self
+                    .model
+                    .ui
+                    .out_of_sync_filter
+                    .as_ref()
+                    .and_then(|f| f.pending_selection.as_ref());
+                let (index, pending) = logic::need_paging::select_after_filter(
+                    selected_name.as_deref(),
+                    pending,
+                    prefix.as_deref(),
+                    &names,
+                );
+                level.selected_index = index;
+                if let Some(filter) = &mut self.model.ui.out_of_sync_filter {
+                    filter.pending_selection = pending;
+                }
             }
             // If no filter (filtered_items = None), keep existing selection
         }
@@ -411,6 +735,11 @@ impl App {
     pub fn toggle_out_of_sync_filter(&mut self) {
         // Only works in breadcrumb view
         if self.model.navigation.focus_level == 0 {
+            return;
+        }
+
+        // A second press while the first still waits for page 1 cancels it
+        if self.cancel_pending_toggle() {
             return;
         }
 
@@ -445,12 +774,19 @@ impl App {
             return;
         }
 
-        // Check if we have cached out-of-sync data
-        let has_cached_data = self
-            .cache
-            .get_out_of_sync_items(&folder_id)
-            .map(|items| !items.is_empty())
-            .unwrap_or(false);
+        // Check if we have cached out-of-sync data, and whether it holds the whole need list
+        let cached_need = self
+            .cached_need_items(&folder_id)
+            .map(|items| items.len() as u64)
+            .unwrap_or(0);
+        let has_cached_data = cached_need > 0;
+        let need_total = self
+            .model
+            .syncthing
+            .folder_statuses
+            .get(&folder_id)
+            .map(|status| status.need_total_items)
+            .unwrap_or(0);
 
         // Check if we have cached local changed data
         let has_local_cached = self
@@ -469,14 +805,25 @@ impl App {
             .map(|f| f.folder_type == "receiveonly")
             .unwrap_or(false);
 
-        // Queue requests for missing data
-        if !has_cached_data {
-            // Queue GetNeededFiles request
-            let _ = self.api_tx.send(services::api::ApiRequest::GetNeededFiles {
-                folder_id: folder_id.clone(),
-                page: None,
-                perpage: Some(1000), // Get all items
-            });
+        // Queue requests for missing data. A partial cache is shown now and refreshed unless
+        // a walk already covers the current sequence.
+        if has_cached_data {
+            if cached_need < need_total {
+                self.request_need_list(&folder_id);
+            }
+        } else {
+            let in_flight = self
+                .model
+                .syncthing
+                .need_paging
+                .get(&folder_id)
+                .is_some_and(|p| !p.finished);
+            if !in_flight {
+                self.start_need_walk(&folder_id);
+            }
+            if let Some(paging) = self.model.syncthing.need_paging.get_mut(&folder_id) {
+                paging.pending_toggle = true;
+            }
         }
 
         // Also check for local changes if folder is receive-only
@@ -501,6 +848,7 @@ impl App {
         self.model.ui.out_of_sync_filter = Some(model::types::OutOfSyncFilterState {
             origin_level: self.model.navigation.focus_level,
             last_refresh: std::time::SystemTime::now(),
+            pending_selection: None,
         });
 
         // Apply current sort mode first
@@ -521,6 +869,7 @@ impl App {
         show_toast: Option<&str>,
     ) {
         self.model.ui.out_of_sync_filter = None;
+        self.prune_need_paging();
 
         if preserve_selection {
             // Clear filtered items while preserving selection by name

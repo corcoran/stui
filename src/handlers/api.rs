@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use crate::App;
 use crate::api::SyncState;
-use crate::model;
 use crate::model::syncthing::ConnectionState;
 use crate::services::api::{ApiRequest, ApiResponse, Priority};
 
@@ -594,6 +593,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
             // After the insert: re-derived states must see this status
             app.schedule_need_index(&folder_id, prev_state.as_deref(), &status);
+
+            // After the insert: a restarted need-list walk is tagged with the new sequence
+            app.maybe_restart_need_list(&folder_id);
         }
 
         ApiResponse::RescanResult {
@@ -797,55 +799,17 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
         ApiResponse::NeededFiles {
             folder_id,
+            generation,
+            sequence,
+            page,
+            perpage,
             response,
         } => {
-            // Cache the response
-            if let Err(e) = app.cache.cache_needed_files(&folder_id, &response) {
-                crate::log_debug(&format!(
-                    "Failed to cache needed files for {}: {}",
-                    folder_id, e
-                ));
-            }
-
-            // Get breakdown from cache
-            match app.cache.get_folder_sync_breakdown(&folder_id) {
-                Ok(breakdown) => {
-                    // Update summary state if open
-                    if let Some(summary) = &mut app.model.ui.out_of_sync_summary {
-                        summary.breakdowns.insert(folder_id.clone(), breakdown);
-                        summary.loading.remove(&folder_id);
-                    }
-                }
-                Err(e) => {
-                    crate::log_debug(&format!("Failed to get breakdown for {}: {}", folder_id, e));
-                }
-            }
-
-            // If in breadcrumb view for this folder, apply/reapply filter now that data is ready
-            if app.model.navigation.focus_level > 0 {
-                let level_idx = app.model.navigation.focus_level - 1;
-                if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx)
-                    && level.folder_id == folder_id
-                {
-                    if app.model.ui.out_of_sync_filter.is_none() {
-                        // First time: activate filter
-                        app.model.ui.out_of_sync_filter =
-                            Some(model::types::OutOfSyncFilterState {
-                                origin_level: app.model.navigation.focus_level,
-                                last_refresh: std::time::SystemTime::now(),
-                            });
-
-                        // Apply filter
-                        app.apply_out_of_sync_filter();
-
-                        // Clear loading toast
-                        app.model.ui.toast_message = None;
-                    } else {
-                        // Filter already active: re-apply with fresh cache data
-                        // This handles the case where cache was invalidated and just refreshed
-                        app.apply_out_of_sync_filter();
-                    }
-                }
+            let filter_activated =
+                app.continue_need_list(&folder_id, generation, sequence, page, perpage, response);
+            if filter_activated {
+                // Clear the "Loading out-of-sync files..." toast
+                app.model.ui.toast_message = None;
             }
         }
 

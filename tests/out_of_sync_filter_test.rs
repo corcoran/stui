@@ -27,6 +27,7 @@ fn test_filter_activation_sets_state() {
     model.ui.out_of_sync_filter = Some(OutOfSyncFilterState {
         origin_level: 1, // Activated at first breadcrumb level
         last_refresh: std::time::SystemTime::now(),
+        pending_selection: None,
     });
 
     // Verify filter is now active
@@ -45,6 +46,7 @@ fn test_filter_persists_across_navigation() {
     model.ui.out_of_sync_filter = Some(OutOfSyncFilterState {
         origin_level: 1,
         last_refresh: std::time::SystemTime::now(),
+        pending_selection: None,
     });
     model.navigation.focus_level = 1;
 

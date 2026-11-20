@@ -302,20 +302,6 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
     }
 
-    // Handle summary modal closing (process before other keys)
-    if app.model.ui.out_of_sync_summary.is_some() {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('f') => {
-                app.close_out_of_sync_summary();
-                return Ok(());
-            }
-            _ => {
-                // Ignore other keys while modal is showing
-                return Ok(());
-            }
-        }
-    }
-
     // ========================================
     // FOLDER HISTORY MODAL HANDLERS
     // ========================================

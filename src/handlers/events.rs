@@ -180,6 +180,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
         CacheInvalidation::ItemFinished {
             folder_id,
             file_path,
+            failed,
             timestamp: _,
         } => {
             crate::log_debug(&format!(
@@ -191,9 +192,13 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 set.remove(file_path.trim_end_matches('/'));
             }
 
-            // Invalidate out-of-sync cache and refresh summary modal if open
-            // File just finished syncing, so need_category may have changed
-            app.invalidate_and_refresh_out_of_sync_summary(&folder_id);
+            // A downloaded item leaves the need list; a failed one stays
+            if !failed {
+                let _ = app
+                    .cache
+                    .clear_need_path(&folder_id, file_path.trim_end_matches('/'));
+            }
+            app.note_need_list_changed(&folder_id);
 
             // Don't clear state or fetch FileInfo - causes flicker and API flood
             // LocalIndexUpdated event will trigger Browse refresh with fresh data
@@ -434,6 +439,16 @@ mod tests {
         CacheInvalidation::ItemFinished {
             folder_id: folder.to_string(),
             file_path: path.to_string(),
+            failed: false,
+            timestamp: SystemTime::now(),
+        }
+    }
+
+    fn item_failed(folder: &str, path: &str) -> CacheInvalidation {
+        CacheInvalidation::ItemFinished {
+            folder_id: folder.to_string(),
+            file_path: path.to_string(),
+            failed: true,
             timestamp: SystemTime::now(),
         }
     }
@@ -2309,5 +2324,919 @@ mod tests {
             queued_rescans(&mut rx),
             vec![("media".to_string(), Vec::<String>::new())]
         );
+    }
+
+    // ========================================
+    // NEED LIST PAGING
+    // ========================================
+
+    fn status_with_need(sequence: u64, need_total: u64) -> crate::api::FolderStatus {
+        let mut status = folder_status("idle");
+        status.sequence = sequence;
+        status.need_total_items = need_total;
+        status
+    }
+
+    /// Page `page` of the need list, every entry in `rest`
+    fn need_files_page(
+        folder: &str,
+        generation: u64,
+        sequence: u64,
+        page: u32,
+        perpage: u32,
+        names: &[&str],
+    ) -> ApiResponse {
+        ApiResponse::NeededFiles {
+            folder_id: folder.to_string(),
+            generation,
+            sequence,
+            page,
+            perpage,
+            response: Ok(crate::api::NeedResponse {
+                progress: vec![],
+                queued: vec![],
+                rest: names
+                    .iter()
+                    .map(|n| crate::api::FileInfo {
+                        name: n.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                page,
+                perpage,
+            }),
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct NeedPageRequest {
+        folder: String,
+        page: u32,
+        perpage: u32,
+        generation: u64,
+        sequence: u64,
+        priority: crate::services::api::Priority,
+    }
+
+    fn need_page_requests(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+    ) -> Vec<NeedPageRequest> {
+        let mut requests = Vec::new();
+        while let Ok(req) = rx.try_recv() {
+            let priority = req.priority();
+            if let crate::services::api::ApiRequest::GetNeededFiles {
+                folder_id,
+                page,
+                perpage,
+                generation,
+                sequence,
+            } = req
+            {
+                requests.push(NeedPageRequest {
+                    folder: folder_id,
+                    page,
+                    perpage,
+                    generation,
+                    sequence,
+                    priority,
+                });
+            }
+        }
+        requests
+    }
+
+    /// App viewing the root of "media" (files a..e), status sequence 10 needing `total` items,
+    /// with the filter toggled on. Returns the generation of the page 1 request.
+    fn app_paging_media(
+        total: u64,
+    ) -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+        u64,
+    ) {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(
+            &mut app,
+            "media",
+            ["a", "b", "c", "d", "e"]
+                .iter()
+                .map(|n| file_item(n))
+                .collect(),
+        );
+        app.model
+            .syncthing
+            .folder_statuses
+            .insert("media".to_string(), status_with_need(10, total));
+        app.model
+            .performance
+            .last_known_sequences
+            .insert("media".to_string(), 10);
+
+        app.toggle_out_of_sync_filter();
+        let requests = need_page_requests(&mut rx);
+        assert_eq!(requests.len(), 1, "toggle should request page 1");
+        assert_eq!(requests[0].page, 1);
+        assert_eq!(requests[0].sequence, 10);
+        assert_eq!(requests[0].priority, crate::services::api::Priority::High);
+        let generation = requests[0].generation;
+        (app, rx, generation)
+    }
+
+    fn filtered_names(app: &App) -> Vec<String> {
+        let mut names: Vec<String> = app.model.navigation.breadcrumb_trail[0]
+            .filtered_items
+            .as_ref()
+            .map(|items| items.iter().map(|i| i.name.clone()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    fn paging_progress(app: &App) -> Option<crate::logic::need_paging::NeedPagingProgress> {
+        app.model
+            .syncthing
+            .need_paging
+            .get("media")
+            .and_then(crate::logic::need_paging::need_paging_progress)
+    }
+
+    #[test]
+    fn test_need_paging_complete_first_page_requests_nothing_more() {
+        let (mut app, mut rx, generation) = app_paging_media(2);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.model.ui.out_of_sync_filter.is_some());
+        assert_eq!(filtered_names(&app), vec!["a", "b"]);
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(app.model.syncthing.need_paging["media"].finished);
+    }
+
+    #[test]
+    fn test_need_paging_requests_next_page_at_low_priority() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert_eq!(
+            need_page_requests(&mut rx),
+            vec![NeedPageRequest {
+                folder: "media".to_string(),
+                page: 2,
+                perpage: 2,
+                generation,
+                sequence: 10,
+                priority: crate::services::api::Priority::Low,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_need_paging_merges_later_pages_into_filter() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b"]);
+
+        let_reapply_interval_pass(&mut app, "media");
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d"]);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+        let pages: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(pages, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_need_paging_progress_mid_paging_and_cleared_when_complete() {
+        let (mut app, _rx, generation) = app_paging_media(5);
+        assert_eq!(paging_progress(&app), None);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        assert_eq!(
+            paging_progress(&app),
+            Some(crate::logic::need_paging::NeedPagingProgress {
+                loaded: 2,
+                total: 5,
+                partial: false
+            })
+        );
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert_eq!(paging_progress(&app).map(|p| p.loaded), Some(4));
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+        assert_eq!(paging_progress(&app), None);
+    }
+
+    #[test]
+    fn test_need_paging_drops_other_generation() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation + 1, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.model.ui.out_of_sync_filter.is_none());
+        assert!(app.cache.get_out_of_sync_items("media").unwrap().is_empty());
+        assert!(need_page_requests(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_need_paging_drops_old_sequence() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 9, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.model.ui.out_of_sync_filter.is_none());
+        assert!(app.cache.get_out_of_sync_items("media").unwrap().is_empty());
+        assert!(need_page_requests(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_need_paging_drops_other_folder() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("docs", generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.cache.get_out_of_sync_items("docs").unwrap().is_empty());
+        assert!(need_page_requests(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_need_paging_filter_off_stops_page_requests() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        app.toggle_out_of_sync_filter();
+        assert!(app.model.ui.out_of_sync_filter.is_none());
+        assert!(app.model.syncthing.need_paging.is_empty());
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(
+            app.model.ui.out_of_sync_filter.is_none(),
+            "a late page must not turn the filter back on"
+        );
+    }
+
+    #[test]
+    fn test_need_paging_leaving_folder_stops_page_requests() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        app.clear_out_of_sync_filter(false, None);
+        app.model.navigation.focus_level = 0;
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(app.model.syncthing.need_paging.is_empty());
+    }
+
+    /// Pretend the reapply throttle interval has passed for the folder's walk
+    fn let_reapply_interval_pass(app: &mut App, folder: &str) {
+        if let Some(p) = app.model.syncthing.need_paging.get_mut(folder) {
+            p.last_apply = p
+                .last_apply
+                .map(|at| at - std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// Pretend the restart interval has passed since the folder's walk started
+    fn let_restart_interval_pass(app: &mut App, folder: &str) {
+        if let Some(p) = app.model.syncthing.need_paging.get_mut(folder) {
+            p.started_at -= std::time::Duration::from_secs(60);
+        }
+    }
+
+    /// A folder status poll for "media"
+    fn status_tick(app: &mut App, sequence: u64, total: u64) {
+        handle_api_response(
+            app,
+            ApiResponse::FolderStatusResult {
+                folder_id: "media".to_string(),
+                status: Ok(status_with_need(sequence, total)),
+            },
+        );
+    }
+
+    /// Answer pages of a 5-item walk: [a b] [c d] [e]
+    fn finish_media_walk(app: &mut App, generation: u64, sequence: u64) {
+        for (page, names) in [(1, &["a", "b"][..]), (2, &["c", "d"]), (3, &["e"])] {
+            handle_api_response(
+                app,
+                need_files_page("media", generation, sequence, page, 2, names),
+            );
+        }
+    }
+
+    #[test]
+    fn test_need_paging_sequence_change_restarts_after_walk_finishes() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        // Mid-walk sequence change: the walk carries on
+        status_tick(&mut app, 11, 5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+        let pages: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(pages, vec![3], "no restart while the walk runs");
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+
+        let_restart_interval_pass(&mut app, "media");
+        status_tick(&mut app, 11, 5);
+        let restarted = need_page_requests(&mut rx);
+        assert_eq!(restarted.len(), 1);
+        assert_eq!(restarted[0].page, 1);
+        assert_eq!(restarted[0].sequence, 11);
+        assert_ne!(restarted[0].generation, generation);
+        // The old walk's rows stay visible until the new one replaces them
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+
+        // A late page of the old walk is dropped
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["zzz"]),
+        );
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(
+            !app.cache
+                .get_out_of_sync_items("media")
+                .unwrap()
+                .contains_key("zzz")
+        );
+    }
+
+    #[test]
+    fn test_item_finished_burst_during_walk_restarts_once_after_completion() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        for _ in 0..10 {
+            handle_cache_invalidation(&mut app, item_finished("media", "a"));
+            app.invalidate_folder_caches("media");
+        }
+        let during: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert!(during.is_empty(), "no restart mid-walk, got {:?}", during);
+        assert!(app.model.syncthing.need_paging["media"].dirty);
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+        need_page_requests(&mut rx);
+
+        let_restart_interval_pass(&mut app, "media");
+        status_tick(&mut app, 10, 5);
+        status_tick(&mut app, 10, 5);
+        let restarts: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(restarts, vec![1]);
+    }
+
+    #[test]
+    fn test_item_finished_clears_only_that_path() {
+        let (mut app, _rx, generation) = app_paging_media(5);
+        finish_media_walk(&mut app, generation, 10);
+
+        handle_cache_invalidation(&mut app, item_finished("media", "a"));
+        handle_cache_invalidation(&mut app, item_failed("media", "b"));
+
+        let items = app.cache.get_all_out_of_sync_items("media").unwrap();
+        assert!(!items.contains_key("a"));
+        assert!(items.contains_key("b"), "a failed item is still needed");
+        assert!(items.contains_key("c"));
+    }
+
+    #[test]
+    fn test_item_finished_while_first_page_in_flight_restarts_after() {
+        let (mut app, mut rx, generation) = app_paging_media(2);
+
+        handle_cache_invalidation(&mut app, item_finished("media", "a"));
+        assert!(need_page_requests(&mut rx).is_empty());
+
+        // Page 1 was built before "a" finished
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        assert!(app.model.syncthing.need_paging["media"].finished);
+
+        let_restart_interval_pass(&mut app, "media");
+        status_tick(&mut app, 10, 2);
+        let restarts = need_page_requests(&mut rx);
+        assert_eq!(restarts.len(), 1);
+        assert_eq!(restarts[0].page, 1);
+    }
+
+    #[test]
+    fn test_walk_ended_by_stale_total_does_not_sweep() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        finish_media_walk(&mut app, generation, 10);
+        need_page_requests(&mut rx);
+
+        // The status total drops below the real list; the next walk's full first page reaches it
+        app.invalidate_folder_caches("media");
+        let_restart_interval_pass(&mut app, "media");
+        status_tick(&mut app, 10, 2);
+        let restart = need_page_requests(&mut rx);
+        assert_eq!(restart.len(), 1);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", restart[0].generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn test_later_page_error_shows_pages_already_cached() {
+        let (mut app, _rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b"], "page 2 is throttled");
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::NeededFiles {
+                folder_id: "media".to_string(),
+                generation,
+                sequence: 10,
+                page: 3,
+                perpage: 2,
+                response: Err(anyhow::anyhow!("boom")),
+            },
+        );
+
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn test_search_cancels_pending_toggle() {
+        let (mut app, _rx, generation) = app_paging_media(2);
+
+        app.enter_search_mode();
+        assert!(
+            !app.model
+                .syncthing
+                .need_paging
+                .get("media")
+                .is_some_and(|p| p.pending_toggle)
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.model.ui.out_of_sync_filter.is_none());
+    }
+
+    #[test]
+    fn test_second_toggle_cancels_pending_toggle() {
+        let (mut app, mut rx, generation) = app_paging_media(2);
+
+        app.toggle_out_of_sync_filter();
+        assert!(need_page_requests(&mut rx).is_empty());
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+
+        assert!(app.model.ui.out_of_sync_filter.is_none());
+    }
+
+    #[test]
+    fn test_change_after_completion_triggers_one_restart() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        finish_media_walk(&mut app, generation, 10);
+        need_page_requests(&mut rx);
+
+        app.invalidate_folder_caches("media");
+        let_restart_interval_pass(&mut app, "media");
+        status_tick(&mut app, 10, 5);
+        status_tick(&mut app, 10, 5);
+
+        let restarts: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(restarts, vec![1]);
+        // The old walk's rows stay visible until the new one replaces them
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn test_idle_folder_change_within_interval_restarts_via_tick() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        finish_media_walk(&mut app, generation, 10);
+
+        // Changed right after the walk started: too soon to restart
+        handle_cache_invalidation(&mut app, item_finished("media", "a"));
+        app.tick_need_walks();
+        assert!(need_page_requests(&mut rx).iter().all(|r| r.page != 1));
+
+        // No status poll arrives for an idle folder; the main loop tick retries
+        let_restart_interval_pass(&mut app, "media");
+        app.tick_need_walks();
+        app.tick_need_walks();
+        let restarts: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(restarts, vec![1]);
+    }
+
+    #[test]
+    fn test_done_walk_rows_outlive_ttl() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        finish_media_walk(&mut app, generation, 10);
+        need_page_requests(&mut rx);
+
+        app.cache.age_need_rows("media", 31);
+        app.apply_out_of_sync_filter();
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn test_finished_short_walk_is_not_refetched_at_current_sequence() {
+        // Status says 5 but the server only lists 3 (e.g. ignoreDelete)
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 1000, &["a", "b", "c"]),
+        );
+        need_page_requests(&mut rx);
+        assert!(app.model.syncthing.need_paging["media"].finished);
+
+        app.request_need_list("media");
+        app.apply_out_of_sync_filter();
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_need_paging_reapply_throttled_mid_walk() {
+        let (mut app, _rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b"], "page 2 is throttled");
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+        assert_eq!(filtered_names(&app), vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn test_filter_keeps_directories_with_needed_descendants() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(
+            &mut app,
+            "media",
+            vec![dir_item("movies"), dir_item("music"), file_item("x")],
+        );
+        app.model
+            .syncthing
+            .folder_statuses
+            .insert("media".to_string(), status_with_need(10, 1));
+        app.toggle_out_of_sync_filter();
+        let generation = need_page_requests(&mut rx)[0].generation;
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 1000, &["movies/2024/a.mkv"]),
+        );
+
+        assert_eq!(filtered_names(&app), vec!["movies"]);
+    }
+
+    #[test]
+    fn test_need_paging_later_page_error_marks_partial() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::NeededFiles {
+                folder_id: "media".to_string(),
+                generation,
+                sequence: 10,
+                page: 2,
+                perpage: 2,
+                response: Err(anyhow::anyhow!("boom")),
+            },
+        );
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        let progress = paging_progress(&app).expect("partial list shows progress");
+        assert!(progress.partial);
+        assert_eq!(progress.loaded, 2);
+    }
+
+    #[test]
+    fn test_need_paging_first_page_error_ends_walk() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::NeededFiles {
+                folder_id: "media".to_string(),
+                generation,
+                sequence: 10,
+                page: 1,
+                perpage: 2,
+                response: Err(anyhow::anyhow!("boom")),
+            },
+        );
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(
+            !app.model.syncthing.need_paging.contains_key("media"),
+            "a failed walk leaves nothing behind, so the next trigger retries"
+        );
+    }
+
+    #[test]
+    fn test_need_paging_capped_via_handler() {
+        let (mut app, mut rx, generation) = app_paging_media(500);
+        let max = crate::logic::need_paging::NEED_LIST_MAX_PAGES;
+        for page in 1..=max {
+            let name = format!("f{}", page);
+            handle_api_response(
+                &mut app,
+                need_files_page("media", generation, 10, page, 1, &[name.as_str()]),
+            );
+        }
+
+        let pages: Vec<u32> = need_page_requests(&mut rx).iter().map(|r| r.page).collect();
+        assert_eq!(pages.last(), Some(&max), "no page past the cap");
+        let progress = paging_progress(&app).expect("capped list shows progress");
+        assert!(progress.partial);
+        assert_eq!(progress.loaded, u64::from(max));
+    }
+
+    #[test]
+    fn test_need_paging_unwanted_page_stops_without_prune() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        need_page_requests(&mut rx);
+
+        // Back at the folder list without going through clear_out_of_sync_filter
+        app.model.navigation.focus_level = 0;
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert!(!app.model.syncthing.need_paging.contains_key("media"));
+    }
+
+    #[test]
+    fn test_toggle_pending_first_page_survives_prune() {
+        let (mut app, _rx, generation) = app_paging_media(2);
+
+        app.prune_need_paging();
+        assert!(app.model.syncthing.need_paging.contains_key("media"));
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        assert!(app.model.ui.out_of_sync_filter.is_some());
+        assert_eq!(filtered_names(&app), vec!["a", "b"]);
+    }
+
+    fn selected_name(app: &App) -> Option<String> {
+        let level = &app.model.navigation.breadcrumb_trail[app.model.navigation.focus_level - 1];
+        level.selected_item().map(|i| i.name.clone())
+    }
+
+    /// Paging media with "e" selected, page 1 [a b] answered
+    fn paging_with_e_selected() -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+        u64,
+    ) {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(
+            &mut app,
+            "media",
+            ["a", "b", "c", "d", "e"]
+                .iter()
+                .map(|n| file_item(n))
+                .collect(),
+        );
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(4);
+        app.model
+            .syncthing
+            .folder_statuses
+            .insert("media".to_string(), status_with_need(10, 5));
+        app.toggle_out_of_sync_filter();
+        let generation = need_page_requests(&mut rx)[0].generation;
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 1, 2, &["a", "b"]),
+        );
+        assert_eq!(selected_name(&app).as_deref(), Some("a"));
+        (app, rx, generation)
+    }
+
+    #[test]
+    fn test_filter_restores_selection_when_item_appears() {
+        let (mut app, _rx, generation) = paging_with_e_selected();
+
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+
+        assert_eq!(selected_name(&app).as_deref(), Some("e"));
+        assert!(
+            app.model
+                .ui
+                .out_of_sync_filter
+                .as_ref()
+                .unwrap()
+                .pending_selection
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_filter_pending_selection_yields_to_user_move() {
+        let (mut app, _rx, generation) = paging_with_e_selected();
+
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(1);
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 2, 2, &["c", "d"]),
+        );
+        handle_api_response(
+            &mut app,
+            need_files_page("media", generation, 10, 3, 2, &["e"]),
+        );
+
+        assert_eq!(selected_name(&app).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn test_filter_pending_selection_cleared_on_drill() {
+        let (mut app, _rx, _generation) = paging_with_e_selected();
+        assert!(
+            app.model
+                .ui
+                .out_of_sync_filter
+                .as_ref()
+                .unwrap()
+                .pending_selection
+                .is_some()
+        );
+
+        app.model
+            .navigation
+            .breadcrumb_trail
+            .push(sub_level("media", "a/", vec![file_item("x")]));
+        app.model.navigation.focus_level = 2;
+        app.apply_out_of_sync_filter();
+
+        assert!(
+            app.model
+                .ui
+                .out_of_sync_filter
+                .as_ref()
+                .unwrap()
+                .pending_selection
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_request_need_list_coalesces_pending_first_page() {
+        let (mut app, mut rx, generation) = app_paging_media(5);
+
+        app.request_need_list("media");
+
+        assert!(need_page_requests(&mut rx).is_empty());
+        assert_eq!(
+            app.model
+                .syncthing
+                .need_paging
+                .get("media")
+                .map(|p| p.generation),
+            Some(generation)
+        );
+    }
+
+    #[test]
+    fn test_toggle_with_partial_cache_shows_it_and_refetches() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(
+            &mut app,
+            "media",
+            ["a", "b", "c"].iter().map(|n| file_item(n)).collect(),
+        );
+        app.model
+            .syncthing
+            .folder_statuses
+            .insert("media".to_string(), status_with_need(10, 3));
+        if let ApiResponse::NeededFiles {
+            response: Ok(page), ..
+        } = need_files_page("media", 0, 10, 1, 2, &["a", "b"])
+        {
+            app.cache.cache_needed_files("media", &page, 0).unwrap();
+        }
+
+        app.toggle_out_of_sync_filter();
+
+        assert!(app.model.ui.out_of_sync_filter.is_some());
+        assert_eq!(filtered_names(&app), vec!["a", "b"]);
+        let requests = need_page_requests(&mut rx);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].page, 1);
     }
 }

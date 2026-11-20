@@ -4,7 +4,7 @@
 
 use crate::{DisplayMode, SortMode, model::VimCommandState};
 
-/// True when any modal overlay (dialog, menu, popup, summary or history modal) is open.
+/// True when any modal overlay (dialog, menu, popup or history modal) is open.
 ///
 /// Toasts and the search bar are not modal. The render path dims the background
 /// behind overlays when this is true, so it must cover every overlay `ui::render` draws.
@@ -15,7 +15,6 @@ pub fn modal_open(model: &crate::model::Model) -> bool {
         || ui.pattern_selection.is_some()
         || ui.folder_type_selection.is_some()
         || ui.file_info_popup.is_some()
-        || ui.out_of_sync_summary.is_some()
         || ui.folder_history_modal.is_some()
 }
 
@@ -383,9 +382,8 @@ mod tests {
 
     use crate::model::{
         ConfirmAction, FileInfoPopupState, FolderHistoryModal, FolderTypeSelectionState, Model,
-        OutOfSyncSummaryState, PatternSelectionState,
+        PatternSelectionState,
     };
-    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn test_modal_open_false_with_no_popups() {
@@ -482,17 +480,6 @@ mod tests {
             is_binary: false,
             is_image: false,
             scroll_offset: 0,
-        });
-        assert!(modal_open(&model));
-    }
-
-    #[test]
-    fn test_modal_open_true_for_out_of_sync_summary() {
-        let mut model = Model::new(false);
-        model.ui.out_of_sync_summary = Some(OutOfSyncSummaryState {
-            selected_index: 0,
-            breakdowns: HashMap::new(),
-            loading: HashSet::new(),
         });
         assert!(modal_open(&model));
     }

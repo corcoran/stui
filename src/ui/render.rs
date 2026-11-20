@@ -6,8 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use stui::DisplayMode;
 
 use super::{
-    breadcrumb, dialogs, folder_list, layout, legend, out_of_sync_summary, search, status_bar,
-    system_bar, toast,
+    breadcrumb, dialogs, folder_list, layout, legend, search, status_bar, system_bar, toast,
 };
 
 /// Main render function - orchestrates all UI rendering
@@ -86,6 +85,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Calculate dynamic status bar height
     let out_of_sync_filter_active = app.model.ui.out_of_sync_filter.is_some();
+    let out_of_sync_filter_progress = breadcrumb_folder_id
+        .as_ref()
+        .filter(|_| out_of_sync_filter_active)
+        .and_then(|id| app.model.syncthing.need_paging.get(id))
+        .and_then(crate::logic::need_paging::need_paging_progress);
     let status_height = status_bar::calculate_status_height(
         size.width,
         &app.icon_renderer,
@@ -103,6 +107,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        out_of_sync_filter_progress,
         &app.model.ui.folder_activity,
         &app.model.syncthing.last_folder_updates,
         app.model.syncthing.connected_device_count,
@@ -282,6 +287,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.model.performance.cache_hit,
         pending_operations_count,
         out_of_sync_filter_active,
+        out_of_sync_filter_progress,
         &app.model.ui.folder_activity,
         &app.model.syncthing.last_folder_updates,
         app.model.syncthing.connected_device_count,
@@ -367,17 +373,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
             &app.icon_renderer,
             app.model.ui.image_font_size,
             &mut app.image_state_map,
-        );
-    }
-
-    // Render out-of-sync summary modal if active
-    if let Some(summary_state) = &app.model.ui.out_of_sync_summary {
-        out_of_sync_summary::render_out_of_sync_summary(
-            f,
-            size,
-            &app.model.syncthing.folders,
-            summary_state,
-            &app.icon_renderer,
         );
     }
 

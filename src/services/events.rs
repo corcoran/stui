@@ -55,6 +55,20 @@ pub struct SyncthingEvent {
     pub data: serde_json::Value,
 }
 
+/// Whether an ItemFinished event's data reports a failure. A missing, null or empty
+/// `error` means the item was synced.
+pub(crate) fn item_finished_failed(data: &serde_json::Value) -> bool {
+    data.get("error")
+        .and_then(|e| {
+            if e.is_string() {
+                e.as_str().map(|m| !m.is_empty())
+            } else {
+                Some(!e.is_null())
+            }
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone)]
 pub enum CacheInvalidation {
     /// Invalidate a single file
@@ -81,6 +95,8 @@ pub enum CacheInvalidation {
     ItemFinished {
         folder_id: String,
         file_path: String,
+        /// The event carried an error: the item is still needed
+        failed: bool,
         #[allow(dead_code)]
         timestamp: std::time::SystemTime,
     },
@@ -239,6 +255,7 @@ async fn event_listener_loop(
                                             CacheInvalidation::ItemFinished {
                                                 folder_id: folder_id.to_string(),
                                                 file_path: item_path.to_string(),
+                                                failed: item_finished_failed(&event.data),
                                                 timestamp,
                                             };
                                         log_debug(&format!(
@@ -474,5 +491,35 @@ mod tests {
             diff.as_nanos() == 0,
             "Timestamp should be parsed with full precision"
         );
+    }
+
+    // ========================================
+    // ITEM FINISHED ERRORS
+    // ========================================
+
+    #[test]
+    fn test_item_finished_without_error_succeeded() {
+        assert!(!item_finished_failed(&serde_json::json!({"item": "a"})));
+    }
+
+    #[test]
+    fn test_item_finished_null_error_succeeded() {
+        assert!(!item_finished_failed(
+            &serde_json::json!({"item": "a", "error": null})
+        ));
+    }
+
+    #[test]
+    fn test_item_finished_empty_error_succeeded() {
+        assert!(!item_finished_failed(
+            &serde_json::json!({"item": "a", "error": ""})
+        ));
+    }
+
+    #[test]
+    fn test_item_finished_error_message_failed() {
+        assert!(item_finished_failed(
+            &serde_json::json!({"item": "a", "error": "permission denied"})
+        ));
     }
 }

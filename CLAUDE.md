@@ -474,7 +474,7 @@ CLI flags: `--debug`, `--vim`, `--config <path>`
 - `src/services/` - Background: api (async queue), events (long-polling)
 - `src/model/` - Pure state (Elm): syncthing, navigation, ui, performance, types
 - `src/logic/` - Pure business logic (16 modules): file, folder, folder_card, formatting, ignore, layout, navigation, path, performance, platform, search, sorting, sync_states, ui, errors
-- `src/ui/` - Rendering (13 modules): render, folder_list (card-based), breadcrumb, dialogs, icons, legend, search, status_bar (activity feed), system_bar, out_of_sync_summary (filter modal), toast, layout
+- `src/ui/` - Rendering (13 modules): render, folder_list (card-based), breadcrumb, dialogs, icons, legend, search, status_bar (activity feed), system_bar, toast, layout
 - `src/api.rs`, `src/cache.rs`, `src/config.rs`, `src/utils.rs` - Core utilities
 
 **Key patterns:** App initialization loads folders, spawns services. Main event loop (~line 909) processes API responses, keyboard, cache events. Keyboard handler has confirmation dialogs first.

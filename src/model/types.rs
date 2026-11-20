@@ -136,29 +136,24 @@ pub enum ConfirmAction {
     },
 }
 
-/// Folder sync breakdown - category counts for out-of-sync items
-#[derive(Debug, Clone, Default)]
-pub struct FolderSyncBreakdown {
-    pub downloading: usize,
-    pub queued: usize,
-    pub remote_only: usize,
-    pub modified: usize,
-    pub local_only: usize,
-}
-
 /// Out-of-sync filter state for breadcrumb view
 #[derive(Debug, Clone)]
 pub struct OutOfSyncFilterState {
     pub origin_level: usize,
     pub last_refresh: SystemTime,
+    /// Selection the filter couldn't honour because the item wasn't loaded yet
+    pub pending_selection: Option<PendingSelection>,
 }
 
-/// Out-of-sync summary modal state
-#[derive(Debug, Clone)]
-pub struct OutOfSyncSummaryState {
-    pub selected_index: usize,
-    pub breakdowns: HashMap<String, FolderSyncBreakdown>,
-    pub loading: HashSet<String>,
+/// An item to select once a later need page brings it into the filtered list
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSelection {
+    /// Prefix of the level the selection belongs to
+    pub prefix: Option<String>,
+    /// Name the user had selected
+    pub wanted: String,
+    /// Name the filter selected instead; any other selection means the user moved
+    pub fallback: String,
 }
 
 /// Folder update history modal state
