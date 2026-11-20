@@ -168,7 +168,7 @@ fn test_index_zero_with_filter() {
     assert_eq!(wrong_item.name, "a.txt", "Bug: items[0] = a.txt");
 
     // CORRECT pattern (what code should do)
-    let correct_item = level.display_items().get(0).unwrap();
+    let correct_item = level.display_items().first().unwrap();
     assert_eq!(
         correct_item.name, "jeff-1.txt",
         "Correct: display_items()[0] = jeff-1.txt"

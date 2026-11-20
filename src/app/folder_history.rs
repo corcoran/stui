@@ -27,7 +27,7 @@ impl App {
                 log_debug(&format!("Fetched {} total files from folder", files.len()));
 
                 // Sort all files by modification time (newest first)
-                files.sort_by(|a, b| b.1.cmp(&a.1));
+                files.sort_by_key(|a| std::cmp::Reverse(a.1));
 
                 let total_files = files.len();
                 let has_more = total_files > 100;

@@ -87,7 +87,7 @@ pub struct ImageMetadata {
 pub enum ImagePreviewState {
     Loading,
     Ready {
-        protocol: ratatui_image::protocol::StatefulProtocol,
+        protocol: Box<ratatui_image::protocol::StatefulProtocol>,
         metadata: ImageMetadata,
     },
     Failed {
@@ -251,7 +251,7 @@ impl App {
     fn verify_and_cleanup_pending_deletes(&mut self) {
         let now = Instant::now();
 
-        for (_folder_id, info) in self.model.performance.pending_ignore_deletes.iter_mut() {
+        for info in self.model.performance.pending_ignore_deletes.values_mut() {
             // Only check if ready for verification
             if !logic::performance::should_verify_pending(
                 info.initiated_at,
@@ -451,12 +451,13 @@ impl App {
                 Ok(p) => p,
                 Err(e) => {
                     log_debug(&format!("Image preview: Failed to detect terminal: {}", e));
-                    ratatui_image::picker::Picker::from_fontsize((8, 16)) // Fallback font size
+                    ratatui_image::picker::Picker::halfblocks()
                 }
             };
 
             // Store font size for centering calculations
             let font_size = picker.font_size();
+            let font_size = (font_size.width, font_size.height);
             log_debug(&format!("Image font size: {}x{}", font_size.0, font_size.1));
 
             // Apply protocol from config
@@ -960,7 +961,10 @@ async fn main() -> Result<()> {
 async fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-) -> Result<()> {
+) -> Result<()>
+where
+    B::Error: Send + Sync + 'static,
+{
     let mut last_stats_update = Instant::now();
 
     loop {
@@ -1147,15 +1151,12 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.last_connection_stats_fetch = Instant::now();
         }
 
-        // Poll folders in transient states (scanning, syncing, cleaning)
+        // Poll folders in transient states (scanning, syncing, cleaning, ...)
         // These states don't generate file change events, so we need periodic polling
         // Check every 2 seconds to catch state transitions
         if app.last_status_update.elapsed() >= std::time::Duration::from_millis(2000) {
             for (folder_id, status) in &app.model.syncthing.folder_statuses {
-                if matches!(
-                    status.state.as_str(),
-                    "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
-                ) {
+                if logic::folder::is_transient_state(&status.state) {
                     crate::log_debug(&format!(
                         "DEBUG [Transient State Poll]: Polling folder '{}' in state '{}'",
                         folder_id, status.state

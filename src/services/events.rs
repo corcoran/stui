@@ -115,78 +115,6 @@ pub fn spawn_event_listener(
     });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_event_time_valid_rfc3339() {
-        // Test parsing a valid RFC3339 timestamp from Syncthing
-        // Use a dynamically generated timestamp that's always 1 hour in the past
-        use chrono::Utc;
-        let one_hour_ago = Utc::now() - chrono::Duration::hours(1);
-        let timestamp_str = one_hour_ago.to_rfc3339();
-
-        let parsed = parse_event_time(&timestamp_str);
-
-        // Verify it's not the fallback (current time) by checking it's in the past
-        let now = SystemTime::now();
-        assert!(
-            parsed < now,
-            "Parsed timestamp should be in the past, not current time"
-        );
-
-        // Verify the time is reasonable (should be about 1 hour ago, within 2 hours tolerance)
-        let duration_since = now.duration_since(parsed).unwrap();
-        assert!(
-            duration_since.as_secs() > 3000, // At least 50 minutes
-            "Timestamp should be at least 50 minutes old"
-        );
-        assert!(
-            duration_since.as_secs() < 7200, // Less than 2 hours
-            "Timestamp should be less than 2 hours old"
-        );
-    }
-
-    #[test]
-    fn test_parse_event_time_invalid_falls_back() {
-        // Test that invalid timestamps fall back to current time
-        let invalid_str = "not-a-timestamp";
-        let parsed = parse_event_time(invalid_str);
-
-        // Should be very close to now (within 1 second)
-        let now = SystemTime::now();
-        let diff = now.duration_since(parsed).unwrap_or(Duration::from_secs(0));
-        assert!(
-            diff.as_secs() < 1,
-            "Invalid timestamp should fall back to current time"
-        );
-    }
-
-    #[test]
-    fn test_parse_event_time_preserves_timestamp_accuracy() {
-        // Test that we preserve the exact timestamp from the event
-        // Use a specific timestamp from 2025-01-01
-        let timestamp_str = "2025-01-01T12:00:00.123456789Z";
-        let parsed = parse_event_time(timestamp_str);
-
-        // Convert back to check it matches
-        use chrono::DateTime;
-        let dt: chrono::DateTime<chrono::FixedOffset> =
-            DateTime::parse_from_rfc3339(timestamp_str).unwrap();
-        let expected = SystemTime::from(dt);
-
-        // Should be identical (within nanosecond precision)
-        let diff = parsed
-            .duration_since(expected)
-            .unwrap_or_else(|e| e.duration());
-        assert!(
-            diff.as_nanos() == 0,
-            "Timestamp should be parsed with full precision"
-        );
-    }
-}
-
 async fn event_listener_loop(
     base_url: String,
     api_key: String,
@@ -474,5 +402,77 @@ async fn event_listener_loop(
 
         // Loop continues immediately - long-polling pattern
         // If timeout occurred (empty array), we keep same last_event_id and try again
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_event_time_valid_rfc3339() {
+        // Test parsing a valid RFC3339 timestamp from Syncthing
+        // Use a dynamically generated timestamp that's always 1 hour in the past
+        use chrono::Utc;
+        let one_hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let timestamp_str = one_hour_ago.to_rfc3339();
+
+        let parsed = parse_event_time(&timestamp_str);
+
+        // Verify it's not the fallback (current time) by checking it's in the past
+        let now = SystemTime::now();
+        assert!(
+            parsed < now,
+            "Parsed timestamp should be in the past, not current time"
+        );
+
+        // Verify the time is reasonable (should be about 1 hour ago, within 2 hours tolerance)
+        let duration_since = now.duration_since(parsed).unwrap();
+        assert!(
+            duration_since.as_secs() > 3000, // At least 50 minutes
+            "Timestamp should be at least 50 minutes old"
+        );
+        assert!(
+            duration_since.as_secs() < 7200, // Less than 2 hours
+            "Timestamp should be less than 2 hours old"
+        );
+    }
+
+    #[test]
+    fn test_parse_event_time_invalid_falls_back() {
+        // Test that invalid timestamps fall back to current time
+        let invalid_str = "not-a-timestamp";
+        let parsed = parse_event_time(invalid_str);
+
+        // Should be very close to now (within 1 second)
+        let now = SystemTime::now();
+        let diff = now.duration_since(parsed).unwrap_or(Duration::from_secs(0));
+        assert!(
+            diff.as_secs() < 1,
+            "Invalid timestamp should fall back to current time"
+        );
+    }
+
+    #[test]
+    fn test_parse_event_time_preserves_timestamp_accuracy() {
+        // Test that we preserve the exact timestamp from the event
+        // Use a specific timestamp from 2025-01-01
+        let timestamp_str = "2025-01-01T12:00:00.123456789Z";
+        let parsed = parse_event_time(timestamp_str);
+
+        // Convert back to check it matches
+        use chrono::DateTime;
+        let dt: chrono::DateTime<chrono::FixedOffset> =
+            DateTime::parse_from_rfc3339(timestamp_str).unwrap();
+        let expected = SystemTime::from(dt);
+
+        // Should be identical (within nanosecond precision)
+        let diff = parsed
+            .duration_since(expected)
+            .unwrap_or_else(|e| e.duration());
+        assert!(
+            diff.as_nanos() == 0,
+            "Timestamp should be parsed with full precision"
+        );
     }
 }

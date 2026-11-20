@@ -293,7 +293,7 @@ mod tests {
         // First 'g' press - transition to waiting state
         let (state, should_jump) = next_vim_command_state(VimCommandState::None, true);
         assert_eq!(state, VimCommandState::WaitingForSecondG);
-        assert_eq!(should_jump, false);
+        assert!(!should_jump);
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
         // Second 'g' press - complete sequence and signal jump
         let (state, should_jump) = next_vim_command_state(VimCommandState::WaitingForSecondG, true);
         assert_eq!(state, VimCommandState::None);
-        assert_eq!(should_jump, true);
+        assert!(should_jump);
     }
 
     #[test]
@@ -310,12 +310,12 @@ mod tests {
         let (state, should_jump) =
             next_vim_command_state(VimCommandState::WaitingForSecondG, false);
         assert_eq!(state, VimCommandState::None);
-        assert_eq!(should_jump, false);
+        assert!(!should_jump);
 
         // Non-g key in None state stays None
         let (state, should_jump) = next_vim_command_state(VimCommandState::None, false);
         assert_eq!(state, VimCommandState::None);
-        assert_eq!(should_jump, false);
+        assert!(!should_jump);
     }
 
     #[test]

@@ -78,9 +78,9 @@ impl App {
             let host_path_buf = std::path::PathBuf::from(&host_path);
             let exists = tokio::fs::metadata(&host_path_buf).await.is_ok();
 
-            if exists && self.image_picker.is_some() {
+            if exists && let Some(picker) = self.image_picker.as_ref() {
                 // Spawn background task to load image
-                let picker = self.image_picker.as_ref().unwrap().clone();
+                let picker = picker.clone();
                 let image_tx = self.image_update_tx.clone();
                 let image_file_path = file_path.clone();
 
@@ -94,7 +94,10 @@ impl App {
                             ));
                             let _ = image_tx.send((
                                 image_file_path,
-                                ImagePreviewState::Ready { protocol, metadata },
+                                ImagePreviewState::Ready {
+                                    protocol: Box::new(protocol),
+                                    metadata,
+                                },
                             ));
                         }
                         Err(metadata) => {
@@ -243,8 +246,8 @@ impl App {
 
         // Estimate maximum reasonable size: ~200 cells × ~60 cells (typical large terminal)
         // Use 1.25x headroom for quality (balanced for performance)
-        let max_reasonable_width = 200 * font_size.0 as u32 * 5 / 4;
-        let max_reasonable_height = 60 * font_size.1 as u32 * 5 / 4;
+        let max_reasonable_width = 200 * font_size.width as u32 * 5 / 4;
+        let max_reasonable_height = 60 * font_size.height as u32 * 5 / 4;
 
         let processed_img =
             if img.width() > max_reasonable_width || img.height() > max_reasonable_height {

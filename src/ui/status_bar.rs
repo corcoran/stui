@@ -84,8 +84,12 @@ pub fn map_folder_state(
         "idle" => (FolderState::Synced, "Idle"),
         "scanning" => (FolderState::Scanning, "Scanning"),
         "syncing" => (FolderState::Syncing, "Syncing"),
-        "preparing" => (FolderState::Syncing, "Preparing"),
-        "waiting-to-scan" => (FolderState::Scanning, "Waiting to Scan"),
+        "sync-preparing" => (FolderState::Syncing, "Preparing to Sync"),
+        "sync-waiting" => (FolderState::Syncing, "Waiting to Sync"),
+        "scan-waiting" => (FolderState::Scanning, "Waiting to Scan"),
+        "clean-waiting" => (FolderState::Scanning, "Waiting to Clean"),
+        "cleaning" => (FolderState::Scanning, "Cleaning Versions"),
+        "starting" => (FolderState::Scanning, "Starting"),
         "outofsync" => (FolderState::OutOfSync, "Out of Sync"),
         "error" => (FolderState::Error, "Error"),
         "stopped" => (FolderState::Paused, "Stopped"),
@@ -689,20 +693,6 @@ mod tests {
     }
 
     #[test]
-    fn test_map_folder_state_preparing() {
-        let (state, label) = map_folder_state("preparing", 0, 0);
-        assert_eq!(state, FolderState::Syncing);
-        assert_eq!(label, "Preparing");
-    }
-
-    #[test]
-    fn test_map_folder_state_waiting() {
-        let (state, label) = map_folder_state("waiting-to-scan", 0, 0);
-        assert_eq!(state, FolderState::Scanning);
-        assert_eq!(label, "Waiting to Scan");
-    }
-
-    #[test]
     fn test_map_folder_state_outofsync() {
         let (state, label) = map_folder_state("outofsync", 0, 0);
         assert_eq!(state, FolderState::OutOfSync);
@@ -759,6 +749,49 @@ mod tests {
         let (state, label) = map_folder_state("unknown-state", 0, 0);
         assert_eq!(state, FolderState::Unknown);
         assert_eq!(label, "Unknown");
+    }
+
+    #[test]
+    fn test_map_folder_state_sync_preparing() {
+        let (state, label) = map_folder_state("sync-preparing", 0, 0);
+        assert_eq!(state, FolderState::Syncing);
+        assert_eq!(label, "Preparing to Sync");
+    }
+
+    #[test]
+    fn test_map_folder_state_scan_waiting() {
+        let (state, label) = map_folder_state("scan-waiting", 0, 0);
+        assert_eq!(state, FolderState::Scanning);
+        assert_eq!(label, "Waiting to Scan");
+    }
+
+    #[test]
+    fn test_map_folder_state_sync_waiting() {
+        let (state, label) = map_folder_state("sync-waiting", 0, 0);
+        assert_eq!(state, FolderState::Syncing);
+        assert_eq!(label, "Waiting to Sync");
+    }
+
+    #[test]
+    fn test_map_folder_state_clean_waiting() {
+        let (state, label) = map_folder_state("clean-waiting", 0, 0);
+        assert_eq!(state, FolderState::Scanning);
+        assert_eq!(label, "Waiting to Clean");
+    }
+
+    #[test]
+    fn test_map_folder_state_cleaning() {
+        let (state, label) = map_folder_state("cleaning", 0, 0);
+        assert_eq!(state, FolderState::Scanning);
+        assert_eq!(label, "Cleaning Versions");
+    }
+
+    #[test]
+    fn test_map_folder_state_starting() {
+        // Added in Syncthing v2.1.0
+        let (state, label) = map_folder_state("starting", 0, 0);
+        assert_eq!(state, FolderState::Scanning);
+        assert_eq!(label, "Starting");
     }
 
     // Tests for file/directory state display in breadcrumb view

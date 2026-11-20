@@ -577,7 +577,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         let level_idx = app.model.navigation.focus_level - 1;
                         if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
                             if let Some(ref prefix) = level.prefix {
-                                format!("{}/{}", prefix.trim_matches('/'), &item_name_clone)
+                                format!("{}/{}", prefix.trim_matches('/'), item_name_clone)
                             } else {
                                 item_name_clone.clone()
                             }

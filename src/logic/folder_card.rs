@@ -178,12 +178,8 @@ pub fn calculate_card_height(state: &FolderCardState) -> u16 {
         | FolderCardState::Syncing {
             remote_needed,
             local_changes,
-        } => {
-            if *remote_needed > 0 || *local_changes > 0 {
-                4 // Title + info + details + spacing
-            } else {
-                3
-            }
+        } if (*remote_needed > 0 || *local_changes > 0) => {
+            4 // Title + info + details + spacing
         }
         _ => 3, // Title + info + spacing
     }

@@ -612,7 +612,7 @@ fn render_preview_column(
 
                         let image = ratatui_image::StatefulImage::new()
                             .resize(ratatui_image::Resize::Fit(Some(filter)));
-                        f.render_stateful_widget(image, render_rect, protocol);
+                        f.render_stateful_widget(image, render_rect, protocol.as_mut());
                     }
                 }
                 ImagePreviewState::Failed { metadata } => {

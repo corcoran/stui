@@ -151,6 +151,21 @@ pub fn calculate_local_state_summary(
     (total_files, total_dirs, total_bytes)
 }
 
+/// Folder states that resolve without a file change event, so status must be polled.
+pub fn is_transient_state(state: &str) -> bool {
+    matches!(
+        state,
+        "starting"
+            | "scanning"
+            | "scan-waiting"
+            | "syncing"
+            | "sync-preparing"
+            | "sync-waiting"
+            | "cleaning"
+            | "clean-waiting"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +374,35 @@ mod tests {
             (50, 5, 1000),
             "Should handle folders with zero stats correctly"
         );
+    }
+
+    // ========================================
+    // TRANSIENT STATE DETECTION
+    // ========================================
+
+    #[test]
+    fn test_is_transient_state_busy_states() {
+        for state in [
+            "starting",
+            "scanning",
+            "scan-waiting",
+            "syncing",
+            "sync-preparing",
+            "sync-waiting",
+            "cleaning",
+            "clean-waiting",
+        ] {
+            assert!(is_transient_state(state), "{state} should be transient");
+        }
+    }
+
+    #[test]
+    fn test_is_transient_state_settled_states() {
+        for state in ["idle", "error", "", "unknown-state"] {
+            assert!(
+                !is_transient_state(state),
+                "{state} should not be transient"
+            );
+        }
     }
 }

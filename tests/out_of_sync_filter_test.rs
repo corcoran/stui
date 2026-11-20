@@ -106,7 +106,7 @@ fn test_filter_only_shows_out_of_sync() {
     ];
 
     // Out-of-sync items from cache (would come from GetNeededFiles API)
-    let out_of_sync_items = vec!["out-of-sync.txt"];
+    let out_of_sync_items = ["out-of-sync.txt"];
 
     // Filter should only keep items in out_of_sync_items list
     let filtered: Vec<_> = all_items
@@ -142,7 +142,7 @@ fn test_directory_shown_if_child_out_of_sync() {
     ];
 
     // Out-of-sync files (nested in Messages/)
-    let out_of_sync_paths = vec!["Messages/foo"];
+    let out_of_sync_paths = ["Messages/foo"];
 
     // Check each directory
     for item in &items {
@@ -207,7 +207,7 @@ fn test_subdirectory_filter_application() {
     ];
 
     // Out-of-sync paths (full paths from cache)
-    let out_of_sync_paths = vec!["Messages/foo"];
+    let out_of_sync_paths = ["Messages/foo"];
 
     // Filter logic: keep only items that match out_of_sync_paths
     let filtered: Vec<_> = items_in_messages

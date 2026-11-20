@@ -918,13 +918,13 @@ mod tests {
             .expect("Should have folder-abc-123");
         assert_eq!(folder_abc.last_file.filename, ".thumbnails/7726.jpg");
         assert_eq!(folder_abc.last_file.at, "2025-11-09T23:24:15Z");
-        assert_eq!(folder_abc.last_file.deleted, false);
+        assert!(!folder_abc.last_file.deleted);
 
         let folder_deleted = stats
             .get("folder-deleted-789")
             .expect("Should have folder-deleted-789");
-        assert_eq!(
-            folder_deleted.last_file.deleted, true,
+        assert!(
+            folder_deleted.last_file.deleted,
             "Deleted flag should be true"
         );
 
@@ -1111,13 +1111,13 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
         let connections = parsed.get("connections").unwrap();
         let device1 = connections.get("DEVICE123-ABC").unwrap();
-        assert_eq!(device1.get("connected").unwrap().as_bool().unwrap(), true);
+        assert!(device1.get("connected").unwrap().as_bool().unwrap());
         assert_eq!(
             device1.get("address").unwrap().as_str().unwrap(),
             "192.168.1.10:22000"
         );
 
         let device2 = connections.get("DEVICE456-DEF").unwrap();
-        assert_eq!(device2.get("connected").unwrap().as_bool().unwrap(), false);
+        assert!(!device2.get("connected").unwrap().as_bool().unwrap());
     }
 }
