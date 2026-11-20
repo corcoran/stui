@@ -89,12 +89,15 @@ jobs:
 
   build-macos-intel:
     name: Build macOS Intel
-    runs-on: macos-13
+    # Cross-compiled on Apple Silicon: GitHub no longer provides Intel macOS runners.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -104,12 +107,12 @@ jobs:
           cache-on-failure: true
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --target x86_64-apple-darwin
 
       - name: Create archive
         run: |
           mkdir -p package/stui
-          cp target/release/stui package/stui/
+          cp target/x86_64-apple-darwin/release/stui package/stui/
           cp README.md CHANGELOG.md config.yaml.example package/stui/
           cd package
           tar -czf ../stui-macos-intel.tar.gz stui
@@ -122,7 +125,7 @@ jobs:
 
   build-macos-arm:
     name: Build macOS Apple Silicon
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
