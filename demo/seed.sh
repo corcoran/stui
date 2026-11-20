@@ -153,6 +153,10 @@ seed_all() {
     api laptop POST "/rest/db/scan?folder=projects" >/dev/null
 
     api laptop PATCH /rest/config/folders/vault '{"paused":true}' >/dev/null
+    # Folder groups exist from Syncthing 2.1; older versions ignore these
+    api laptop PATCH /rest/config/folders/photos '{"group":"Personal"}' >/dev/null
+    api laptop PATCH /rest/config/folders/vault '{"group":"Personal"}' >/dev/null
+    api laptop PATCH /rest/config/folders/projects '{"group":"Work"}' >/dev/null
 
     # limitBandwidthInLan is required: docker bridge peers count as LAN and are unthrottled otherwise.
     # Media trickles in slowly so syncing and remote-only states last through recording.

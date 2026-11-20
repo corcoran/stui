@@ -1,10 +1,11 @@
 # Shot sequences. Sourced by record.sh with lib.sh, session.sh and seed.sh loaded.
-# Indexes are zero-based positions in the default A-Z sort.
+# Indexes are zero-based positions in the default A-Z sort. The folder list is in group
+# order: Personal (Photos, Vault), Work (Projects), then ungrouped (Documents, Media).
 
-FOLDER_DOCUMENTS=0   # Documents, Media, Photos, Projects, Vault
-FOLDER_MEDIA=1
-FOLDER_PHOTOS=2
-FOLDER_PROJECTS=3
+FOLDER_PHOTOS=0
+FOLDER_PROJECTS=2
+FOLDER_DOCUMENTS=3
+FOLDER_MEDIA=4
 PHOTOS_CATS=0        # Cats, Kitten
 CATS_HERO_IMAGE=1    # blue-blanket.jpg
 DOCS_ART=0           # art, manuals, recipes, todo.txt
@@ -89,7 +90,7 @@ hero_pass() {
     stui_start
     deploy_edit
     clip_start hero
-    pause 4                                                      # folder list, Documents preview
+    pause 4                                                      # folder list, Photos preview
 
     hdown "$FOLDER_PHOTOS"; pause 0.6; hkey enter; pause 1.5     # Photos
     hdown "$PHOTOS_CATS"; hkey enter; pause 1.5                  # Cats
@@ -117,7 +118,7 @@ hero_pass() {
     hdown "$FOLDER_MEDIA"; pause 0.4; hkey enter; pause 3        # Media syncing
     hkey left; pause 1
 
-    hdown $((FOLDER_PROJECTS - FOLDER_MEDIA)); pause 1           # Projects
+    hkey g g; hdown "$FOLDER_PROJECTS"; pause 1                  # Projects
     hkey u; pause 3                                              # update history
     hkey enter; pause 4                                          # jump to deploy.md
     clip_stop hero
