@@ -375,13 +375,11 @@ fn render_metadata_column(
 
             if !local.modified_by.is_empty() {
                 // Try to find the device name
-                let device_name = devices
-                    .iter()
-                    .find(|d| d.id == local.modified_by)
-                    .map(|d| d.name.as_str())
-                    .unwrap_or_else(|| {
-                        &local.modified_by[..std::cmp::min(12, local.modified_by.len())]
-                    });
+                let device_name =
+                    crate::logic::formatting::device_name_by_short_id(devices, &local.modified_by)
+                        .unwrap_or_else(|| {
+                            &local.modified_by[..std::cmp::min(12, local.modified_by.len())]
+                        });
 
                 lines.push(Line::from(vec![
                     Span::styled("Modified By: ", Style::default().fg(Color::Yellow)),
@@ -974,5 +972,52 @@ mod tests {
         let mut text = popup("notes.txt", "text", false);
         let rows = render_popup_rows(&mut text, true, 120, 30);
         assert!(shows(&rows, "J/K: next/prev file"), "{:?}", rows);
+    }
+
+    // ========================================
+    // MODIFIED BY
+    // ========================================
+
+    #[test]
+    fn test_modified_by_short_id_shows_device_name() {
+        use crate::ui::icons::{IconMode, IconTheme};
+        let mut state = popup("notes.txt", "text", false);
+        state.file_details = Some(crate::api::FileDetails {
+            local: Some(
+                serde_json::from_value(serde_json::json!({"modifiedBy": "3QFSJG3"})).unwrap(),
+            ),
+            global: None,
+            availability: vec![],
+        });
+        let devices = vec![crate::api::Device {
+            id: "3QFSJG3-7K2LR5B-DRDC4JV-OTJNFIQ-3BJ7XBI-ZUIIZXR-WGBITZK-2DLWAQJ".to_string(),
+            name: "nas".to_string(),
+        }];
+        let icons = IconRenderer::new(IconMode::Emoji, IconTheme::default());
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut images = std::collections::HashMap::new();
+        terminal
+            .draw(|f| {
+                render_file_info(
+                    f,
+                    &mut state,
+                    &devices,
+                    None,
+                    &icons,
+                    None,
+                    &mut images,
+                    false,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        assert!(shows(&rows, "Modified By: nas"), "{:?}", rows);
     }
 }

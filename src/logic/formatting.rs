@@ -195,6 +195,22 @@ pub fn format_time_since(timestamp: std::time::SystemTime) -> String {
     }
 }
 
+/// Name of the device whose ID starts with `short_id`, as in the short device IDs
+/// Syncthing reports in `modifiedBy`. `None` when no device, or more than one, matches.
+pub fn device_name_by_short_id<'a>(
+    devices: &'a [crate::api::Device],
+    short_id: &str,
+) -> Option<&'a str> {
+    if short_id.is_empty() {
+        return None;
+    }
+    let mut matches = devices.iter().filter(|d| d.id.starts_with(short_id));
+    match (matches.next(), matches.next()) {
+        (Some(device), None) => Some(device.name.as_str()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +399,65 @@ mod tests {
     #[test]
     fn test_format_datetime_invalid_falls_back_to_original() {
         assert_eq!(format_datetime("invalid"), "invalid");
+    }
+
+    // ========================================
+    // DEVICE NAMES
+    // ========================================
+
+    fn device(id: &str, name: &str) -> crate::api::Device {
+        crate::api::Device {
+            id: id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    fn cluster() -> Vec<crate::api::Device> {
+        vec![
+            device(
+                "MLCMR7B-GJX2AQF-FNDZ2ZZ-MQOQUK6-SH7GYF4-U4VXXOT-D3CPGA4-BNBNOQ2",
+                "laptop",
+            ),
+            device(
+                "3QFSJG3-7K2LR5B-DRDC4JV-OTJNFIQ-3BJ7XBI-ZUIIZXR-WGBITZK-2DLWAQJ",
+                "nas",
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_device_name_by_short_id_matches_first_group() {
+        assert_eq!(device_name_by_short_id(&cluster(), "3QFSJG3"), Some("nas"));
+        assert_eq!(
+            device_name_by_short_id(&cluster(), "MLCMR7B"),
+            Some("laptop")
+        );
+    }
+
+    #[test]
+    fn test_device_name_by_short_id_accepts_full_id() {
+        let full = "3QFSJG3-7K2LR5B-DRDC4JV-OTJNFIQ-3BJ7XBI-ZUIIZXR-WGBITZK-2DLWAQJ";
+        assert_eq!(device_name_by_short_id(&cluster(), full), Some("nas"));
+    }
+
+    #[test]
+    fn test_device_name_by_short_id_unknown_or_empty_is_none() {
+        assert_eq!(device_name_by_short_id(&cluster(), "ZZZZZZZ"), None);
+        assert_eq!(device_name_by_short_id(&cluster(), ""), None);
+    }
+
+    #[test]
+    fn test_device_name_by_short_id_ambiguous_is_none() {
+        let devices = vec![
+            device(
+                "3QFSJG3-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA",
+                "one",
+            ),
+            device(
+                "3QFSJG3-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB",
+                "two",
+            ),
+        ];
+        assert_eq!(device_name_by_short_id(&devices, "3QFSJG3"), None);
     }
 }
