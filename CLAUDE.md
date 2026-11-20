@@ -394,6 +394,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `c`: **Context-aware action**:
   - **Folder view** (focus_level == 0): Change folder type (Send Only, Send & Receive, Receive Only) with selection menu
   - **Breadcrumb view** (focus_level > 0): Copy file/directory path to clipboard (uses mapped host paths)
+- `e`: **Folder group** (folder view, Syncthing 2.1+): menu of existing groups, `No group` and `New group…` (one-line name input; a case-insensitive match reuses the existing spelling). Saves with PATCH `/rest/config/folders/<id>` `{"group": …}`. Syncthing without groups (no `group` field in folder configs) gets a warning toast naming its version instead
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
 - `o`: Open file/directory with configured command (e.g., `xdg-open`, `code`, `vim`)
@@ -422,10 +423,10 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 **UI Layout:** System bar → Main content (folders + breadcrumb panels with smart sizing) → Hotkey legend → Status bar
 
 **Folder List (focus_level == 0):**
-- Card-based rendering with inline stats (3 lines per folder)
-- Shows folder name, state icon, type, size, file count, and status message
-- Out-of-sync folders show detailed breakdown (remote needed, local changes)
-- Dynamic title shows counts (total, synced, syncing, paused)
+- Cards built by `logic::folder_card::card_lines` for the pane's width: line 1 is state icon, name and right-aligned status (only progress, scanning variants, errors); line 2 is dimmed type glyph (⇅ ⇡ ⇣), size, file count; line 3 is what's left to sync. Wide/medium/narrow tiers drop detail as the folder pane narrows while browsing
+- Folders are kept in group order in `model.syncthing.folders` (always set through `Model::set_folders`; `Model::set_folder_group` after an edit). Group headers are render-only rows from `logic::folder_groups::folder_rows`; selection stays a folder index. On Syncthing 2.1+ there is always at least an "Ungrouped" header and cards are compact; older Syncthing gets no headers and spaced cards
+- Full-width highlight on the selected card while the list has focus, cyan text otherwise
+- Title shows counts (total, synced, syncing, paused), shortened by width
 
 **Status Bar (context-aware):**
 - **Folder view (focus_level == 0)**: Activity feed + device count

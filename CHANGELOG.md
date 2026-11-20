@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Markdown preview**: `.md` files render in the preview with headings, emphasis, lists, quotes, code blocks, links and tables. Press `r` to switch to the raw source
 - **Step through files in the preview**: `Shift+↑`/`Shift+↓` (or `K`/`J` in vim mode) preview the previous or next file in the directory without closing the popup. Directories are skipped, and the list selection follows
+- **Folder groups** (Syncthing 2.1+): folders are listed under their group, with ungrouped folders last. Press `e` in the folder list to pick a group, remove one, or create a new one. On older Syncthing the list looks as before, and `e` says which version groups need
+- **Folder cards rely on icons**: folder type shows as ⇅ ⇡ ⇣, status words appear only for progress (`Syncing 62%`), scanning and errors, and cards drop detail instead of being cut off when the folder pane narrows while browsing. The selected folder gets a full-width highlight
+- **Syncthing version** in the system bar, e.g. `laptop · Syncthing v2.1.7`
 
 ### 🐛 Bug Fixes
 
@@ -18,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A last-activity time that can't be parsed no longer shows as "just now"; the folder shows no last activity instead
 - Toasts show what happened: failures are red ✗ and refusals or missing settings are yellow `!`, where many used to show a green ✓. Progress messages like "Rescanning…" and "Sort: A-Z" are cyan
 - "Modified By" in the file info popup shows the device name instead of a short device ID like `3QFSJG3`
+- Folder cards show scanning, waiting-to-scan and cleaning folders with 🔍 instead of as up to date, and paused folders no longer show "0 B │ 0 files"
 
 ---
 

@@ -11,7 +11,7 @@
 
 **Medium Priority:**
 - Set the terminal title (OSC 2) to the current context: folder, directory path, or the file being previewed. Restore the previous title on exit
-- Folder groups (Syncthing v2.1.0+): `group` field on folder config, read from `/rest/system/config` and set with PATCH `/rest/config/folders/<id>`. Group folder cards by it and add a "set group" action
+- Tell local deletions apart in Receive Only folders: a file deleted locally (`deleted: true` in `/rest/db/localchanged`) shows the same local-change icon as an edit or addition, and its preview just says "File not found on disk". Mark deletions differently in the file list, and have the preview say it was deleted on this device and that `R` restores it from the other devices (e.g. `Documents/manuals/router-setup.txt` in the demo)
 - `blockIndexing` toggle (Syncthing v2.1.0+): per-folder bool, defaults to true. Off shrinks the Syncthing database but loses block reuse across files. Fits next to the folder type menu
 - Taskbar icon (plus ability to launch terminal + app)
 
@@ -22,6 +22,7 @@
 
 ### Known Bugs
 
+- Selecting a paused folder in the folder list keeps showing the previously selected folder's contents in the preview pane, so it looks like the paused folder's files. Pausing the selected folder leaves its pane open too. A paused folder can't be browsed, so its preview pane should be cleared (or show that it's paused) on both
 - While a folder is syncing, `overlay_syncing_states` clones each breadcrumb level's state map every frame. Fine at normal sizes, costly for directories with tens of thousands of entries. Computing per visible row with `item_sync_state` would avoid it
 
 ---
@@ -29,7 +30,6 @@
 ### Syncthing Compatibility
 
 - Directories report 0 bytes instead of 128 from v2.1.2, so byte totals in `/rest/db/status`, `/rest/db/file`, need and localchanged drop slightly. Check nothing assumes the old size once the local container is on 2.1
-- Folder cards still show `scanning`, `scan-waiting` and `cleaning` folders as synced. Only the status bar labels them
 
 ---
 

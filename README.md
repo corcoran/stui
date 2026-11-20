@@ -172,6 +172,7 @@ stui --debug
 | `u` | **View Update History**: Show recent file updates for folder with lazy-loading pagination (folder view only). Press `Enter` on a file to jump to its location. | No |
 | `?` | Show detailed file info popup (metadata, sync state, preview). Note: `Enter` on files also opens preview. | No |
 | `c` | **Context-aware**: Change folder type (folder view) OR Copy path (breadcrumb view) | Selection menu / No |
+| `e` | Set the folder's group: pick one, remove it, or create a new one (folder view, Syncthing 2.1+) | Selection menu |
 | `p` | Pause/resume folder (folder view only) | Yes |
 | `i` | Toggle ignore pattern (add/remove from `.stignore`) | No |
 | `I` | Ignore AND delete from disk | No (immediate) |
