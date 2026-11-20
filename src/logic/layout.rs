@@ -110,6 +110,16 @@ pub fn fit_image_rect(
     }
 }
 
+/// Rows `text` occupies when word-wrapped to `width` columns.
+pub fn wrapped_line_count(text: &ratatui::text::Text, width: u16) -> usize {
+    if width == 0 {
+        return text.lines.len();
+    }
+    ratatui::widgets::Paragraph::new(text.clone())
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .line_count(width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +218,29 @@ mod tests {
     fn test_fit_without_dimensions_uses_area() {
         assert_eq!(fit_image_rect(INNER, None, Some((10, 20))), INNER);
         assert_eq!(fit_image_rect(INNER, Some((10, 10)), None), INNER);
+    }
+
+    // ========================================
+    // WRAPPED LINE COUNT
+    // ========================================
+
+    use ratatui::text::Text;
+
+    #[test]
+    fn test_wrapped_line_count_counts_wrapped_rows() {
+        let text = Text::from("x".repeat(100));
+        assert_eq!(wrapped_line_count(&text, 40), 3);
+    }
+
+    #[test]
+    fn test_wrapped_line_count_short_lines_unchanged() {
+        let text = Text::from("one\ntwo\nthree");
+        assert_eq!(wrapped_line_count(&text, 40), 3);
+    }
+
+    #[test]
+    fn test_wrapped_line_count_zero_width_falls_back_to_lines() {
+        let text = Text::from("one\ntwo");
+        assert_eq!(wrapped_line_count(&text, 0), 2);
     }
 }

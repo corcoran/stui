@@ -713,6 +713,14 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 }
                 return Ok(());
             }
+            KeyCode::Char('r') => {
+                if crate::logic::file::has_rendered_view(&popup_state.file_path) {
+                    popup_state.raw_view = !popup_state.raw_view;
+                    popup_state.scroll_offset = 0;
+                }
+                app.model.ui.vim_command_state = model::VimCommandState::None;
+                return Ok(());
+            }
             KeyCode::Char('G') => {
                 // Go to bottom (set to a very large number, will be clamped by rendering)
                 popup_state.scroll_offset = u16::MAX;

@@ -7,7 +7,6 @@
 ### Feature Enhancements
 
 **High Priority:**
-- Markdown rendering in the file preview (headings, emphasis, lists, code blocks) instead of raw text
 - Syncthing log viewer
 - In the file preview popup, a key to switch the preview to the next/previous file in the current directory. Up/down and `j`/`k` scroll text, and PgUp/PgDn already page through text previews too, so ←/→ (`h`/`l` in vim mode) may be the free pair
 
@@ -44,4 +43,3 @@
 
 - `serde_yaml` is deprecated upstream (0.9.34+deprecated). Pick a maintained replacement for config parsing
 - `cargo clippy --all-targets -- -D warnings` fails on old lints in `tests/*.rs` (`useless_vec`, `const_is_empty`, `useless_asref`). CI only lints lib and bin, so it passes there
-- Before/after screenshot check of the dependency upgrade (ratatui 0.30, ratatui-image 11) with the demo harness, old binary vs new

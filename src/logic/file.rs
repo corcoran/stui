@@ -58,6 +58,18 @@ pub fn is_image_file(path: &str) -> bool {
 /// assert!(is_binary_content(b"Hello\x00World"));
 /// assert!(is_binary_content(b"\x00\x01\x02\x03"));
 /// ```
+pub fn is_markdown_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    [".md", ".markdown", ".mdown"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Whether the preview renders this file's content and `r` can switch to the raw source.
+pub fn has_rendered_view(path: &str) -> bool {
+    is_markdown_path(path)
+}
+
 pub fn is_binary_content(bytes: &[u8]) -> bool {
     bytes.contains(&0)
 }
@@ -837,5 +849,39 @@ mod tests {
             result.contains("Normal Text"),
             "Should extract normal printable ASCII"
         );
+    }
+
+    // ========================================
+    // RENDERED VIEW DETECTION
+    // ========================================
+
+    #[test]
+    fn test_is_markdown_path_extensions() {
+        assert!(is_markdown_path("README.md"));
+        assert!(is_markdown_path("docs/guide.markdown"));
+        assert!(is_markdown_path("notes.mdown"));
+    }
+
+    #[test]
+    fn test_is_markdown_path_case_insensitive() {
+        assert!(is_markdown_path("README.MD"));
+        assert!(is_markdown_path("Guide.Markdown"));
+    }
+
+    #[test]
+    fn test_is_markdown_path_non_markdown() {
+        assert!(!is_markdown_path("notes.mdx"));
+        assert!(!is_markdown_path("md"));
+        assert!(!is_markdown_path("file.txt"));
+        assert!(!is_markdown_path("dir.md/file.txt"));
+        assert!(!is_markdown_path(""));
+    }
+
+    #[test]
+    fn test_has_rendered_view_only_for_markdown() {
+        assert!(has_rendered_view("README.md"));
+        assert!(!has_rendered_view("notes.txt"));
+        assert!(!has_rendered_view("art.ans"));
+        assert!(!has_rendered_view("photo.png"));
     }
 }

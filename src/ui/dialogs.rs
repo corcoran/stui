@@ -598,26 +598,6 @@ fn render_preview_column(
             Err(msg) => format!("Error: {}", msg),
         };
 
-        // Parse ANSI codes using our custom safe parser
-        // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
-        let parsed_text = crate::logic::file::parse_ansi_to_text(&content_str);
-
-        // Count total lines WITHOUT wrapping (ANSI art needs fixed-width display)
-        // Each line in the parsed text is a single display line, no wrapping calculation needed
-        let total_lines = parsed_text.lines.len();
-
-        // Viewport height (visible lines)
-        let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
-
-        // Calculate max scroll position (can't scroll past the last line)
-        let max_scroll = total_lines.saturating_sub(viewport_height);
-
-        // Clamp scroll offset to valid range
-        let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
-
-        // Write the clamped value back to state to prevent offset drift
-        state.scroll_offset = clamped_scroll;
-
         // Check if this is an ANSI art file (by extension or content)
         // Auto-detect ANSI codes in any file, not just .ans/.asc
         let is_ansi_art = {
@@ -653,15 +633,36 @@ fn render_preview_column(
             area
         };
 
-        // For ANSI art, enable wrapping to preserve 80-column layout
-        // Non-ANSI art can also wrap safely
+        let inner_width = preview_area.width.saturating_sub(2);
+        let has_rendered_view = crate::logic::file::has_rendered_view(&state.file_path);
+        let parsed_text = if has_rendered_view && !state.raw_view {
+            crate::logic::markdown::render(&content_str, inner_width)
+        } else {
+            // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
+            crate::logic::file::parse_ansi_to_text(&content_str)
+        };
+
+        let total_lines = crate::logic::layout::wrapped_line_count(&parsed_text, inner_width);
+        let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
+        let max_scroll = total_lines.saturating_sub(viewport_height);
+        let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
+        // Write the clamped value back to state to prevent offset drift
+        state.scroll_offset = clamped_scroll;
+
+        let scroll_keys = "↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn";
+        let title = match (has_rendered_view, state.raw_view) {
+            (true, false) => format!("Preview (Markdown, r: raw | {})", scroll_keys),
+            (true, true) => format!("Preview (Raw, r: rendered | {})", scroll_keys),
+            (false, _) => format!("Preview ({})", scroll_keys),
+        };
+
         // NOTE: Don't set .style() on the Paragraph - it would override ANSI colors
         let paragraph = Paragraph::new(parsed_text)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
-                    .title("Preview (↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn)"),
+                    .title(title),
             )
             .wrap(ratatui::widgets::Wrap { trim: false })
             .scroll((clamped_scroll, 0));
@@ -825,4 +826,92 @@ pub fn render_rescan_confirmation(f: &mut Frame, folder_label: &str) {
 
     f.render_widget(Clear, dialog_area);
     f.render_widget(paragraph, dialog_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn popup(path: &str, content: &str, raw_view: bool) -> FileInfoPopupState {
+        FileInfoPopupState {
+            folder_id: "f".to_string(),
+            file_path: path.to_string(),
+            browse_item: crate::api::BrowseItem {
+                name: path.to_string(),
+                item_type: "FILE_INFO_TYPE_FILE".to_string(),
+                mod_time: String::new(),
+                size: 0,
+            },
+            file_details: None,
+            file_content: Ok(content.to_string()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 0,
+            raw_view,
+        }
+    }
+
+    fn render_rows(state: &mut FileInfoPopupState, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut images = std::collections::HashMap::new();
+        terminal
+            .draw(|f| render_preview_column(f, f.area(), state, None, &mut images))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    // ========================================
+    // TEXT PREVIEW
+    // ========================================
+
+    #[test]
+    fn test_markdown_preview_renders_markup() {
+        let mut state = popup("README.md", "*em* text", false);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[1].contains("em text"), "{:?}", rows[1]);
+        assert!(!rows[1].contains("*em*"));
+    }
+
+    #[test]
+    fn test_markdown_preview_raw_view_shows_source() {
+        let mut state = popup("README.md", "*em* text", true);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[1].contains("*em* text"), "{:?}", rows[1]);
+    }
+
+    #[test]
+    fn test_markdown_preview_title_names_raw_toggle() {
+        let mut rendered = popup("README.md", "text", false);
+        assert!(render_rows(&mut rendered, 120, 8)[0].contains("r: raw"));
+        let mut raw = popup("README.md", "text", true);
+        assert!(render_rows(&mut raw, 120, 8)[0].contains("r: rendered"));
+    }
+
+    #[test]
+    fn test_plain_preview_title_has_no_raw_toggle() {
+        let mut state = popup("notes.txt", "text", false);
+        assert!(!render_rows(&mut state, 120, 8)[0].contains("r: "));
+    }
+
+    #[test]
+    fn test_preview_scroll_limit_counts_wrapped_lines() {
+        let content = format!("{}END", "word ".repeat(400));
+        let mut state = popup("notes.txt", &content, false);
+        state.scroll_offset = u16::MAX;
+        let rows = render_rows(&mut state, 40, 10);
+        assert!(
+            rows.iter().any(|r| r.contains("END")),
+            "scrolling to the bottom must reach the last wrapped line: {:?}",
+            rows
+        );
+    }
 }

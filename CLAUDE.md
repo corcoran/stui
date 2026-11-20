@@ -386,6 +386,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 - `?` or `Enter` (on files): Show detailed file info popup with metadata and preview:
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
+  - **Markdown files**: Rendered (headings, lists, code blocks, links, tables); `r` toggles the raw source
   - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors
   - **Image files**: Terminal rendering (Kitty/iTerm2/Sixel/Halfblocks), non-blocking load
   - **Binary files**: Extracted text or metadata
@@ -531,7 +532,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
 
 ## Current State
 
-**1163 tests passing** (`cargo test` total across lib, bin and integration targets), zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support. Version 0.11.1.
+All tests pass (`cargo test` across lib, bin and integration targets), zero warnings, clean Model/Runtime separation. Full ANSI/CP437 support.
 
 ## Development Guidelines
 
@@ -579,7 +580,7 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
     - Test with real Syncthing Docker instances with large datasets
     - Pure business logic in `src/logic/` should have comprehensive test coverage
     - Model state transitions should have tests in corresponding test modules
-    - Run `cargo test` before committing to ensure all 603+ tests pass
+    - Run `cargo test` before committing to ensure all tests pass
     - Aim for zero compiler warnings (`cargo build` should be clean)
   - **Test Organization Standards:**
     - **Keep tests inline** using `#[cfg(test)] mod tests` at the bottom of each module

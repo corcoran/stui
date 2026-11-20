@@ -27,6 +27,7 @@ pub mod folder_history;
 pub mod formatting;
 pub mod ignore;
 pub mod layout;
+pub mod markdown;
 pub mod navigation;
 pub mod need_paging;
 pub mod path;

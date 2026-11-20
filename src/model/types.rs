@@ -102,6 +102,7 @@ pub struct FileInfoPopupState {
     pub is_binary: bool,
     pub is_image: bool,
     pub scroll_offset: u16,
+    pub raw_view: bool,
     // image_state moved to Runtime - ImagePreviewState is not Clone
 }
 

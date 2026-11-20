@@ -36,6 +36,7 @@ impl App {
                     is_binary: false,
                     is_image: false,
                     scroll_offset: 0,
+                    raw_view: false,
                 });
                 return;
             }
@@ -58,6 +59,7 @@ impl App {
             is_binary: false,
             is_image,
             scroll_offset: 0,
+            raw_view: false,
         });
 
         // 1. Fetch file details from API
@@ -163,6 +165,7 @@ impl App {
             is_binary,
             is_image,
             scroll_offset: 0,
+            raw_view: false,
         });
     }
 

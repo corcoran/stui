@@ -3239,4 +3239,63 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].page, 1);
     }
+
+    // ========================================
+    // FILE PREVIEW RAW VIEW
+    // ========================================
+
+    fn open_preview(app: &mut App, path: &str) {
+        view_folder_root(app, "media", vec![file_item(path)]);
+        app.model.ui.file_info_popup = Some(crate::model::FileInfoPopupState {
+            folder_id: "media".to_string(),
+            file_path: path.to_string(),
+            browse_item: file_item(path),
+            file_details: None,
+            file_content: Ok("# Title\n\nbody".to_string()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 5,
+            raw_view: false,
+        });
+    }
+
+    fn popup(app: &App) -> &crate::model::FileInfoPopupState {
+        app.model.ui.file_info_popup.as_ref().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_r_toggles_raw_view_on_markdown_preview() {
+        let mut app = create_test_app();
+        open_preview(&mut app, "README.md");
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        assert!(popup(&app).raw_view);
+        assert_eq!(popup(&app).scroll_offset, 0);
+
+        app.model.ui.file_info_popup.as_mut().unwrap().scroll_offset = 3;
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        assert!(!popup(&app).raw_view);
+        assert_eq!(popup(&app).scroll_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn test_r_ignored_on_preview_without_rendered_view() {
+        let mut app = create_test_app();
+        open_preview(&mut app, "notes.txt");
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        assert!(!popup(&app).raw_view);
+        assert_eq!(popup(&app).scroll_offset, 5);
+    }
+
+    #[tokio::test]
+    async fn test_r_in_preview_does_not_open_rescan() {
+        let mut app = create_test_app();
+        open_preview(&mut app, "README.md");
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        assert!(app.model.ui.confirm_action.is_none());
+        assert!(app.model.ui.file_info_popup.is_some());
+    }
 }

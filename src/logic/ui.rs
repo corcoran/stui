@@ -480,6 +480,7 @@ mod tests {
             is_binary: false,
             is_image: false,
             scroll_offset: 0,
+            raw_view: false,
         });
         assert!(modal_open(&model));
     }
