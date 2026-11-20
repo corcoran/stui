@@ -722,7 +722,7 @@ mod tests {
                 .filtered_items
                 .is_none()
         );
-        assert!(app.model.ui.toast_message.is_none());
+        assert!(app.model.ui.toast.is_none());
     }
 
     #[test]
@@ -2143,8 +2143,9 @@ mod tests {
             Some(&SyncState::Ignored),
             "icon stays Ignored until FileInfo replaces it"
         );
-        let toast = app.model.ui.toast_message.as_ref().map(|(m, _)| m.as_str());
-        assert_eq!(toast, Some("Unignored a.mkv, rescanning..."));
+        let toast = app.model.ui.toast.as_ref().expect("toast shown");
+        assert_eq!(toast.message, "Unignored a.mkv, rescanning...");
+        assert_eq!(toast.kind, crate::model::ToastKind::Success);
     }
 
     #[tokio::test]
@@ -2165,7 +2166,7 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
         assert!(app.model.ui.pattern_selection.is_some());
         assert!(
-            app.model.ui.toast_message.is_none(),
+            app.model.ui.toast.is_none(),
             "no toast until a pattern is chosen"
         );
 
@@ -3585,7 +3586,7 @@ mod tests {
                 "/data/media/a.mkv"
             ))
         );
-        assert!(app.model.ui.toast_message.is_none());
+        assert!(app.model.ui.toast.is_none());
     }
 
     #[tokio::test]
@@ -3595,10 +3596,69 @@ mod tests {
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
 
-        let (message, _) = app.model.ui.toast_message.clone().expect("toast shown");
+        let toast = app.model.ui.toast.clone().expect("toast shown");
         assert_eq!(
-            message,
+            toast.message,
             "Cannot un-ignore: deletion in progress for /data/media"
         );
+        assert_eq!(toast.kind, crate::model::ToastKind::Warning);
+    }
+
+    // ========================================
+    // TOAST KINDS
+    // ========================================
+
+    fn toast_of(app: &App) -> (String, crate::model::ToastKind) {
+        let t = app.model.ui.toast.as_ref().expect("toast shown");
+        (t.message.clone(), t.kind)
+    }
+
+    #[tokio::test]
+    async fn test_sort_change_is_info_toast() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a.txt")]);
+
+        press(&mut app, crossterm::event::KeyCode::Char('s')).await;
+
+        let (message, kind) = toast_of(&app);
+        assert!(message.starts_with("Sort: "), "{}", message);
+        assert_eq!(kind, crate::model::ToastKind::Info);
+    }
+
+    #[tokio::test]
+    async fn test_copy_config_path_without_clipboard_command_is_warning_toast() {
+        let mut app = create_test_app();
+        app.model.ui.show_setup_help = true;
+        app.model.ui.config_path = "/home/u/.config/stui/config.yaml".to_string();
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert_eq!(
+            toast_of(&app),
+            (
+                "No clipboard command configured".to_string(),
+                crate::model::ToastKind::Warning
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pause_failure_is_error_toast() {
+        let mut app = create_test_app();
+        app.model.ui.confirm_action = Some(crate::model::ConfirmAction::PauseResume {
+            folder_id: "media".to_string(),
+            label: "Media".to_string(),
+            is_paused: false,
+        });
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        let (message, kind) = toast_of(&app);
+        assert!(
+            message.starts_with("Failed to pause/resume folder"),
+            "{}",
+            message
+        );
+        assert_eq!(kind, crate::model::ToastKind::Error);
     }
 }

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Scrolling to the bottom of a text preview reaches the last line when long lines wrap
 - A last-activity time that can't be parsed no longer shows as "just now"; the folder shows no last activity instead
+- Toasts show what happened: failures are red ✗ and refusals or missing settings are yellow `!`, where many used to show a green ✓. Progress messages like "Rescanning…" and "Sort: A-Z" are cyan
 
 ---
 

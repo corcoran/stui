@@ -9,7 +9,6 @@
 
 use crate::{App, log_debug, logic, services};
 use anyhow::Result;
-use std::time::Instant;
 
 impl App {
     /// Get folder ID and label for rescan operation
@@ -253,10 +252,7 @@ impl App {
     pub(crate) fn open_selected_item(&mut self) -> Result<()> {
         // Check if open_command is configured
         let Some(ref open_cmd) = self.open_command else {
-            self.model.ui.toast_message = Some((
-                "Error: open_command not configured".to_string(),
-                Instant::now(),
-            ));
+            self.model.ui.show_warning("open_command not configured");
             return Ok(());
         };
 
@@ -323,7 +319,7 @@ impl App {
                 }
                 // Show toast notification with full path
                 let toast_msg = format!("Opened: {}", host_path);
-                self.model.ui.toast_message = Some((toast_msg, Instant::now()));
+                self.model.ui.show_success(toast_msg);
             }
             Err(e) => {
                 log_debug(&format!(
@@ -331,8 +327,8 @@ impl App {
                     open_cmd, e
                 ));
                 // Show error toast
-                let toast_msg = format!("Error: Failed to open with '{}'", open_cmd);
-                self.model.ui.toast_message = Some((toast_msg, Instant::now()));
+                let toast_msg = format!("Failed to open with '{}'", open_cmd);
+                self.model.ui.show_error(toast_msg);
             }
         }
 
@@ -344,7 +340,7 @@ impl App {
         let Some(ref open_cmd) = self.open_command else {
             self.model
                 .ui
-                .show_toast("Error: open_command not configured".to_string());
+                .show_warning("open_command not configured".to_string());
             return Ok(());
         };
 
@@ -360,10 +356,10 @@ impl App {
             Ok(_child) => {
                 self.model
                     .ui
-                    .show_toast(format!("Opening Syncthing: {}", self.base_url));
+                    .show_info(format!("Opening Syncthing: {}", self.base_url));
             }
             Err(e) => {
-                self.model.ui.show_toast(format!("Failed to open: {}", e));
+                self.model.ui.show_error(format!("Failed to open: {}", e));
             }
         }
 
@@ -452,7 +448,7 @@ impl App {
                             });
                         // Show toast notification with full path
                         let toast_msg = format!("Copied to clipboard: {}", text);
-                        self.model.ui.toast_message = Some((toast_msg, Instant::now()));
+                        self.model.ui.show_success(toast_msg);
                     }
                     Err(e) => {
                         let _ = std::fs::OpenOptions::new()
@@ -467,8 +463,8 @@ impl App {
                                 )
                             });
                         // Show error toast
-                        let toast_msg = format!("Error: Failed to copy with '{}'", clipboard_cmd);
-                        self.model.ui.toast_message = Some((toast_msg, Instant::now()));
+                        let toast_msg = format!("Failed to copy with '{}'", clipboard_cmd);
+                        self.model.ui.show_error(toast_msg);
                     }
                 }
             } else {
@@ -484,10 +480,9 @@ impl App {
                         )
                     });
                 // Show error toast
-                self.model.ui.toast_message = Some((
-                    "Error: clipboard_command not configured".to_string(),
-                    Instant::now(),
-                ));
+                self.model
+                    .ui
+                    .show_warning("clipboard_command not configured");
             }
         }
 

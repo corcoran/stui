@@ -296,7 +296,7 @@ impl App {
                         (items, local_items)
                     }
                     Err(e) => {
-                        self.model.ui.show_toast(format!(
+                        self.model.ui.show_error(format!(
                             "Unable to browse: {}",
                             crate::logic::errors::format_error_message(&e)
                         ));
@@ -499,7 +499,7 @@ impl App {
                     (items, local_items)
                 }
                 Err(e) => {
-                    self.model.ui.show_toast(format!("Unable to browse: {}", e));
+                    self.model.ui.show_error(format!("Unable to browse: {}", e));
                     self.model.performance.loading_browse.remove(&browse_key);
                     return Err(e);
                 }

@@ -11,6 +11,23 @@ use super::types::{
 };
 use crate::{DisplayMode, SortMode};
 
+/// What a toast reports, which sets its icon and color
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastKind {
+    Success,
+    Info,
+    /// The action was refused or couldn't start, and nothing changed
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug)]
+pub struct Toast {
+    pub message: String,
+    pub kind: ToastKind,
+    pub shown_at: Instant,
+}
+
 /// UI preferences and popups
 #[derive(Clone, Debug)]
 pub struct UiModel {
@@ -56,8 +73,7 @@ pub struct UiModel {
     /// Flag to trigger folder refresh in main loop (after reconnection)
     pub needs_folder_refresh: bool,
 
-    /// Toast message (text, timestamp)
-    pub toast_message: Option<(String, Instant)>,
+    pub toast: Option<Toast>,
 
     // ============================================
     // SEARCH
@@ -115,7 +131,7 @@ impl UiModel {
             show_setup_help: false,
             config_path: String::new(),
             needs_folder_refresh: false,
-            toast_message: None,
+            toast: None,
             search_mode: false,
             search_query: String::new(),
             search_origin_level: None,
@@ -151,23 +167,40 @@ impl UiModel {
         self.search_origin_level = None;
     }
 
-    /// Show toast message
-    pub fn show_toast(&mut self, message: String) {
-        self.toast_message = Some((message, Instant::now()));
+    fn show(&mut self, kind: ToastKind, message: impl Into<String>) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            kind,
+            shown_at: Instant::now(),
+        });
+    }
+
+    pub fn show_success(&mut self, message: impl Into<String>) {
+        self.show(ToastKind::Success, message);
+    }
+
+    pub fn show_info(&mut self, message: impl Into<String>) {
+        self.show(ToastKind::Info, message);
+    }
+
+    pub fn show_warning(&mut self, message: impl Into<String>) {
+        self.show(ToastKind::Warning, message);
+    }
+
+    pub fn show_error(&mut self, message: impl Into<String>) {
+        self.show(ToastKind::Error, message);
     }
 
     /// Check if toast should be dismissed (older than 1 second)
     pub fn should_dismiss_toast(&self) -> bool {
-        if let Some((_, timestamp)) = &self.toast_message {
-            crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis())
-        } else {
-            false
-        }
+        self.toast.as_ref().is_some_and(|t| {
+            crate::logic::ui::should_dismiss_toast(t.shown_at.elapsed().as_millis())
+        })
     }
 
     /// Dismiss toast message
     pub fn dismiss_toast(&mut self) {
-        self.toast_message = None;
+        self.toast = None;
     }
 }
 
@@ -216,13 +249,30 @@ mod tests {
     #[test]
     fn test_toast() {
         let mut model = UiModel::new(false);
-        assert!(model.toast_message.is_none());
+        assert!(model.toast.is_none());
 
-        model.show_toast("Test".to_string());
-        assert!(model.toast_message.is_some());
+        model.show_success("Test");
+        assert!(model.toast.is_some());
 
         model.dismiss_toast();
-        assert!(model.toast_message.is_none());
+        assert!(model.toast.is_none());
+    }
+
+    #[test]
+    fn test_toast_kind_set_by_show_method() {
+        let mut model = UiModel::new(false);
+        let cases: [(fn(&mut UiModel, &str), ToastKind); 4] = [
+            (|m, s| m.show_success(s), ToastKind::Success),
+            (|m, s| m.show_info(s), ToastKind::Info),
+            (|m, s| m.show_warning(s), ToastKind::Warning),
+            (|m, s| m.show_error(s), ToastKind::Error),
+        ];
+        for (show, kind) in cases {
+            show(&mut model, "msg");
+            let toast = model.toast.as_ref().unwrap();
+            assert_eq!(toast.kind, kind);
+            assert_eq!(toast.message, "msg");
+        }
     }
 
     #[test]

@@ -388,8 +388,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Render toast notification if active
-    if let Some((message, _timestamp)) = &app.model.ui.toast_message {
-        toast::render_toast(f, size, message);
+    if let Some(t) = &app.model.ui.toast {
+        toast::render_toast(f, size, t);
     }
 }
 
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn test_toast_only_does_not_dim_via_maybe_dim() {
         let mut model = crate::model::Model::new(false);
-        model.ui.show_toast("hi".to_string());
+        model.ui.show_info("hi");
         let area = Rect::new(0, 0, 10, 1);
         let mut buf = Buffer::empty(area);
         buf.set_string(0, 0, "text", Style::default().fg(Color::Green));

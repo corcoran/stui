@@ -24,7 +24,7 @@ pub use navigation::NavigationModel;
 pub use performance::PerformanceModel;
 pub use syncthing::SyncthingModel;
 pub use types::*;
-pub use ui::UiModel;
+pub use ui::{Toast, ToastKind, UiModel};
 
 /// Root application model composed of focused sub-models
 #[derive(Clone, Debug)]
@@ -100,11 +100,6 @@ impl Model {
         self.ui.close_all_modals();
     }
 
-    /// Show toast message
-    pub fn show_toast(&mut self, message: String) {
-        self.ui.show_toast(message);
-    }
-
     /// Check if toast should be dismissed
     pub fn should_dismiss_toast(&self) -> bool {
         self.ui.should_dismiss_toast()
@@ -162,13 +157,13 @@ mod tests {
     #[test]
     fn test_toast() {
         let mut model = Model::new(false);
-        assert!(model.ui.toast_message.is_none());
+        assert!(model.ui.toast.is_none());
 
-        model.show_toast("Test".to_string());
-        assert!(model.ui.toast_message.is_some());
+        model.ui.show_info("Test");
+        assert!(model.ui.toast.is_some());
 
         model.dismiss_toast();
-        assert!(model.ui.toast_message.is_none());
+        assert!(model.ui.toast.is_none());
     }
 
     #[test]

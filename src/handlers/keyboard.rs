@@ -62,16 +62,16 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         Ok(_) => {
                             app.model
                                 .ui
-                                .show_toast("Config path copied to clipboard".to_string());
+                                .show_success("Config path copied to clipboard".to_string());
                         }
                         Err(e) => {
-                            app.model.ui.show_toast(format!("Failed to copy: {}", e));
+                            app.model.ui.show_error(format!("Failed to copy: {}", e));
                         }
                     }
                 } else {
                     app.model
                         .ui
-                        .show_toast("No clipboard command configured".to_string());
+                        .show_warning("No clipboard command configured".to_string());
                 }
                 return Ok(());
             }
@@ -102,7 +102,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     let _ = app.rescan_selected_folder();
                     app.model
                         .ui
-                        .show_toast(format!("Rescanning {}...", folder_label));
+                        .show_info(format!("Rescanning {}...", folder_label));
                 }
                 KeyCode::Char('f') => {
                     // Force refresh
@@ -110,7 +110,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     let _ = app.force_refresh_folder(&folder_id);
                     app.model
                         .ui
-                        .show_toast(format!("Force refreshing {}...", folder_label));
+                        .show_info(format!("Force refreshing {}...", folder_label));
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
                     // Cancel
@@ -260,7 +260,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 } else {
                                     "resumed"
                                 };
-                                app.model.ui.show_toast(format!("Folder {}", action));
+                                app.model.ui.show_success(format!("Folder {}", action));
 
                                 // Immediately reload folder list to update paused state
                                 match app.client.get_folders().await {
@@ -278,7 +278,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             Err(e) => {
                                 app.model
                                     .ui
-                                    .show_toast(format!("Failed to pause/resume folder: {}", e));
+                                    .show_error(format!("Failed to pause/resume folder: {}", e));
                             }
                         }
                     }
@@ -330,13 +330,13 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Err(e) = app.jump_to_file(&file_path).await {
                                 app.model
                                     .ui
-                                    .show_toast(format!("Failed to navigate: {}", e));
+                                    .show_error(format!("Failed to navigate: {}", e));
                             }
                         }
                         Err(e) => {
                             app.model
                                 .ui
-                                .show_toast(format!("Failed to enter folder: {}", e));
+                                .show_error(format!("Failed to enter folder: {}", e));
                         }
                     }
                 }
@@ -556,7 +556,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             &file_path,
                         );
                         app.finish_unignore(&folder_id, file_path, scope);
-                        app.model.ui.show_toast(unignore_toast(&item_name));
+                        app.model.ui.show_success(unignore_toast(&item_name));
                     }
                 }
                 return Ok(());
@@ -613,7 +613,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         };
                         app.model
                             .ui
-                            .show_toast(format!("Folder type changed to {}", type_display));
+                            .show_success(format!("Folder type changed to {}", type_display));
 
                         // Immediately reload folder list to update folder type
                         match app.client.get_folders().await {
@@ -631,7 +631,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     Err(e) => {
                         app.model
                             .ui
-                            .show_toast(format!("Failed to change folder type: {}", e));
+                            .show_error(format!("Failed to change folder type: {}", e));
                     }
                 }
 
@@ -904,10 +904,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             // Toggle ignore state (add or remove from .stignore)
             match app.toggle_ignore().await {
                 Ok(crate::app::ignore::IgnoreToggle::Unignored(item_name)) => {
-                    app.model.ui.show_toast(unignore_toast(&item_name));
+                    app.model.ui.show_success(unignore_toast(&item_name));
                 }
                 Ok(crate::app::ignore::IgnoreToggle::BlockedByPendingDelete(path)) => {
-                    app.model.ui.show_toast(format!(
+                    app.model.ui.show_warning(format!(
                         "Cannot un-ignore: deletion in progress for {}",
                         path.display()
                     ));
@@ -982,7 +982,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             // Show toast with new sort mode
             app.model
                 .ui
-                .show_toast(format!("Sort: {}", app.model.ui.sort_mode.as_str()));
+                .show_info(format!("Sort: {}", app.model.ui.sort_mode.as_str()));
         }
         KeyCode::Char('S') => {
             // Toggle reverse sort order
@@ -993,7 +993,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             } else {
                 "ascending"
             };
-            app.model.ui.show_toast(format!(
+            app.model.ui.show_info(format!(
                 "Sort: {} ({})",
                 app.model.ui.sort_mode.as_str(),
                 direction

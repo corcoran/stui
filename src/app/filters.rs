@@ -241,7 +241,7 @@ impl App {
         }
 
         if let Some(msg) = show_toast {
-            self.model.ui.show_toast(msg.to_string());
+            self.model.ui.show_info(msg.to_string());
         }
     }
 
@@ -770,7 +770,7 @@ impl App {
 
         if !has_out_of_sync {
             // No out-of-sync items, show toast
-            self.model.ui.show_toast("All files synced!".to_string());
+            self.model.ui.show_success("All files synced!".to_string());
             return;
         }
 
@@ -840,7 +840,7 @@ impl App {
             // Show loading toast and return - filter will activate when data arrives
             self.model
                 .ui
-                .show_toast("Loading out-of-sync files...".to_string());
+                .show_info("Loading out-of-sync files...".to_string());
             return;
         }
 
@@ -894,7 +894,7 @@ impl App {
         }
 
         if let Some(msg) = show_toast {
-            self.model.ui.show_toast(msg.to_string());
+            self.model.ui.show_info(msg.to_string());
         }
     }
 

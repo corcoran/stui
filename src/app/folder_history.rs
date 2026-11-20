@@ -61,7 +61,7 @@ impl App {
                 log_debug(&format!("Failed to browse folder: {}", e));
                 self.model
                     .ui
-                    .show_toast(format!("Failed to load history: {}", e));
+                    .show_error(format!("Failed to load history: {}", e));
             }
         }
     }
@@ -206,14 +206,14 @@ impl App {
             let level_idx = if self.model.navigation.focus_level == 0 {
                 self.model
                     .ui
-                    .show_toast("Cannot navigate: not in folder view".to_string());
+                    .show_warning("Cannot navigate: not in folder view".to_string());
                 return Ok(());
             } else {
                 self.model.navigation.focus_level - 1
             };
 
             if level_idx >= self.model.navigation.breadcrumb_trail.len() {
-                self.model.ui.show_toast(format!(
+                self.model.ui.show_error(format!(
                     "Could not navigate to {}: Invalid breadcrumb state",
                     file_path
                 ));
@@ -231,7 +231,7 @@ impl App {
                     if let Some(item) = current_level.items.get(index)
                         && item.item_type != "FILE_INFO_TYPE_DIRECTORY"
                     {
-                        self.model.ui.show_toast(format!(
+                        self.model.ui.show_error(format!(
                             "Could not navigate to {}: '{}' is not a directory",
                             file_path, dir_name
                         ));
@@ -246,7 +246,7 @@ impl App {
                 }
                 None => {
                     // Directory not found - stop here and show error
-                    self.model.ui.show_toast(format!(
+                    self.model.ui.show_error(format!(
                         "Could not navigate to {}: Directory '{}' not found",
                         file_path, dir_name
                     ));
@@ -257,7 +257,7 @@ impl App {
 
         // All directories navigated successfully - now find and select the file
         let level_idx = if self.model.navigation.focus_level == 0 {
-            self.model.ui.show_toast(format!(
+            self.model.ui.show_error(format!(
                 "Could not navigate to {}: Invalid state",
                 file_path
             ));
@@ -267,7 +267,7 @@ impl App {
         };
 
         if level_idx >= self.model.navigation.breadcrumb_trail.len() {
-            self.model.ui.show_toast(format!(
+            self.model.ui.show_error(format!(
                 "Could not navigate to {}: Invalid breadcrumb state",
                 file_path
             ));
@@ -288,7 +288,7 @@ impl App {
                 // File not found - we're at the right directory but file is missing
                 self.model
                     .ui
-                    .show_toast(format!("Could not find file '{}' in directory", filename));
+                    .show_error(format!("Could not find file '{}' in directory", filename));
             }
         }
 

@@ -984,10 +984,8 @@ where
         })?;
 
         // Auto-dismiss toast after 1.5 seconds
-        if let Some((_, timestamp)) = app.model.ui.toast_message
-            && crate::logic::ui::should_dismiss_toast(timestamp.elapsed().as_millis())
-        {
-            app.model.ui.toast_message = None;
+        if app.model.ui.should_dismiss_toast() {
+            app.model.ui.dismiss_toast();
         }
 
         if app.model.ui.should_quit {

@@ -809,7 +809,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 app.continue_need_list(&folder_id, generation, sequence, page, perpage, response);
             if filter_activated {
                 // Clear the "Loading out-of-sync files..." toast
-                app.model.ui.toast_message = None;
+                app.model.ui.dismiss_toast();
             }
         }
 

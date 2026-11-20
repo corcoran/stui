@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn test_modal_open_false_with_only_toast() {
         let mut model = Model::new(false);
-        model.ui.show_toast("hello".to_string());
+        model.ui.show_info("hello");
         assert!(!modal_open(&model));
     }
 
