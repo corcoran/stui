@@ -856,7 +856,7 @@ mod tests {
             0,
             false, // out_of_sync_filter_active
         );
-        assert!(status.contains("📄⚠️ Out of Sync"));
+        assert!(status.contains("📄❗ Out of Sync"));
         assert!(status.contains("Selected: test.txt"));
     }
 
@@ -920,7 +920,7 @@ mod tests {
             0,
             false,
         );
-        assert!(status.contains("📄☁️ Remote Only"));
+        assert!(status.contains("📄⛅ Remote Only"));
         assert!(status.contains("Selected: test.txt"));
     }
 

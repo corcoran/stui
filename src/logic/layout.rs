@@ -74,6 +74,42 @@ pub fn calculate_visible_pane_range(
     }
 }
 
+/// Rect inside `area` that an image of `dims` pixels fills when scaled to fit and
+/// centered, given the terminal's cell size in pixels.
+pub fn fit_image_rect(
+    area: ratatui::layout::Rect,
+    dims: Option<(u32, u32)>,
+    font: Option<(u16, u16)>,
+) -> ratatui::layout::Rect {
+    let (Some((img_w, img_h)), Some((font_w, font_h))) = (dims, font) else {
+        return area;
+    };
+
+    let desired_width = ((img_w as f32) / (font_w as f32)).ceil() as u16;
+    let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
+
+    let (fit_width, fit_height) = if desired_width <= area.width && desired_height <= area.height {
+        (desired_width, desired_height)
+    } else {
+        let desired_aspect = desired_width as f32 / desired_height as f32;
+        let area_aspect = area.width as f32 / area.height as f32;
+        if desired_aspect > area_aspect {
+            let width = area.width;
+            (width, (width as f32 / desired_aspect) as u16)
+        } else {
+            let height = area.height;
+            ((height as f32 * desired_aspect) as u16, height)
+        }
+    };
+
+    ratatui::layout::Rect {
+        x: area.x + area.width.saturating_sub(fit_width) / 2,
+        y: area.y + area.height.saturating_sub(fit_height) / 2,
+        width: fit_width,
+        height: fit_height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +166,47 @@ mod tests {
         assert_eq!(range.start_pane, 0);
         assert_eq!(range.visible_panes, 2);
         assert!(range.folders_visible);
+    }
+
+    // ========================================
+    // IMAGE FIT
+    // ========================================
+
+    use ratatui::layout::Rect;
+
+    const INNER: Rect = Rect {
+        x: 10,
+        y: 5,
+        width: 80,
+        height: 40,
+    };
+
+    #[test]
+    fn test_fit_full_width_landscape_fills_width() {
+        // 1600x1200 at 10x20 px cells wants 160x60 cells: width-constrained
+        let r = fit_image_rect(INNER, Some((1600, 1200)), Some((10, 20)));
+        assert_eq!((r.width, r.height), (80, 30));
+        assert_eq!((r.x, r.y), (10, 5 + 5));
+    }
+
+    #[test]
+    fn test_fit_portrait_is_height_constrained() {
+        let r = fit_image_rect(INNER, Some((1200, 1600)), Some((10, 20)));
+        assert_eq!(r.height, 40);
+        assert_eq!(r.y, INNER.y);
+    }
+
+    #[test]
+    fn test_fit_small_image_keeps_desired_size_and_centers() {
+        // 200x100 px at 10x20 wants 20x5 cells
+        let r = fit_image_rect(INNER, Some((200, 100)), Some((10, 20)));
+        assert_eq!((r.width, r.height), (20, 5));
+        assert_eq!(r.x, 10 + (80 - 20) / 2);
+    }
+
+    #[test]
+    fn test_fit_without_dimensions_uses_area() {
+        assert_eq!(fit_image_rect(INNER, None, Some((10, 20))), INNER);
+        assert_eq!(fit_image_rect(INNER, Some((10, 10)), None), INNER);
     }
 }

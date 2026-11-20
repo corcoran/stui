@@ -11,7 +11,7 @@
 //! - navigation: Navigation selection calculations
 //! - path: Path mapping and translation utilities
 //! - performance: Batching and performance optimizations
-//! - platform: Cross-platform path helpers
+//! - platform: Terminal detection for image previews
 //! - search: Search query matching and filtering
 //! - sorting: Comparison functions for sorting browse items
 //! - sync_states: Sync state priority and transitions

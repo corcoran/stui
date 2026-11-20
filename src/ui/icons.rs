@@ -222,9 +222,9 @@ impl IconRenderer {
     fn status_icon(&self, status: StatusType) -> Span<'static> {
         let (emoji_icon, nerd_icon, color) = match status {
             StatusType::Synced => ("✅ ", "\u{F00C} ", self.theme.synced_color),
-            StatusType::OutOfSync => ("⚠️ ", "\u{F071} ", self.theme.out_of_sync_color),
+            StatusType::OutOfSync => ("❗ ", "\u{F071} ", self.theme.out_of_sync_color),
             StatusType::LocalOnly => ("💻 ", "\u{F109} ", self.theme.local_only_color),
-            StatusType::RemoteOnly => ("☁️ ", "\u{F0C2} ", self.theme.remote_only_color),
+            StatusType::RemoteOnly => ("⛅ ", "\u{F0C2} ", self.theme.remote_only_color),
             StatusType::Ignored => ("🚫 ", "\u{F05E} ", self.theme.ignored_color),
             StatusType::Syncing => ("🔄 ", "\u{F021} ", self.theme.syncing_color),
             StatusType::Scanning => ("🔍 ", "\u{F002} ", self.theme.scanning_color),
@@ -241,6 +241,15 @@ impl IconRenderer {
         Span::styled(icon, Style::default().fg(color))
     }
 
+    /// Warning icon for notes in the file preview (e.g. binary files). Matches
+    /// the out-of-sync icon of the current mode.
+    pub fn render_warning(&self) -> &'static str {
+        match self.mode {
+            IconMode::Emoji => "❗",
+            IconMode::NerdFont => "\u{F071}",
+        }
+    }
+
     /// Render clock icon for activity status
     pub fn render_clock(&self) -> &'static str {
         match self.mode {
@@ -255,5 +264,26 @@ impl IconRenderer {
             IconMode::Emoji => "📡",
             IconMode::NerdFont => "\u{F6FF}", // network-wired icon
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================
+    // WARNING ICON
+    // ========================================
+
+    #[test]
+    fn test_render_warning_emoji_mode() {
+        let r = IconRenderer::new(IconMode::Emoji, IconTheme::default());
+        assert_eq!(r.render_warning(), "❗");
+    }
+
+    #[test]
+    fn test_render_warning_nerdfont_mode() {
+        let r = IconRenderer::new(IconMode::NerdFont, IconTheme::default());
+        assert_eq!(r.render_warning(), "\u{F071}");
     }
 }

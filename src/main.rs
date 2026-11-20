@@ -482,8 +482,22 @@ impl App {
             // Apply protocol from config
             match config.image_protocol.to_lowercase().as_str() {
                 "auto" => {
-                    // Protocol already auto-detected by from_query_stdio()
-                    log_debug("Image preview: Auto-detected protocol");
+                    if let Some(proto) =
+                        logic::platform::protocol_override(picker.protocol_type(), |name| {
+                            std::env::var(name).ok()
+                        })
+                    {
+                        picker.set_protocol_type(proto);
+                        log_debug(&format!(
+                            "Image preview: Using {:?} protocol (Konsole or kitty)",
+                            proto
+                        ));
+                    } else {
+                        log_debug(&format!(
+                            "Image preview: Auto-detected {:?}",
+                            picker.protocol_type()
+                        ));
+                    }
                 }
                 "iterm2" => {
                     picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);

@@ -98,10 +98,15 @@ folder_synced() {
 SESSION_DIR="$RUN/session"
 KITTY_SOCK="$SESSION_DIR/kitty.sock"
 
-# Env for commands aimed at the headless sway, never the host desktop.
+# Env for commands aimed at the headless sway, never the host desktop. Terminal
+# identity vars from the host terminal are dropped too: ratatui-image picks the
+# image protocol from them (KONSOLE_VERSION disables kitty graphics detection).
 _session_env() {
     SESSION_ENV=(-u DISPLAY -u NIRI_SOCKET -u SWAYSOCK -u KITTY_WINDOW_ID -u KITTY_PID
-        -u KITTY_LISTEN_ON -u KITTY_PUBLIC_KEY XDG_RUNTIME_DIR="$SESSION_DIR"
+        -u KITTY_LISTEN_ON -u KITTY_PUBLIC_KEY -u KONSOLE_VERSION -u KONSOLE_DBUS_SERVICE
+        -u KONSOLE_DBUS_SESSION -u KONSOLE_DBUS_WINDOW -u KONSOLE_DBUS_ACTIVATION_COOKIE
+        -u WEZTERM_EXECUTABLE -u WEZTERM_PANE -u TERM_PROGRAM -u TERM_PROGRAM_VERSION
+        -u ITERM_SESSION_ID -u TMUX -u TMUX_PANE XDG_RUNTIME_DIR="$SESSION_DIR"
         WAYLAND_DISPLAY="$(cat "$SESSION_DIR/display")")
 }
 in_session() { _session_env; env "${SESSION_ENV[@]}" "$@"; }

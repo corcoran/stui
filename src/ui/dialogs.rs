@@ -474,7 +474,7 @@ fn render_metadata_column(
 
     if state.is_binary {
         lines.push(Line::from(Span::styled(
-            "⚠️  Binary file",
+            format!("{} Binary file", icon_renderer.render_warning()),
             Style::default().fg(Color::Magenta),
         )));
     }
@@ -543,52 +543,11 @@ fn render_preview_column(
                             vertical: 1,
                         });
 
-                        let render_rect = if let (Some((img_w, img_h)), Some((font_w, font_h))) =
-                            (metadata.dimensions, image_font_size)
-                        {
-                            // Calculate how many cells the image needs (protocol's "desired" size)
-                            let desired_width = ((img_w as f32) / (font_w as f32)).ceil() as u16;
-                            let desired_height = ((img_h as f32) / (font_h as f32)).ceil() as u16;
-
-                            // Fit desired size to available area (Resize::Fit logic)
-                            let (fit_width, fit_height) = if desired_width <= inner_area.width
-                                && desired_height <= inner_area.height
-                            {
-                                // Image fits - use desired size
-                                (desired_width, desired_height)
-                            } else {
-                                // Image doesn't fit - scale down maintaining aspect ratio
-                                let desired_aspect = desired_width as f32 / desired_height as f32;
-                                let area_aspect =
-                                    inner_area.width as f32 / inner_area.height as f32;
-
-                                if desired_aspect > area_aspect {
-                                    // Width constrained
-                                    let width = inner_area.width;
-                                    let height = (width as f32 / desired_aspect) as u16;
-                                    (width, height)
-                                } else {
-                                    // Height constrained
-                                    let height = inner_area.height;
-                                    let width = (height as f32 * desired_aspect) as u16;
-                                    (width, height)
-                                }
-                            };
-
-                            // Center the fitted rect
-                            let x_offset = (inner_area.width.saturating_sub(fit_width)) / 2;
-                            let y_offset = (inner_area.height.saturating_sub(fit_height)) / 2;
-
-                            Rect {
-                                x: inner_area.x + x_offset,
-                                y: inner_area.y + y_offset,
-                                width: fit_width,
-                                height: fit_height,
-                            }
-                        } else {
-                            // No dimensions or font_size - use full area
-                            inner_area
-                        };
+                        let render_rect = crate::logic::layout::fit_image_rect(
+                            inner_area,
+                            metadata.dimensions,
+                            image_font_size,
+                        );
 
                         // Adaptive filter for protocol's final resize
                         // Pre-downscale already handled most of the work, so we can use faster filters

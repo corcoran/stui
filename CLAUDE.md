@@ -374,9 +374,9 @@ See `src/api.rs:43` for `BrowseItem` struct definition.
 
 Display visual indicators for file/folder states following `<file|dir><status>` pattern:
 - `📄✅` / `📁✅` Synced
-- `📄☁️` / `📁☁️` Remote-only
+- `📄⛅` / `📁⛅` Remote-only
 - `📄💻` / `📁💻` Local-only
-- `📄⚠️` / `📁⚠️` Out-of-sync OR Ignored (exists on disk)
+- `📄❗` / `📁❗` Out-of-sync OR Ignored (exists on disk)
 - `📄⏸` / `📁⏸` Paused
 - `📄🚫` / `📁🚫` Ignored (deleted from disk)
 - `📄🔄` / `📁🔄` Syncing (actively downloading/uploading)

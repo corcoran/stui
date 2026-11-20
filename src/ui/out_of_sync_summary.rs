@@ -69,10 +69,10 @@ pub fn render_out_of_sync_summary(
                         status_parts.push(format!("💻 Local: {}", b.local_only));
                     }
                     if b.remote_only > 0 {
-                        status_parts.push(format!("☁️ Remote: {}", b.remote_only));
+                        status_parts.push(format!("⛅ Remote: {}", b.remote_only));
                     }
                     if b.modified > 0 {
-                        status_parts.push(format!("⚠️ Modified: {}", b.modified));
+                        status_parts.push(format!("❗ Modified: {}", b.modified));
                     }
 
                     lines.push(Line::from(Span::styled(

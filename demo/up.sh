@@ -39,7 +39,7 @@ api_key: "$LAPTOP_KEY"
 base_url: "$LAPTOP_URL"
 vim_mode: true
 icon_mode: "nerdfont"
-image_protocol: "kitty"
+image_protocol: "auto"
 path_map:
   "/data": "$RUN/laptop/data"
 EOT

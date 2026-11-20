@@ -29,3 +29,32 @@ pub mod toast;
 
 // Re-export main render function for convenience
 pub use render::render;
+
+#[cfg(test)]
+mod tests {
+    /// U+FE0F (emoji presentation) after a narrow symbol like ⚠ or ☁ makes Konsole
+    /// shift the previous row by one cell, breaking borders. Emoji icons must be
+    /// ones that are wide by default.
+    #[test]
+    fn test_ui_text_has_no_emoji_presentation_selector() {
+        let files = [
+            ("dialogs.rs", include_str!("dialogs.rs")),
+            (
+                "out_of_sync_summary.rs",
+                include_str!("out_of_sync_summary.rs"),
+            ),
+            ("icons.rs", include_str!("icons.rs")),
+        ];
+        for (name, src) in files {
+            for (n, line) in src.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                assert!(
+                    !code.contains('\u{FE0F}'),
+                    "{name}:{} contains U+FE0F: {}",
+                    n + 1,
+                    line.trim()
+                );
+            }
+        }
+    }
+}
