@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README
+
 ---
 
 ## [0.13.0] - 2026-11-20

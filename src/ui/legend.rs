@@ -85,6 +85,14 @@ fn build_hotkey_spans(
             ]);
         }
 
+        // While typing a search, `f` goes into the query
+        if !search_mode {
+            hotkey_spans.extend(vec![
+                Span::styled("f", Style::default().fg(Color::Yellow)),
+                Span::raw(":Filter  "),
+            ]);
+        }
+
         hotkey_spans.extend(vec![
             Span::styled("s", Style::default().fg(Color::Yellow)),
             Span::raw(":Sort  "),
@@ -232,6 +240,37 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    // ========================================
+    // OUT-OF-SYNC FILTER KEY
+    // ========================================
+
+    fn legend_text(focus_level: usize, search_mode: bool, has_search_query: bool) -> String {
+        spans_to_text(&build_hotkey_spans(
+            true,
+            focus_level,
+            false,
+            true,
+            search_mode,
+            has_search_query,
+        ))
+    }
+
+    #[test]
+    fn test_legend_shows_filter_in_breadcrumb_view() {
+        assert!(legend_text(1, false, false).contains("f:Filter"));
+        assert!(legend_text(1, false, true).contains("f:Filter"));
+    }
+
+    #[test]
+    fn test_legend_hides_filter_in_folder_view() {
+        assert!(!legend_text(0, false, false).contains("f:Filter"));
+    }
+
+    #[test]
+    fn test_legend_hides_filter_while_typing_search() {
+        assert!(!legend_text(1, true, false).contains("f:Filter"));
     }
 
     #[test]
