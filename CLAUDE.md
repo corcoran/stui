@@ -387,6 +387,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `?` or `Enter` (on files): Show detailed file info popup with metadata and preview:
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
   - **Markdown files**: Rendered (headings, lists, code blocks, links, tables); `r` toggles the raw source
+  - **Stepping**: `Shift+↑/↓` (or `K`/`J` in vim mode) previews the previous/next file, skipping directories
   - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors
   - **Image files**: Terminal rendering (Kitty/iTerm2/Sixel/Halfblocks), non-blocking load
   - **Binary files**: Extracted text or metadata

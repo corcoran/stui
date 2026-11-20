@@ -3298,4 +3298,210 @@ mod tests {
         assert!(app.model.ui.confirm_action.is_none());
         assert!(app.model.ui.file_info_popup.is_some());
     }
+
+    // ========================================
+    // FILE PREVIEW STEPPING
+    // ========================================
+
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    async fn press_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+        let key = crossterm::event::KeyEvent::new(code, modifiers);
+        crate::handlers::keyboard::handle_key(app, key)
+            .await
+            .unwrap();
+    }
+
+    /// Breadcrumb view of `items` with `items[idx]` selected and previewed, scrolled
+    /// and in raw view
+    fn preview_at(app: &mut App, items: Vec<BrowseItem>, idx: usize) {
+        let item = items[idx].clone();
+        view_folder_root(app, "media", items);
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(idx);
+        app.model.ui.file_info_popup = Some(crate::model::FileInfoPopupState {
+            folder_id: "media".to_string(),
+            file_path: item.name.clone(),
+            browse_item: item,
+            file_details: None,
+            file_content: Ok("text".to_string()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 7,
+            raw_view: true,
+        });
+    }
+
+    fn selected(app: &App) -> Option<usize> {
+        app.model.navigation.breadcrumb_trail[0].selected_index
+    }
+
+    fn create_vim_app() -> App {
+        let mut app = create_test_app();
+        app.model.ui.vim_mode = true;
+        app
+    }
+
+    fn three_files() -> Vec<BrowseItem> {
+        vec![file_item("a.txt"), file_item("b.md"), file_item("c.txt")]
+    }
+
+    #[tokio::test]
+    async fn test_vim_shift_j_previews_next_file() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 0);
+
+        press_with(&mut app, KeyCode::Char('J'), KeyModifiers::SHIFT).await;
+
+        assert_eq!(popup(&app).file_path, "b.md");
+        assert_eq!(popup(&app).browse_item.name, "b.md");
+        assert_eq!(popup(&app).scroll_offset, 0);
+        assert!(!popup(&app).raw_view);
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_vim_shift_k_previews_previous_file() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 2);
+
+        press_with(&mut app, KeyCode::Char('K'), KeyModifiers::SHIFT).await;
+
+        assert_eq!(popup(&app).file_path, "b.md");
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_vim_shifted_letters_without_shift_flag_still_step() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 0);
+
+        press(&mut app, KeyCode::Char('J')).await;
+        assert_eq!(popup(&app).file_path, "b.md");
+        press(&mut app, KeyCode::Char('K')).await;
+        assert_eq!(popup(&app).file_path, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn test_shift_arrows_step_between_files() {
+        let mut app = create_test_app();
+        preview_at(&mut app, three_files(), 1);
+
+        press_with(&mut app, KeyCode::Down, KeyModifiers::SHIFT).await;
+        assert_eq!(popup(&app).file_path, "c.txt");
+        assert_eq!(selected(&app), Some(2));
+
+        press_with(&mut app, KeyCode::Up, KeyModifiers::SHIFT).await;
+        press_with(&mut app, KeyCode::Up, KeyModifiers::SHIFT).await;
+        assert_eq!(popup(&app).file_path, "a.txt");
+        assert_eq!(selected(&app), Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_shift_jk_ignored_without_vim_mode() {
+        let mut app = create_test_app();
+        preview_at(&mut app, three_files(), 1);
+
+        press_with(&mut app, KeyCode::Char('J'), KeyModifiers::SHIFT).await;
+        press_with(&mut app, KeyCode::Char('K'), KeyModifiers::SHIFT).await;
+
+        assert_eq!(popup(&app).file_path, "b.md");
+        assert_eq!(popup(&app).scroll_offset, 7);
+        assert!(popup(&app).raw_view);
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_shift_arrows_step_in_vim_mode() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 1);
+
+        press_with(&mut app, KeyCode::Down, KeyModifiers::SHIFT).await;
+        assert_eq!(popup(&app).file_path, "c.txt");
+        press_with(&mut app, KeyCode::Up, KeyModifiers::SHIFT).await;
+        assert_eq!(popup(&app).file_path, "b.md");
+    }
+
+    #[tokio::test]
+    async fn test_plain_arrows_and_jk_still_scroll() {
+        let mut app = create_test_app();
+        preview_at(&mut app, three_files(), 1);
+
+        press(&mut app, KeyCode::Down).await;
+        press(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(popup(&app).scroll_offset, 9);
+        press(&mut app, KeyCode::Up).await;
+        press(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(popup(&app).scroll_offset, 7);
+        assert_eq!(popup(&app).file_path, "b.md");
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_stepping_skips_directories() {
+        let mut app = create_vim_app();
+        let items = vec![file_item("a.txt"), dir_item("photos"), file_item("z.txt")];
+        preview_at(&mut app, items, 0);
+
+        press(&mut app, KeyCode::Char('J')).await;
+
+        assert_eq!(popup(&app).file_path, "z.txt");
+        assert_eq!(selected(&app), Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_stepping_stops_at_last_and_first_file() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 2);
+
+        press(&mut app, KeyCode::Char('J')).await;
+        assert_eq!(popup(&app).file_path, "c.txt");
+        assert_eq!(popup(&app).scroll_offset, 7);
+        assert!(popup(&app).raw_view);
+        assert_eq!(selected(&app), Some(2));
+
+        preview_at(&mut app, vec![dir_item("photos"), file_item("a.txt")], 1);
+        press(&mut app, KeyCode::Char('K')).await;
+        assert_eq!(popup(&app).file_path, "a.txt");
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_stepping_keeps_directory_prefix() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 0);
+        app.model.navigation.breadcrumb_trail[0].prefix = Some("docs/".to_string());
+
+        press(&mut app, KeyCode::Char('J')).await;
+
+        assert_eq!(popup(&app).file_path, "docs/b.md");
+        assert_eq!(popup(&app).folder_id, "media");
+    }
+
+    #[tokio::test]
+    async fn test_stepping_follows_filtered_order() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 0);
+        app.model.navigation.breadcrumb_trail[0].filtered_items =
+            Some(vec![file_item("a.txt"), file_item("c.txt")]);
+
+        press(&mut app, KeyCode::Char('J')).await;
+
+        assert_eq!(popup(&app).file_path, "c.txt");
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_stepping_resets_gg_sequence() {
+        let mut app = create_vim_app();
+        preview_at(&mut app, three_files(), 0);
+
+        press(&mut app, KeyCode::Char('g')).await;
+        press(&mut app, KeyCode::Char('J')).await;
+
+        assert_eq!(
+            app.model.ui.vim_command_state,
+            crate::model::VimCommandState::None
+        );
+    }
 }

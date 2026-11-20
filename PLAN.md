@@ -8,7 +8,6 @@
 
 **High Priority:**
 - Syncthing log viewer
-- In the file preview popup, a key to switch the preview to the next/previous file in the current directory. Up/down and `j`/`k` scroll text, and PgUp/PgDn already page through text previews too, so ←/→ (`h`/`l` in vim mode) may be the free pair
 
 **Medium Priority:**
 - Set the terminal title (OSC 2) to the current context: folder, directory path, or the file being previewed. Restore the previous title on exit

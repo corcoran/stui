@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ✨ New Features
 
 - **Markdown preview**: `.md` files render in the preview with headings, emphasis, lists, quotes, code blocks, links and tables. Press `r` to switch to the raw source
+- **Step through files in the preview**: `Shift+↑`/`Shift+↓` (or `K`/`J` in vim mode) preview the previous or next file in the directory without closing the popup. Directories are skipped, and the list selection follows
 
 ### 🐛 Bug Fixes
 

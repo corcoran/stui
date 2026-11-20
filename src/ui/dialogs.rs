@@ -238,6 +238,7 @@ pub fn render_folder_type_selection(
 }
 
 /// Render the file information popup with metadata and preview
+#[allow(clippy::too_many_arguments)]
 pub fn render_file_info(
     f: &mut Frame,
     state: &mut FileInfoPopupState,
@@ -246,6 +247,7 @@ pub fn render_file_info(
     icon_renderer: &IconRenderer,
     image_font_size: Option<(u16, u16)>,
     image_state_map: &mut std::collections::HashMap<String, crate::ImagePreviewState>,
+    vim_mode: bool,
 ) {
     // Calculate centered area (90% width, 90% height)
     let area = f.area();
@@ -283,12 +285,14 @@ pub fn render_file_info(
         my_device_id,
         icon_renderer,
         image_state_map,
+        vim_mode,
     );
 
     // Render preview column
     render_preview_column(f, columns[1], state, image_font_size, image_state_map);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_metadata_column(
     f: &mut Frame,
     area: Rect,
@@ -297,6 +301,7 @@ fn render_metadata_column(
     my_device_id: Option<&str>,
     icon_renderer: &IconRenderer,
     image_state_map: &mut std::collections::HashMap<String, crate::ImagePreviewState>,
+    vim_mode: bool,
 ) {
     let mut lines = vec![];
 
@@ -484,7 +489,12 @@ fn render_metadata_column(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title("Metadata"),
+                .title("Metadata")
+                .title_bottom(if vim_mode {
+                    "J/K: next/prev file"
+                } else {
+                    "Shift+↑↓: next/prev file"
+                }),
         )
         .style(Style::default().fg(Color::White))
         .wrap(Wrap { trim: false });
@@ -913,5 +923,56 @@ mod tests {
             "scrolling to the bottom must reach the last wrapped line: {:?}",
             rows
         );
+    }
+
+    // ========================================
+    // FILE STEPPING HINT
+    // ========================================
+
+    fn render_popup_rows(
+        state: &mut FileInfoPopupState,
+        vim_mode: bool,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
+        use crate::ui::icons::{IconMode, IconTheme};
+        let icons = IconRenderer::new(IconMode::Emoji, IconTheme::default());
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut images = std::collections::HashMap::new();
+        terminal
+            .draw(|f| render_file_info(f, state, &[], None, &icons, None, &mut images, vim_mode))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn shows(rows: &[String], text: &str) -> bool {
+        rows.iter().any(|r| r.contains(text))
+    }
+
+    #[test]
+    fn test_file_info_names_shift_arrows_without_vim_mode() {
+        let mut text = popup("notes.txt", "text", false);
+        let rows = render_popup_rows(&mut text, false, 120, 30);
+        assert!(shows(&rows, "Shift+↑↓: next/prev file"), "{:?}", rows);
+        assert!(!shows(&rows, "J/K"));
+
+        let mut image = popup("cat.jpg", "", false);
+        image.is_image = true;
+        let rows = render_popup_rows(&mut image, false, 120, 30);
+        assert!(shows(&rows, "Shift+↑↓: next/prev file"), "{:?}", rows);
+    }
+
+    #[test]
+    fn test_file_info_names_jk_in_vim_mode() {
+        let mut text = popup("notes.txt", "text", false);
+        let rows = render_popup_rows(&mut text, true, 120, 30);
+        assert!(shows(&rows, "J/K: next/prev file"), "{:?}", rows);
     }
 }

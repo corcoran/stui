@@ -169,6 +169,36 @@ impl App {
         });
     }
 
+    /// Moves the focused level's selection to the adjacent file in display order and
+    /// previews it. Returns false, changing nothing, when there is no file that way.
+    pub(crate) async fn preview_adjacent_file(&mut self, forward: bool) -> bool {
+        let Some(level) = self
+            .model
+            .navigation
+            .focus_level
+            .checked_sub(1)
+            .and_then(|i| self.model.navigation.breadcrumb_trail.get_mut(i))
+        else {
+            return false;
+        };
+        let Some(current) = level.selected_index else {
+            return false;
+        };
+        let Some(next) =
+            logic::navigation::adjacent_file_index(level.display_items(), current, forward)
+        else {
+            return false;
+        };
+
+        level.selected_index = Some(next);
+        let item = level.display_items()[next].clone();
+        let file_path = format!("{}{}", level.prefix.as_deref().unwrap_or(""), item.name);
+        let folder_id = level.folder_id.clone();
+        self.fetch_file_info_and_content(folder_id, file_path, item)
+            .await;
+        true
+    }
+
     fn is_image_file(path: &str) -> bool {
         logic::file::is_image_file(path)
     }

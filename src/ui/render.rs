@@ -373,6 +373,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             &app.icon_renderer,
             app.model.ui.image_font_size,
             &mut app.image_state_map,
+            app.model.ui.vim_mode,
         );
     }
 

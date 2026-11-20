@@ -121,6 +121,21 @@ pub fn find_item_index_by_name(items: &[crate::api::BrowseItem], name: &str) -> 
     items.iter().position(|item| item.name == name)
 }
 
+/// Index of the nearest file after `from` (or before it when `forward` is false),
+/// skipping directories. `None` when there is no such file.
+pub fn adjacent_file_index(
+    items: &[crate::api::BrowseItem],
+    from: usize,
+    forward: bool,
+) -> Option<usize> {
+    let is_file = |i: &usize| items[*i].item_type != "FILE_INFO_TYPE_DIRECTORY";
+    if forward {
+        (from.saturating_add(1)..items.len()).find(is_file)
+    } else {
+        (0..from.min(items.len())).rev().find(is_file)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +285,57 @@ mod find_item_tests {
         assert_eq!(find_item_index_by_name(&items, "File.txt"), Some(0));
         assert_eq!(find_item_index_by_name(&items, "file.txt"), Some(1));
         assert_eq!(find_item_index_by_name(&items, "FILE.TXT"), None);
+    }
+
+    // ========================================
+    // ADJACENT FILE
+    // ========================================
+
+    fn make_dir(name: &str) -> BrowseItem {
+        BrowseItem {
+            item_type: "FILE_INFO_TYPE_DIRECTORY".to_string(),
+            ..make_item(name)
+        }
+    }
+
+    #[test]
+    fn test_adjacent_file_next_and_previous() {
+        let items = vec![make_item("a"), make_item("b"), make_item("c")];
+        assert_eq!(adjacent_file_index(&items, 1, true), Some(2));
+        assert_eq!(adjacent_file_index(&items, 1, false), Some(0));
+    }
+
+    #[test]
+    fn test_adjacent_file_skips_directories() {
+        let items = vec![
+            make_item("a"),
+            make_dir("d1"),
+            make_dir("d2"),
+            make_item("b"),
+        ];
+        assert_eq!(adjacent_file_index(&items, 0, true), Some(3));
+        assert_eq!(adjacent_file_index(&items, 3, false), Some(0));
+    }
+
+    #[test]
+    fn test_adjacent_file_stops_at_ends() {
+        let items = vec![make_item("a"), make_item("b")];
+        assert_eq!(adjacent_file_index(&items, 1, true), None);
+        assert_eq!(adjacent_file_index(&items, 0, false), None);
+    }
+
+    #[test]
+    fn test_adjacent_file_none_when_only_directories_remain() {
+        let items = vec![make_dir("d0"), make_item("a"), make_dir("d1")];
+        assert_eq!(adjacent_file_index(&items, 1, true), None);
+        assert_eq!(adjacent_file_index(&items, 1, false), None);
+    }
+
+    #[test]
+    fn test_adjacent_file_out_of_range_start() {
+        let items = vec![make_item("a"), make_item("b")];
+        assert_eq!(adjacent_file_index(&items, 5, true), None);
+        assert_eq!(adjacent_file_index(&items, 5, false), Some(1));
+        assert_eq!(adjacent_file_index(&[], 0, true), None);
     }
 }

@@ -660,6 +660,20 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.model.ui.file_info_popup = None;
                 return Ok(());
             }
+            KeyCode::Char('J') | KeyCode::Char('K') | KeyCode::Down | KeyCode::Up
+                if match key.code {
+                    KeyCode::Char(_) => app.model.ui.vim_mode,
+                    _ => key.modifiers.contains(KeyModifiers::SHIFT),
+                } =>
+            {
+                let forward = matches!(key.code, KeyCode::Char('J') | KeyCode::Down);
+                let was_image = popup_state.is_image;
+                app.model.ui.vim_command_state = model::VimCommandState::None;
+                if app.preview_adjacent_file(forward).await && was_image {
+                    app.model.ui.sixel_cleanup_frames = 1;
+                }
+                return Ok(());
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 // Scroll down
                 popup_state.scroll_offset = popup_state.scroll_offset.saturating_add(1);
