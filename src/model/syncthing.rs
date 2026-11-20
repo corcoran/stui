@@ -138,6 +138,9 @@ pub struct SyncthingModel {
 
     /// Folder sequence of the latest /rest/db/localchanged request feeding `need_index`
     pub local_changed_requested: HashMap<String, u64>,
+
+    /// When the latest /rest/db/localchanged request failed; retried after the refresh interval
+    pub local_changed_failed_at: HashMap<String, Instant>,
 }
 
 impl SyncthingModel {
@@ -164,6 +167,7 @@ impl SyncthingModel {
             need_fetches: HashMap::new(),
             need_index: HashMap::new(),
             local_changed_requested: HashMap::new(),
+            local_changed_failed_at: HashMap::new(),
         }
     }
 

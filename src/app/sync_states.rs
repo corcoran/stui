@@ -50,7 +50,8 @@ impl App {
     }
 
     /// After a folder status arrives: refetch the need index and local changes when they are
-    /// stale, and drop the syncing set when nothing can be downloading.
+    /// stale, and drop the syncing set when nothing can be downloading. Folders with no open
+    /// breadcrumb level are only fetched while syncing; `ensure_need_index` covers opening them.
     ///
     /// `prev_state` is the folder's state before this status. `status` must already be stored
     /// in `folder_statuses`, or re-derived states would use the old one.
@@ -70,6 +71,13 @@ impl App {
             return;
         }
 
+        let folder_open = self
+            .model
+            .navigation
+            .breadcrumb_trail
+            .iter()
+            .any(|level| level.folder_id == folder_id);
+        let syncthing = &mut self.model.syncthing;
         let plan = logic::sync_states::need_fetch_plan(
             prev_state,
             &status.state,
@@ -77,11 +85,21 @@ impl App {
             status.sequence,
             Instant::now(),
         );
+        let wanted = logic::sync_states::need_index_wanted(folder_open, &status.state);
+        let fetch = plan.fetch && wanted;
         if plan.clear_syncing {
             syncthing.syncing_files.remove(folder_id);
         }
-        if plan.discard_pending
-            && !plan.fetch
+        if plan.fetch && !wanted {
+            // Stale and not worth fetching while closed: forget the outstanding request (late
+            // responses are dropped and nothing looks pending) and the need list, so opening
+            // the folder fetches afresh instead of deriving from a mid-sync list
+            syncthing.need_fetches.remove(folder_id);
+            if let Some(index) = syncthing.need_index.get_mut(folder_id) {
+                logic::sync_states::clear_index_need(index);
+            }
+        } else if plan.discard_pending
+            && !fetch
             && let Some(fetch) = syncthing.need_fetches.get_mut(folder_id)
         {
             fetch.floor = Instant::now();
@@ -99,23 +117,78 @@ impl App {
                 local_changes_cleared = !index.local_changed.is_empty();
                 logic::sync_states::set_index_local_changed(index, &[], sequence);
             }
-        } else if syncthing.local_changed_requested.get(folder_id) != Some(&sequence) {
-            syncthing
-                .local_changed_requested
-                .insert(folder_id.to_string(), sequence);
-            let _ = self
-                .api_tx
-                .send(services::api::ApiRequest::GetLocalChangedIndex {
-                    folder_id: folder_id.to_string(),
-                    sequence,
-                });
+        } else if folder_open {
+            self.request_local_changed_if_due(folder_id, sequence);
         }
 
-        if plan.fetch {
+        if fetch {
             self.request_folder_need(folder_id, sequence, plan.discard_pending);
         }
         if local_changes_cleared {
             self.refresh_derived_states(folder_id);
+        }
+    }
+
+    /// Request the folder's receive-only local changes for `sequence` unless already requested
+    /// or backing off after a failure.
+    pub(crate) fn request_local_changed_if_due(&mut self, folder_id: &str, sequence: u64) {
+        let syncthing = &mut self.model.syncthing;
+        if !logic::sync_states::local_changed_fetch_due(
+            syncthing.local_changed_requested.get(folder_id).copied(),
+            syncthing.local_changed_failed_at.get(folder_id).copied(),
+            sequence,
+            Instant::now(),
+        ) {
+            return;
+        }
+        syncthing.local_changed_failed_at.remove(folder_id);
+        syncthing
+            .local_changed_requested
+            .insert(folder_id.to_string(), sequence);
+        let _ = self
+            .api_tx
+            .send(services::api::ApiRequest::GetLocalChangedIndex {
+                folder_id: folder_id.to_string(),
+                sequence,
+            });
+    }
+
+    /// Periodic directory-state update from the main loop (throttled to every 2s). Covers
+    /// every open level, so parents of a changed directory catch up even when not focused.
+    pub(crate) fn tick_directory_states(&mut self) {
+        if self.last_directory_update.elapsed() < std::time::Duration::from_secs(2) {
+            return;
+        }
+        self.last_directory_update = Instant::now();
+        for idx in 0..self.model.navigation.breadcrumb_trail.len() {
+            self.update_directory_states(idx);
+        }
+    }
+
+    /// Drop memoized child states that a cache write or invalidation made stale: those of
+    /// `path`'s ancestor directories, or all of the folder's when `path` is None.
+    pub(crate) fn invalidate_dir_child_states(&mut self, folder_id: &str, path: Option<&str>) {
+        self.dir_child_states.retain(|(folder, dir_prefix), _| {
+            folder != folder_id || path.is_some_and(|p| !p.starts_with(dir_prefix.as_str()))
+        });
+    }
+
+    /// Fetch the previewed folder's need index once the folder-list selection has rested.
+    pub(crate) fn ensure_preview_need_index_if_idle(&mut self) {
+        if !self.model.performance.is_idle() {
+            return;
+        }
+        let Some(folder_id) = self.pending_preview_need.take() else {
+            return;
+        };
+        let still_previewed = self
+            .model
+            .navigation
+            .breadcrumb_trail
+            .first()
+            .is_some_and(|level| level.folder_id == folder_id);
+        if still_previewed {
+            self.ensure_need_index(&folder_id);
         }
     }
 
@@ -191,7 +264,13 @@ impl App {
     /// Set each directory's shown state on a level from its own state (`direct_states`): the
     /// derived state when the need index has one, else the aggregate of cached child states
     /// (visited directories), else its own state. Its own RemoteOnly or Ignored always wins.
+    ///
+    /// Child states are read from the cache at most once per `DIR_CHILD_STATES_TTL` per
+    /// directory; the derived and own-state paths are always immediate.
     pub(crate) fn update_directory_states(&mut self, level_idx: usize) {
+        let ttl = logic::sync_states::DIR_CHILD_STATES_TTL;
+        self.dir_child_states
+            .retain(|_, (read_at, _)| read_at.elapsed() < ttl);
         let Some(level) = self.model.navigation.breadcrumb_trail.get(level_idx) else {
             return;
         };
@@ -223,27 +302,26 @@ impl App {
             }
 
             let dir_prefix = format!("{}/", dir_path);
-            if let Ok(Some(children)) =
-                self.cache
-                    .get_browse_items(&level.folder_id, Some(&dir_prefix), folder_sequence)
-            {
-                let child_states: Vec<SyncState> = children
-                    .iter()
-                    .filter_map(|child| {
-                        let child_path = format!("{}{}", dir_prefix, child.name);
-                        self.cache
-                            .get_sync_state_unvalidated(&level.folder_id, &child_path)
-                            .ok()
-                            .flatten()
-                    })
-                    .collect();
-                // A child without a state could be anything, so the aggregate would be a guess
-                if child_states.len() == children.len() {
-                    let aggregate_state =
-                        logic::sync_states::aggregate_directory_state(own, &child_states);
-                    dir_states.insert(dir_name.clone(), aggregate_state);
-                    continue;
+            let key = (level.folder_id.clone(), dir_prefix);
+            let now = Instant::now();
+            let child_states = match self.dir_child_states.get(&key) {
+                Some((read_at, states))
+                    if now.saturating_duration_since(*read_at)
+                        < logic::sync_states::DIR_CHILD_STATES_TTL =>
+                {
+                    states.clone()
                 }
+                _ => {
+                    let states = self.cached_child_states(&key.0, &key.1, folder_sequence);
+                    self.dir_child_states.insert(key, (now, states.clone()));
+                    states
+                }
+            };
+            if let Some(child_states) = child_states {
+                let aggregate_state =
+                    logic::sync_states::aggregate_directory_state(own, &child_states);
+                dir_states.insert(dir_name.clone(), aggregate_state);
+                continue;
             }
             if let Some(own) = own {
                 dir_states.insert(dir_name.clone(), own);
@@ -262,6 +340,31 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Cached states of every child of `dir_prefix`, or None if the directory's listing isn't
+    /// cached or any child has no state (an aggregate would then be a guess).
+    fn cached_child_states(
+        &self,
+        folder_id: &str,
+        dir_prefix: &str,
+        folder_sequence: u64,
+    ) -> Option<Vec<SyncState>> {
+        let children = self
+            .cache
+            .get_browse_items(folder_id, Some(dir_prefix), folder_sequence)
+            .ok()
+            .flatten()?;
+        children
+            .iter()
+            .map(|child| {
+                let child_path = format!("{}{}", dir_prefix, child.name);
+                self.cache
+                    .get_sync_state_unvalidated(folder_id, &child_path)
+                    .ok()
+                    .flatten()
+            })
+            .collect()
     }
 
     pub(crate) fn batch_fetch_visible_sync_states(&mut self, max_concurrent: usize) {

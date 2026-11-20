@@ -105,8 +105,12 @@ pub enum ApiRequest {
     /// Get folder sync status
     GetFolderStatus { folder_id: String },
 
-    /// Trigger folder rescan (always high priority)
-    RescanFolder { folder_id: String },
+    /// Trigger folder rescan (always high priority). Empty `paths` scans the whole folder,
+    /// otherwise only those folder-relative paths.
+    RescanFolder {
+        folder_id: String,
+        paths: Vec<String>,
+    },
 
     /// Get system status (device info, uptime)
     GetSystemStatus,
@@ -425,8 +429,8 @@ impl ApiService {
                 ApiResponse::FolderStatusResult { folder_id, status }
             }
 
-            ApiRequest::RescanFolder { folder_id } => {
-                match client.rescan_folder(&folder_id).await {
+            ApiRequest::RescanFolder { folder_id, paths } => {
+                match client.rescan_paths(&folder_id, &paths).await {
                     Ok(()) => ApiResponse::RescanResult {
                         folder_id,
                         success: true,

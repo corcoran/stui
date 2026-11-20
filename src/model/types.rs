@@ -47,7 +47,9 @@ pub struct BreadcrumbLevel {
     /// Displayed states (FileInfo, cache, or derived from the need index)
     pub file_sync_states: HashMap<String, SyncState>,
     /// Directories' own states from FileInfo or the cache, never derived. Displayed directory
-    /// states are recomputed from these, so a derived state can't outlive the index behind it.
+    /// states are recomputed from these and the need index. When neither yields a state (no
+    /// FileInfo yet and nothing derivable), the previously shown state is kept, so a stale
+    /// derived state can persist until the directory's FileInfo arrives.
     pub direct_states: HashMap<String, SyncState>,
     pub ignored_exists: HashMap<String, bool>,
     pub translated_base_path: String,

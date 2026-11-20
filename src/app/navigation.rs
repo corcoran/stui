@@ -141,8 +141,12 @@ impl App {
             }];
 
             // Only change focus if not in preview mode
-            if !preview_only {
+            if preview_only {
+                // Arrow keys re-preview on every press; fetch once the selection rests
+                self.pending_preview_need = Some(folder.id.clone());
+            } else {
                 self.model.navigation.focus_level = 1;
+                self.pending_preview_need = None;
                 self.ensure_need_index(&folder.id);
             }
 
@@ -165,18 +169,22 @@ impl App {
         Ok(())
     }
 
-    /// Fetch the folder's need list (syncing set and need index) on entry, unless the index
-    /// is already current for the folder's sequence or such a fetch is outstanding
-    fn ensure_need_index(&mut self, folder_id: &str) {
+    /// Fetch the folder's need list (syncing set and need index) and local changes when it is
+    /// entered or previewed, unless the index is already current for the folder's sequence or
+    /// such a fetch is outstanding
+    pub(crate) fn ensure_need_index(&mut self, folder_id: &str) {
         let syncthing = &self.model.syncthing;
-        let Some(sequence) = syncthing
-            .folder_statuses
-            .get(folder_id)
-            .map(|status| status.sequence)
-        else {
+        let Some(status) = syncthing.folder_statuses.get(folder_id) else {
             self.request_folder_need(folder_id, 0, false);
             return;
         };
+        let sequence = status.sequence;
+        let has_local_changes = status.receive_only_total_items > 0;
+        let paused =
+            status.state == "paused" || syncthing.get_folder(folder_id).is_some_and(|f| f.paused);
+        if paused {
+            return;
+        }
         let index_current = syncthing
             .need_index
             .get(folder_id)
@@ -187,6 +195,9 @@ impl App {
             .is_some_and(|fetch| fetch.sequence == sequence && !fetch.failed);
         if !index_current && !fetch_pending {
             self.request_folder_need(folder_id, sequence, false);
+        }
+        if has_local_changes {
+            self.request_local_changed_if_due(folder_id, sequence);
         }
     }
 

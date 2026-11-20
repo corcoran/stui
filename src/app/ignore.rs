@@ -4,6 +4,7 @@
 //! - Toggle ignore state (add/remove patterns)
 //! - Ignore and delete (immediate action)
 
+use crate::logic::ignore::{ScanScope, scan_scope_for_pattern};
 use crate::{App, SyncState, log_debug, logic, model, services};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -103,6 +104,7 @@ impl App {
             if matching_patterns.len() == 1 {
                 // Only one pattern - remove it directly
                 let pattern_to_remove = &matching_patterns[0];
+                let scope = scan_scope_for_pattern(pattern_to_remove, &relative_path);
                 let updated_patterns: Vec<String> = patterns
                     .into_iter()
                     .filter(|p| p != pattern_to_remove)
@@ -117,7 +119,7 @@ impl App {
                 } else {
                     item_name.clone()
                 };
-                self.finish_unignore(&folder_id, file_path_for_api);
+                self.finish_unignore(&folder_id, file_path_for_api, scope);
                 return Ok(IgnoreToggle::Unignored(item_name));
             } else {
                 // Multiple patterns match - show selection menu
@@ -139,7 +141,7 @@ impl App {
             }
 
             let mut updated_patterns = patterns;
-            updated_patterns.insert(0, new_pattern);
+            updated_patterns.insert(0, new_pattern.clone());
 
             self.client
                 .set_ignore_patterns(&folder_id, updated_patterns)
@@ -167,12 +169,12 @@ impl App {
                         .save_sync_state(&folder_id, &relative_path, SyncState::Ignored, 0);
             }
 
-            // Trigger rescan in background
-            let client = self.client.clone();
-            let folder_id_clone = folder_id.clone();
-            tokio::spawn(async move {
-                let _ = client.rescan_folder(&folder_id_clone).await;
-            });
+            self.rescan_paths(
+                &folder_id,
+                scan_scope_for_pattern(&new_pattern, &relative_path)
+                    .subs()
+                    .to_vec(),
+            );
         }
 
         Ok(IgnoreToggle::Ignored)
@@ -180,11 +182,15 @@ impl App {
 
     /// Rescan after an unignore and refresh the item's state.
     ///
+    /// Saving ignore patterns makes Syncthing schedule a full scan of the folder itself, and
+    /// this folder's scans run one at a time. The scoped scan here queues behind that one, so
+    /// its completion marks the point where FileInfo reflects the change.
+    ///
     /// The item keeps its Ignored state and icon until a FileInfo response replaces them.
     /// `POST /rest/db/scan` returns once the scan has finished, so the first FileInfo
     /// reflects the new ignore patterns. The second one catches flags the puller updates
     /// after the scan (an unignored file that only exists remotely).
-    pub(crate) fn finish_unignore(&self, folder_id: &str, file_path: String) {
+    pub(crate) fn finish_unignore(&self, folder_id: &str, file_path: String, scope: ScanScope) {
         log_debug(&format!(
             "DEBUG [finish_unignore]: folder={} path={}",
             folder_id, file_path
@@ -197,7 +203,7 @@ impl App {
         tokio::spawn(async move {
             // Give Syncthing a moment to apply the new .stignore before scanning
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            let _ = client.rescan_folder(&folder_id).await;
+            let _ = client.rescan_paths(&folder_id, scope.subs()).await;
 
             let request = || services::api::ApiRequest::GetFileInfo {
                 folder_id: folder_id.clone(),
@@ -276,12 +282,12 @@ impl App {
                     self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
                 }
 
-                // Trigger rescan in background
-                let client = self.client.clone();
-                let folder_id_clone = folder_id.clone();
-                tokio::spawn(async move {
-                    let _ = client.rescan_folder(&folder_id_clone).await;
-                });
+                self.rescan_paths(
+                    &folder_id,
+                    scan_scope_for_pattern(&format!("/{}", relative_path), &relative_path)
+                        .subs()
+                        .to_vec(),
+                );
             }
             return Ok(());
         }
@@ -343,11 +349,12 @@ impl App {
                     pending_info.rescan_triggered = true;
                 }
 
-                // Trigger rescan in background
-                let client = self.client.clone();
-                tokio::spawn(async move {
-                    let _ = client.rescan_folder(&folder_id).await;
-                });
+                self.rescan_paths(
+                    &folder_id,
+                    scan_scope_for_pattern(&format!("/{}", relative_path), &relative_path)
+                        .subs()
+                        .to_vec(),
+                );
             }
             Err(e) => {
                 // Deletion failed - remove from pending immediately

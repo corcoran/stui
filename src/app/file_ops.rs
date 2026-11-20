@@ -45,11 +45,26 @@ impl App {
         ));
 
         // Trigger rescan via non-blocking API
-        let _ = self
-            .api_tx
-            .send(services::api::ApiRequest::RescanFolder { folder_id });
+        let _ = self.api_tx.send(services::api::ApiRequest::RescanFolder {
+            folder_id,
+            paths: Vec::new(),
+        });
 
         Ok(())
+    }
+
+    /// Fire-and-forget scan of only `paths` (folder-relative) via the API service. An empty
+    /// `paths` scans the whole folder. Callers that must wait for the scan to finish call
+    /// `SyncthingClient::rescan_paths` directly.
+    pub(crate) fn rescan_paths(&self, folder_id: &str, paths: Vec<String>) {
+        log_debug(&format!(
+            "DEBUG [rescan_paths]: folder={} paths={:?}",
+            folder_id, paths
+        ));
+        let _ = self.api_tx.send(services::api::ApiRequest::RescanFolder {
+            folder_id: folder_id.to_string(),
+            paths,
+        });
     }
 
     /// Force refresh a folder - invalidate cache immediately and trigger rescan
@@ -66,6 +81,7 @@ impl App {
         // Step 2: Trigger Syncthing rescan
         let _ = self.api_tx.send(services::api::ApiRequest::RescanFolder {
             folder_id: folder_id.to_string(),
+            paths: Vec::new(),
         });
 
         Ok(())

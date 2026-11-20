@@ -452,8 +452,14 @@ impl SyncthingClient {
         Ok(details)
     }
 
+    /// Full folder scan.
     pub async fn rescan_folder(&self, folder_id: &str) -> Result<()> {
-        let url = format!("{}/rest/db/scan?folder={}", self.base_url, folder_id);
+        self.rescan_paths(folder_id, &[]).await
+    }
+
+    /// Scan only `paths` (relative to the folder root). An empty slice scans the whole folder.
+    pub async fn rescan_paths(&self, folder_id: &str, paths: &[String]) -> Result<()> {
+        let url = scan_url(&self.base_url, folder_id, paths);
         self.client
             .post(&url)
             .header("X-API-Key", &self.api_key)
@@ -920,6 +926,16 @@ impl FileDetails {
     }
 }
 
+/// `POST /rest/db/scan` URL; one `sub` parameter per path, none for a full scan.
+pub(crate) fn scan_url(base_url: &str, folder_id: &str, subs: &[String]) -> String {
+    let mut url = format!("{}/rest/db/scan?folder={}", base_url, folder_id);
+    for sub in subs {
+        url.push_str("&sub=");
+        url.push_str(&urlencoding::encode(sub));
+    }
+    url
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1212,5 +1228,44 @@ mod tests {
 
         let device2 = connections.get("DEVICE456-DEF").unwrap();
         assert!(!device2.get("connected").unwrap().as_bool().unwrap());
+    }
+
+    // ========================================
+    // SCAN URL
+    // ========================================
+
+    #[test]
+    fn test_scan_url_without_subs_is_full_scan() {
+        let url = scan_url("http://h:8384", "docs", &[]);
+        assert_eq!(url, "http://h:8384/rest/db/scan?folder=docs");
+        assert!(!url.contains("sub="));
+    }
+
+    #[test]
+    fn test_scan_url_repeats_sub_per_path() {
+        let subs = vec!["notes/a.txt".to_string(), "other/dir".to_string()];
+        assert_eq!(
+            scan_url("http://h", "docs", &subs),
+            "http://h/rest/db/scan?folder=docs&sub=notes%2Fa.txt&sub=other%2Fdir"
+        );
+    }
+
+    #[test]
+    fn test_scan_url_encodes_special_characters() {
+        let subs = vec![
+            "my notes/a b.txt".to_string(),
+            "x#1&y=2".to_string(),
+            "caf\u{e9}/\u{65e5}\u{672c}".to_string(),
+        ];
+        let url = scan_url("http://h", "docs", &subs);
+        assert!(url.contains("&sub=my%20notes%2Fa%20b.txt"), "{}", url);
+        assert!(url.contains("&sub=x%231%26y%3D2"), "{}", url);
+        assert!(
+            url.contains("&sub=caf%C3%A9%2F%E6%97%A5%E6%9C%AC"),
+            "{}",
+            url
+        );
+        assert_eq!(url.matches('&').count(), 3, "only the separators: {}", url);
+        assert!(!url.contains('#'));
     }
 }

@@ -225,6 +225,10 @@ pub fn overlay_syncing_states<'a>(
     Cow::Owned(overlaid)
 }
 
+/// How long `update_directory_states` reuses a directory's child states read from the cache.
+/// The aggregate costs a cache query per child, and the function runs on every browse result.
+pub const DIR_CHILD_STATES_TTL: Duration = Duration::from_secs(2);
+
 /// Max FileInfo requests queued when a breadcrumb level opens.
 ///
 /// No frame height is known outside rendering, and a breadcrumb panel on a 60-row terminal
@@ -402,6 +406,15 @@ pub fn set_index_need(
     rebuild_descendants(index);
 }
 
+/// Forget the need part of `index`, as if it had never been fetched.
+pub fn clear_index_need(index: &mut NeedIndex) {
+    index.need.clear();
+    index.sequence = None;
+    index.complete = false;
+    index.requested_at = None;
+    rebuild_descendants(index);
+}
+
 /// Replace the local-changes part of `index`.
 pub fn set_index_local_changed(index: &mut NeedIndex, files: &[LocalChangedFile], sequence: u64) {
     index.local_changed = local_changed_states(files);
@@ -562,6 +575,26 @@ pub struct NeedFetchPlan {
     pub clear_syncing: bool,
     /// Drop responses to requests already sent (the folder left syncing)
     pub discard_pending: bool,
+}
+
+/// Whether a folder's need index is worth fetching: some breadcrumb level (preview included)
+/// shows it, or it is syncing (the syncing overlay comes from the same fetch).
+pub fn need_index_wanted(folder_open: bool, state: &str) -> bool {
+    folder_open || ACTIVE_SYNC_STATES.contains(&state)
+}
+
+/// Whether to request /rest/db/localchanged for `sequence`: not yet requested for it, and
+/// not within the refresh interval of a failure.
+pub fn local_changed_fetch_due(
+    requested: Option<u64>,
+    failed_at: Option<Instant>,
+    sequence: u64,
+    now: Instant,
+) -> bool {
+    match failed_at {
+        Some(at) => now.saturating_duration_since(at) >= SYNCING_FILES_REFRESH_INTERVAL,
+        None => requested != Some(sequence),
+    }
 }
 
 /// Whether a need response sent at `requested_at` should be applied.
@@ -1786,6 +1819,51 @@ mod derived_tests {
         assert!(!need_fetch_plan(Some("idle"), "idle", failed_fetch(recent, 1), 2, now).fetch);
         assert!(need_fetch_plan(Some("syncing"), "syncing", failed_fetch(stale, 1), 1, now).fetch);
         assert!(need_fetch_plan(Some("idle"), "idle", failed_fetch(stale, 1), 1, now).fetch);
+    }
+
+    #[test]
+    fn test_clear_index_need_forgets_need_part_only() {
+        let mut index = documents_index(3);
+        set_index_need(
+            &mut index,
+            &need(&[], &["d/q.mkv"], &[]),
+            3,
+            true,
+            Some(vec![]),
+        );
+        clear_index_need(&mut index);
+        let st = status("idle", 3, 0, 3);
+        assert_eq!(
+            derived_state("d/q.mkv", false, &ctx(&index, &st), None),
+            None
+        );
+        assert_eq!(derived_state("d", true, &ctx(&index, &st), None), None);
+        assert_eq!(
+            derived_state("manuals", true, &ctx(&index, &st), None),
+            Some(SyncState::RemoteOnly)
+        );
+    }
+
+    #[test]
+    fn test_need_index_wanted_when_open_or_syncing() {
+        assert!(need_index_wanted(true, "idle"));
+        assert!(need_index_wanted(false, "syncing"));
+        assert!(need_index_wanted(false, "sync-preparing"));
+        assert!(!need_index_wanted(false, "idle"));
+        assert!(!need_index_wanted(false, "scanning"));
+    }
+
+    #[test]
+    fn test_local_changed_fetch_due_rules() {
+        let now = Instant::now();
+        let recent = now - Duration::from_secs(2);
+        let stale = now - SYNCING_FILES_REFRESH_INTERVAL - Duration::from_secs(1);
+        assert!(local_changed_fetch_due(None, None, 1, now));
+        assert!(!local_changed_fetch_due(Some(1), None, 1, now));
+        assert!(local_changed_fetch_due(Some(1), None, 2, now));
+        assert!(!local_changed_fetch_due(Some(1), Some(recent), 1, now));
+        assert!(!local_changed_fetch_due(Some(1), Some(recent), 2, now));
+        assert!(local_changed_fetch_due(Some(1), Some(stale), 1, now));
     }
 
     #[test]

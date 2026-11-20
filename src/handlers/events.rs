@@ -297,6 +297,8 @@ mod tests {
             last_system_status_update: std::time::Instant::now(),
             last_connection_stats_fetch: std::time::Instant::now(),
             last_directory_update: std::time::Instant::now(),
+            dir_child_states: HashMap::new(),
+            pending_preview_need: None,
             last_db_flush: std::time::Instant::now(),
             last_reconnect_attempt: std::time::Instant::now(),
             reconnect_delay: Duration::from_secs(1),
@@ -758,9 +760,7 @@ mod tests {
     fn test_folder_status_into_syncing_requests_syncing_files() {
         let (mut app, mut rx) = create_test_app_with_api_rx();
 
-        handle_api_response(&mut app, status_result("media", "idle"));
-        // The first poll fetches the need index
-        assert_eq!(syncing_files_requests(&mut rx), vec!["media".to_string()]);
+        // Not open anywhere: idle polls fetch nothing
         handle_api_response(&mut app, status_result("media", "idle"));
         assert!(syncing_files_requests(&mut rx).is_empty());
 
@@ -919,6 +919,14 @@ mod tests {
             },
             SyncState::RemoteOnly => FileDetails {
                 local: None,
+                global: Some(synced()),
+                availability: vec![],
+            },
+            SyncState::Ignored => FileDetails {
+                local: Some(FileInfo {
+                    ignored: true,
+                    ..synced()
+                }),
                 global: Some(synced()),
                 availability: vec![],
             },
@@ -1430,6 +1438,7 @@ mod tests {
     #[test]
     fn test_receive_only_status_requests_local_changes_once_per_sequence() {
         let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_unloaded_root(&mut app, "docs", vec![dir_item("manuals")]);
         let mut status = folder_status("idle");
         status.receive_only_total_items = 3;
         status.sequence = 4;
@@ -1659,23 +1668,312 @@ mod tests {
     }
 
     // ========================================
+    // INDEX FETCH SCOPE AND BACK-OFF
+    // ========================================
+
+    fn ro_status_result(folder: &str, sequence: u64, ro_total: u64) -> ApiResponse {
+        let mut status = folder_status("idle");
+        status.sequence = sequence;
+        status.receive_only_total_items = ro_total;
+        ApiResponse::FolderStatusResult {
+            folder_id: folder.to_string(),
+            status: Ok(status),
+        }
+    }
+
+    #[test]
+    fn test_idle_folder_without_open_level_gets_no_index_fetches() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_unloaded_root(&mut app, "media", vec![file_item("a.mkv")]);
+
+        handle_api_response(&mut app, ro_status_result("docs", 1, 3));
+        handle_api_response(&mut app, ro_status_result("docs", 2, 3));
+
+        let requests: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            !requests.iter().any(|r| matches!(
+                r,
+                crate::services::api::ApiRequest::GetFolderNeed { .. }
+                    | crate::services::api::ApiRequest::GetLocalChangedIndex { .. }
+            )),
+            "unopened idle folder must not be indexed: {requests:?}"
+        );
+    }
+
+    #[test]
+    fn test_previewed_idle_folder_gets_need_fetch_on_status_poll() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_unloaded_root(&mut app, "media", vec![file_item("a.mkv")]);
+        app.model.navigation.focus_level = 0;
+
+        handle_api_response(&mut app, status_result("media", "idle"));
+
+        assert_eq!(syncing_files_requests(&mut rx), vec!["media".to_string()]);
+    }
+
+    #[test]
+    fn test_syncing_folder_without_open_level_gets_need_fetch() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+
+        handle_api_response(&mut app, status_result("media", "syncing"));
+
+        assert_eq!(syncing_files_requests(&mut rx), vec!["media".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_preview_load_requests_need_index() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.model.syncthing.folders = vec![media_folder()];
+        app.model.navigation.folders_state_selection = Some(0);
+        app.cache
+            .save_browse_items("media", None, &[file_item("a.mkv")], 0)
+            .unwrap();
+
+        app.load_root_level(true).await.unwrap();
+        app.model.performance.last_user_action = std::time::Instant::now() - Duration::from_secs(1);
+        app.ensure_preview_need_index_if_idle();
+
+        assert_eq!(syncing_files_requests(&mut rx), vec!["media".to_string()]);
+    }
+
+    #[test]
+    fn test_failed_local_changed_fetch_backs_off_before_retrying() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_unloaded_root(&mut app, "docs", vec![dir_item("manuals")]);
+        handle_api_response(&mut app, ro_status_result("docs", 4, 3));
+        assert_eq!(
+            local_changed_index_requests(&mut rx),
+            vec![("docs".to_string(), 4)]
+        );
+        handle_api_response(
+            &mut app,
+            ApiResponse::LocalChangedIndex {
+                folder_id: "docs".to_string(),
+                sequence: 4,
+                files: Err(anyhow::anyhow!("timeout")),
+            },
+        );
+
+        handle_api_response(&mut app, ro_status_result("docs", 4, 3));
+        assert!(local_changed_index_requests(&mut rx).is_empty());
+
+        app.model.syncthing.local_changed_failed_at.insert(
+            "docs".to_string(),
+            std::time::Instant::now()
+                - crate::logic::sync_states::SYNCING_FILES_REFRESH_INTERVAL
+                - Duration::from_secs(1),
+        );
+        handle_api_response(&mut app, ro_status_result("docs", 4, 3));
+        assert_eq!(
+            local_changed_index_requests(&mut rx),
+            vec![("docs".to_string(), 4)]
+        );
+    }
+
+    // ========================================
+    // DIRECTORY CHILD AGGREGATE (cache queries)
+    // ========================================
+
+    /// Media root with an unvisited-by-index dir "sub" whose one child is cached as `child`
+    fn root_with_cached_child(child: SyncState) -> App {
+        let mut app = create_test_app();
+        view_unloaded_root(&mut app, "media", vec![dir_item("sub")]);
+        app.cache
+            .save_browse_items("media", Some("sub/"), &[file_item("a.mkv")], 0)
+            .unwrap();
+        app.cache
+            .save_sync_state("media", "sub/a.mkv", child, 1)
+            .unwrap();
+        app
+    }
+
+    #[test]
+    fn test_dir_child_aggregate_reuses_cache_queries_within_interval() {
+        let mut app = root_with_cached_child(SyncState::RemoteOnly);
+        app.update_directory_states(0);
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::RemoteOnly));
+
+        app.cache
+            .save_sync_state("media", "sub/a.mkv", SyncState::Synced, 2)
+            .unwrap();
+        // A cache write that bypasses the app's write paths isn't seen until the memo expires
+        app.update_directory_states(0);
+        assert_eq!(
+            root_state(&app, "sub"),
+            Some(SyncState::RemoteOnly),
+            "children are re-queried at most once per interval"
+        );
+
+        for (at, _) in app.dir_child_states.values_mut() {
+            *at -= crate::logic::sync_states::DIR_CHILD_STATES_TTL + Duration::from_millis(1);
+        }
+        app.update_directory_states(0);
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_derived_dir_state_applies_immediately_after_aggregate_run() {
+        let mut app = root_with_cached_child(SyncState::Synced);
+        app.update_directory_states(0);
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::Synced));
+
+        set_status(&mut app, "media", "syncing", 0);
+        let at = mark_fetched(&mut app, "media");
+        handle_api_response(&mut app, need_result("media", at, &[], &["sub/b.mkv"]));
+
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::RemoteOnly));
+    }
+
+    // ========================================
+    // REVIEW REGRESSIONS (closed folders, memo, preview)
+    // ========================================
+
+    #[test]
+    fn test_folder_leaving_syncing_while_closed_gets_fetch_when_opened() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        handle_api_response(&mut app, status_result("media", "syncing"));
+        let pending = app.model.syncthing.need_fetches["media"].at;
+        handle_api_response(&mut app, status_result("media", "idle"));
+        handle_api_response(&mut app, need_result("media", pending, &[], &["a.mkv"]));
+        let _ = syncing_files_requests(&mut rx);
+
+        view_unloaded_root(&mut app, "media", vec![file_item("a.mkv")]);
+        app.ensure_need_index("media");
+
+        assert_eq!(syncing_files_requests(&mut rx), vec!["media".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_open_after_skipped_refetch_shows_no_stale_remote_only() {
+        let mut app = create_test_app();
+        app.model.syncthing.folders = vec![media_folder()];
+        app.model.navigation.folders_state_selection = Some(0);
+        app.cache
+            .save_browse_items("media", None, &[file_item("a.mkv")], 0)
+            .unwrap();
+        // Mid-sync index fetched while the folder is closed
+        handle_api_response(&mut app, status_result("media", "syncing"));
+        let mid_sync = app.model.syncthing.need_fetches["media"].at;
+        handle_api_response(&mut app, need_result("media", mid_sync, &[], &["a.mkv"]));
+        // Sync finishes while closed: the refetch is skipped
+        handle_api_response(&mut app, status_result("media", "idle"));
+
+        app.enter_folder("media").await.unwrap();
+        assert_ne!(root_state(&app, "a.mkv"), Some(SyncState::RemoteOnly));
+
+        let fresh = app.model.syncthing.need_fetches["media"].at;
+        handle_api_response(&mut app, need_result("media", fresh, &[], &[]));
+        assert_eq!(root_state(&app, "a.mkv"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_ignore_inside_subdir_updates_parent_level_dir_on_next_tick() {
+        let mut app = root_with_cached_child(SyncState::RemoteOnly);
+        app.model.navigation.breadcrumb_trail.push(sub_level(
+            "media",
+            "sub/",
+            vec![file_item("a.mkv")],
+        ));
+        app.model.navigation.focus_level = 2;
+        app.update_directory_states(0);
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::RemoteOnly));
+
+        handle_api_response(
+            &mut app,
+            file_info_result("media", "sub/a.mkv", SyncState::Ignored),
+        );
+        app.flush_pending_db_writes();
+        app.last_directory_update = std::time::Instant::now() - Duration::from_secs(3);
+        app.tick_directory_states();
+
+        assert_eq!(root_state(&app, "sub"), Some(SyncState::Synced));
+    }
+
+    #[tokio::test]
+    async fn test_rapid_preview_changes_defer_need_fetch_until_rest() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        let mut docs = media_folder();
+        docs.id = "docs".to_string();
+        app.model.syncthing.folders = vec![media_folder(), docs];
+        for folder in ["media", "docs"] {
+            app.cache
+                .save_browse_items(folder, None, &[file_item("a.mkv")], 0)
+                .unwrap();
+        }
+
+        app.model.navigation.folders_state_selection = Some(0);
+        app.load_root_level(true).await.unwrap();
+        app.model.navigation.folders_state_selection = Some(1);
+        app.load_root_level(true).await.unwrap();
+        app.model.performance.last_user_action = std::time::Instant::now();
+        app.ensure_preview_need_index_if_idle();
+        assert!(syncing_files_requests(&mut rx).is_empty());
+
+        app.model.performance.last_user_action = std::time::Instant::now() - Duration::from_secs(1);
+        app.ensure_preview_need_index_if_idle();
+        assert_eq!(syncing_files_requests(&mut rx), vec!["docs".to_string()]);
+    }
+
+    #[test]
+    fn test_late_local_changed_failure_for_old_sequence_does_not_back_off() {
+        let mut app = create_test_app();
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("docs".to_string(), 5);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::LocalChangedIndex {
+                folder_id: "docs".to_string(),
+                sequence: 4,
+                files: Err(anyhow::anyhow!("timeout")),
+            },
+        );
+
+        assert!(
+            !app.model
+                .syncthing
+                .local_changed_failed_at
+                .contains_key("docs")
+        );
+    }
+
+    // ========================================
     // UNIGNORE
     // ========================================
 
     /// Minimal Syncthing stand-in: GET returns `ignore_patterns`, anything else returns 200.
     async fn spawn_ignore_stub(ignore_patterns: &[&str]) -> String {
+        spawn_recording_stub(ignore_patterns).await.0
+    }
+
+    type RequestLog = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// Like `spawn_ignore_stub`, also recording each request line (`POST /rest/db/scan?... HTTP/1.1`)
+    async fn spawn_recording_stub(ignore_patterns: &[&str]) -> (String, RequestLog) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let body = serde_json::json!({ "ignore": ignore_patterns }).to_string();
+        let log: RequestLog = Default::default();
+        let log_for_task = log.clone();
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
                 let body = body.clone();
+                let log = log_for_task.clone();
                 tokio::spawn(async move {
                     let mut buf = vec![0u8; 8192];
                     let n = sock.read(&mut buf).await.unwrap_or(0);
-                    let is_get = buf[..n].starts_with(b"GET ");
-                    let payload = if is_get { body.as_str() } else { "" };
+                    let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                    log.lock()
+                        .unwrap()
+                        .push(request.lines().next().unwrap_or("").to_string());
+                    let payload = if request.starts_with("GET ") {
+                        body.as_str()
+                    } else {
+                        ""
+                    };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1686,7 +1984,88 @@ mod tests {
                 });
             }
         });
-        format!("http://{}", addr)
+        (format!("http://{}", addr), log)
+    }
+
+    /// Query string of the first scan request seen, e.g. `folder=media&sub=a.mkv`
+    async fn next_scan_query(log: &RequestLog) -> String {
+        tokio::time::timeout(std::time::Duration::from_millis(2500), async {
+            loop {
+                let found = log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|l| l.starts_with("POST /rest/db/scan?"))
+                    .cloned();
+                if let Some(line) = found {
+                    let query = line.split_once('?').unwrap().1;
+                    return query.trim_end_matches(" HTTP/1.1").to_string();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a scan request should reach the server")
+    }
+
+    async fn app_viewing_item(
+        ignore_patterns: &[&str],
+        state: SyncState,
+        prefix: Option<&str>,
+        base_path: &str,
+    ) -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+        RequestLog,
+    ) {
+        let (mut app, rx) = create_test_app_with_api_rx();
+        let (base_url, log) = spawn_recording_stub(ignore_patterns).await;
+        app.client = crate::SyncthingClient::new(base_url, "k".to_string());
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+        let level = &mut app.model.navigation.breadcrumb_trail[0];
+        level.prefix = prefix.map(str::to_string);
+        level.translated_base_path = base_path.to_string();
+        level.file_sync_states.insert("a.mkv".to_string(), state);
+        (app, rx, log)
+    }
+
+    /// Temp directory removed on drop, so a failing assertion doesn't leak it
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn with_file(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "stui-scan-test-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(name), b"x").unwrap();
+            TempDir(dir)
+        }
+
+        fn path_str(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// (folder_id, paths) of every queued RescanFolder request
+    fn queued_rescans(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
+    ) -> Vec<(String, Vec<String>)> {
+        let mut rescans = Vec::new();
+        while let Ok(req) = rx.try_recv() {
+            if let crate::services::api::ApiRequest::RescanFolder { folder_id, paths } = req {
+                rescans.push((folder_id, paths));
+            }
+        }
+        rescans
     }
 
     async fn app_viewing_ignored_item(
@@ -1782,6 +2161,153 @@ mod tests {
         assert_eq!(
             file_info_requests_with_priority(&mut rx),
             vec![("a.mkv".to_string(), crate::services::api::Priority::Medium)]
+        );
+    }
+
+    // ========================================
+    // SCOPED RESCANS
+    // ========================================
+
+    #[tokio::test]
+    async fn test_ignore_key_scans_only_the_item() {
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ignore_key_in_subdirectory_scans_the_folder_relative_path() {
+        let (mut app, mut rx, _log) = app_viewing_item(
+            &[],
+            SyncState::Synced,
+            Some("my notes/"),
+            "/nonexistent/media/my notes",
+        )
+        .await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["my notes/a.mkv".to_string()])]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unignore_key_scans_only_the_item() {
+        let (mut app, _rx, log) =
+            app_viewing_item(&["/a.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(next_scan_query(&log).await, "folder=media&sub=a.mkv");
+    }
+
+    #[tokio::test]
+    async fn test_unignore_with_glob_pattern_scans_everything() {
+        let (mut app, _rx, log) =
+            app_viewing_item(&["/*.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(next_scan_query(&log).await, "folder=media");
+    }
+
+    #[tokio::test]
+    async fn test_pattern_menu_literal_pattern_scans_only_the_item() {
+        let (mut app, _rx, log) = app_viewing_item(
+            &["/a.mkv", "/*.mkv"],
+            SyncState::Ignored,
+            None,
+            "/nonexistent/media",
+        )
+        .await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        assert_eq!(next_scan_query(&log).await, "folder=media&sub=a.mkv");
+    }
+
+    #[tokio::test]
+    async fn test_pattern_menu_glob_pattern_scans_everything() {
+        let (mut app, _rx, log) = app_viewing_item(
+            &["/a.mkv", "/*.mkv"],
+            SyncState::Ignored,
+            None,
+            "/nonexistent/media",
+        )
+        .await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        press(&mut app, crossterm::event::KeyCode::Down).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        assert_eq!(next_scan_query(&log).await, "folder=media");
+    }
+
+    #[tokio::test]
+    async fn test_ignore_and_delete_scans_only_the_deleted_path() {
+        let dir = TempDir::with_file("a.mkv");
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, dir.path_str()).await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('I')).await;
+
+        assert!(!dir.0.join("a.mkv").exists());
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_requests_scan_of_the_deleted_path() {
+        let dir = TempDir::with_file("a.mkv");
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, dir.path_str()).await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('d')).await;
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        assert!(!dir.0.join("a.mkv").exists());
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rescan_key_requests_full_scan() {
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), Vec::<String>::new())]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_force_refresh_requests_full_scan() {
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        press(&mut app, crossterm::event::KeyCode::Char('f')).await;
+
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), Vec::<String>::new())]
         );
     }
 }

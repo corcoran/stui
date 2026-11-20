@@ -142,6 +142,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         };
 
                         if delete_result.is_ok() {
+                            let mut deleted: Option<(String, String)> = None;
                             // Get current folder info for cache invalidation
                             if app.model.navigation.focus_level > 0
                                 && !app.model.navigation.breadcrumb_trail.is_empty()
@@ -175,6 +176,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                     } else {
                                         item_name.clone()
                                     };
+
+                                    deleted = Some((folder_id.clone(), file_path.clone()));
 
                                     // Invalidate cache for this file/directory
                                     if is_dir {
@@ -224,8 +227,15 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 }
                             }
 
-                            // Trigger rescan after successful deletion
-                            let _ = app.rescan_selected_folder();
+                            // Scan the deleted path so Syncthing records the deletion
+                            match deleted {
+                                Some((folder_id, path)) => {
+                                    app.rescan_paths(&folder_id, vec![path]);
+                                }
+                                None => {
+                                    let _ = app.rescan_selected_folder();
+                                }
+                            }
                         }
                         // TODO: Show error message if deletion fails
                     }
@@ -555,7 +565,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 .as_deref(),
                             &item_name,
                         );
-                        app.finish_unignore(&folder_id, file_path);
+                        let scope = crate::logic::ignore::scan_scope_for_pattern(
+                            &pattern_to_remove,
+                            &file_path,
+                        );
+                        app.finish_unignore(&folder_id, file_path, scope);
                         app.model.ui.show_toast(unignore_toast(&item_name));
                     }
                 }

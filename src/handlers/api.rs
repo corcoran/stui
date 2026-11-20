@@ -524,6 +524,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 ));
 
                 // Sequence changed - invalidate cache and refresh
+                app.invalidate_dir_child_states(&folder_id, None);
                 app.invalidate_and_refresh_folder(&folder_id);
             }
 
@@ -964,11 +965,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         "DEBUG [LocalChangedIndex ERROR]: folder={} error={}",
                         folder_id, e
                     ));
-                    // Lets the next status poll retry
+                    // The next poll retries after the refresh interval
                     app.model
                         .syncthing
-                        .local_changed_requested
-                        .remove(&folder_id);
+                        .local_changed_failed_at
+                        .insert(folder_id.clone(), Instant::now());
                 }
             }
         }

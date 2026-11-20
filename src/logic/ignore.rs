@@ -250,6 +250,53 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Which part of a folder to scan after an ignore change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanScope {
+    /// Folder-relative paths, no leading or trailing slash.
+    Paths(Vec<String>),
+    Full,
+}
+
+impl ScanScope {
+    /// Paths for `SyncthingClient::rescan_paths`; empty means a full scan.
+    pub fn subs(&self) -> &[String] {
+        match self {
+            ScanScope::Paths(paths) => paths,
+            ScanScope::Full => &[],
+        }
+    }
+}
+
+/// Scope of the scan needed after adding or removing `pattern` for the item at `item_path`
+/// (folder-relative).
+///
+/// Only a rooted literal path (leading `/`) that is the item or one of its ancestors is
+/// scoped. Everything else gets a full scan: wildcards, `**`, escapes, unrooted patterns
+/// (they match at any depth), and `(?i)`/`(?d)`/`!`/`#` lines, which never start with `/`.
+pub fn scan_scope_for_pattern(pattern: &str, item_path: &str) -> ScanScope {
+    let pattern = pattern.trim();
+    if !pattern.starts_with('/') || pattern.contains(['*', '?', '[', '{', '\\']) {
+        return ScanScope::Full;
+    }
+
+    let target = pattern.trim_matches('/');
+    let item = item_path.trim_matches('/');
+    if target.is_empty() || item.is_empty() {
+        return ScanScope::Full;
+    }
+
+    let covers = item == target
+        || item
+            .strip_prefix(target)
+            .is_some_and(|rest| rest.starts_with('/'));
+    if covers {
+        ScanScope::Paths(vec![target.to_string()])
+    } else {
+        ScanScope::Full
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +529,134 @@ mod tests {
     fn test_may_be_ignored_escapes_match_everything() {
         assert!(may_be_ignored(&pats(&["foo\\*bar"]), "a.txt"));
         assert!(may_be_ignored(&pats(&["#escape=|", "x"]), "a.txt"));
+    }
+
+    // ========================================
+    // SCAN SCOPE
+    // ========================================
+
+    fn paths(p: &[&str]) -> ScanScope {
+        ScanScope::Paths(p.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn test_scan_scope_rooted_pattern_uses_relative_path() {
+        assert_eq!(
+            scan_scope_for_pattern("/notes/a.txt", "notes/a.txt"),
+            paths(&["notes/a.txt"])
+        );
+        assert_eq!(scan_scope_for_pattern("/a.txt", "a.txt"), paths(&["a.txt"]));
+    }
+
+    #[test]
+    fn test_scan_scope_item_path_with_leading_slash() {
+        assert_eq!(
+            scan_scope_for_pattern("/notes/a.txt", "/notes/a.txt"),
+            paths(&["notes/a.txt"])
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_directory_pattern() {
+        assert_eq!(
+            scan_scope_for_pattern("/cache/", "cache"),
+            paths(&["cache"])
+        );
+        // Unrooted matches at any depth
+        assert_eq!(scan_scope_for_pattern("cache/", "cache"), ScanScope::Full);
+    }
+
+    #[test]
+    fn test_scan_scope_ancestor_pattern_scans_the_pattern_path() {
+        assert_eq!(
+            scan_scope_for_pattern("/cache", "cache/deep/x.bin"),
+            paths(&["cache"])
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_globs_are_full() {
+        for p in ["*.log", "/notes/*", "a?.txt", "[ab].txt", "*.{jpg,png}"] {
+            assert_eq!(
+                scan_scope_for_pattern(p, "notes/a.txt"),
+                ScanScope::Full,
+                "{}",
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn test_scan_scope_double_star_is_full() {
+        assert_eq!(scan_scope_for_pattern("**/build", "build"), ScanScope::Full);
+        assert_eq!(
+            scan_scope_for_pattern("/cache/**", "cache"),
+            ScanScope::Full
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_prefixes_are_full() {
+        let prefixed = [
+            "(?i)Foo",
+            "(?d)Foo",
+            "(?d)(?i)Foo",
+            "(?i)/Foo",
+            "!keep",
+            "!/Foo",
+            "#/Foo",
+        ];
+        for p in prefixed {
+            assert_eq!(scan_scope_for_pattern(p, "Foo"), ScanScope::Full, "{}", p);
+        }
+    }
+
+    #[test]
+    fn test_scan_scope_pattern_for_other_path_is_full() {
+        assert_eq!(
+            scan_scope_for_pattern("/other.txt", "a.txt"),
+            ScanScope::Full
+        );
+        assert_eq!(
+            scan_scope_for_pattern("/cache", "cache2/x"),
+            ScanScope::Full
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_unrooted_literal_is_full() {
+        assert_eq!(scan_scope_for_pattern("build", "build"), ScanScope::Full);
+        assert_eq!(
+            scan_scope_for_pattern("notes/a.txt", "notes/a.txt"),
+            ScanScope::Full
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_degenerate_patterns_are_full() {
+        assert_eq!(scan_scope_for_pattern("", "a.txt"), ScanScope::Full);
+        assert_eq!(scan_scope_for_pattern("/", "a.txt"), ScanScope::Full);
+        assert_eq!(
+            scan_scope_for_pattern("#include x", "a.txt"),
+            ScanScope::Full
+        );
+        assert_eq!(scan_scope_for_pattern("/a.txt", ""), ScanScope::Full);
+    }
+
+    #[test]
+    fn test_scan_scope_escapes_are_full() {
+        assert_eq!(
+            scan_scope_for_pattern("/foo\\*bar", "foo*bar"),
+            ScanScope::Full
+        );
+    }
+
+    #[test]
+    fn test_scan_scope_subs() {
+        assert!(ScanScope::Full.subs().is_empty());
+        assert_eq!(
+            paths(&["a", "b"]).subs(),
+            ["a".to_string(), "b".to_string()]
+        );
     }
 }

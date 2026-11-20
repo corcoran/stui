@@ -112,6 +112,9 @@ impl std::fmt::Debug for ImagePreviewState {
     }
 }
 
+/// (folder id, directory prefix) -> (read at, child states; None if not all known)
+type DirChildStates = HashMap<(String, String), (Instant, Option<Vec<SyncState>>)>;
+
 pub struct App {
     pub model: model::Model,
 
@@ -135,6 +138,11 @@ pub struct App {
     last_system_status_update: Instant,
     last_connection_stats_fetch: Instant,
     last_directory_update: Instant,
+    /// Cached child states per (folder, directory prefix) for `update_directory_states`'s
+    /// visited-directory aggregate, with when they were read (None: not all children known)
+    dir_child_states: DirChildStates,
+    /// Folder whose preview still needs `ensure_need_index`, run once input goes idle
+    pending_preview_need: Option<String>,
     last_db_flush: Instant,
     last_reconnect_attempt: Instant,
     reconnect_delay: Duration,
@@ -206,6 +214,8 @@ impl App {
     /// This is called by both File and Directory cache invalidation events
     /// to ensure consistent cache cleanup for any folder mutation.
     fn invalidate_folder_caches(&mut self, folder_id: &str) {
+        self.invalidate_dir_child_states(folder_id, None);
+
         // Invalidate folder status
         let _ = self.cache.invalidate_folder_status(folder_id);
 
@@ -331,6 +341,15 @@ impl App {
     fn flush_pending_db_writes(&mut self) {
         if self.pending_sync_state_writes.is_empty() {
             return;
+        }
+
+        let written: Vec<(String, String)> = self
+            .pending_sync_state_writes
+            .iter()
+            .map(|(folder, path, _, _)| (folder.clone(), path.clone()))
+            .collect();
+        for (folder, path) in &written {
+            self.invalidate_dir_child_states(folder, Some(path));
         }
 
         const ABSOLUTE_MAX_BATCH: usize = 100;
@@ -537,6 +556,8 @@ impl App {
             last_system_status_update: Instant::now(),
             last_connection_stats_fetch: Instant::now(),
             last_directory_update: Instant::now(),
+            dir_child_states: HashMap::new(),
+            pending_preview_need: None,
             last_db_flush: Instant::now(),
             last_reconnect_attempt: Instant::now(),
             reconnect_delay: Duration::from_secs(5), // Start with 5s
@@ -655,6 +676,7 @@ impl App {
             self.schedule_need_index(folder_id, prev_state.as_deref(), status);
         }
         for folder_id in &folders_to_refresh {
+            self.invalidate_dir_child_states(folder_id, None);
             self.invalidate_and_refresh_folder(folder_id);
         }
         // Cached statuses may be stale (e.g. cached mid-sync), so confirm them without blocking
@@ -1253,14 +1275,8 @@ where
                 app.apply_search_filter();
             }
 
-            // Update directory states based on their children (cache queries, so throttled)
-            if app.model.navigation.focus_level > 0
-                && !app.model.navigation.breadcrumb_trail.is_empty()
-                && app.last_directory_update.elapsed() >= Duration::from_secs(2)
-            {
-                app.last_directory_update = Instant::now();
-                app.update_directory_states(app.model.navigation.focus_level - 1);
-            }
+            app.ensure_preview_need_index_if_idle();
+            app.tick_directory_states();
         }
 
         // Increased poll timeout from 100ms to 250ms to reduce CPU usage when idle
