@@ -102,7 +102,8 @@ impl App {
                 logic::path::translate_path(&folder.path, "", &self.path_map);
 
             // Load cached sync states for items
-            let mut file_sync_states = self.load_sync_states_from_cache(&folder.id, &items, None);
+            let (mut file_sync_states, direct_states) =
+                self.load_sync_states_from_cache(&folder.id, &items, None);
 
             // Mark local-only items with LocalOnly sync state and save to cache
             for local_item_name in &local_items {
@@ -134,6 +135,7 @@ impl App {
                 selected_index: None, // sort_current_level will set selection
                 translated_base_path,
                 file_sync_states,
+                direct_states,
                 ignored_exists,
                 filtered_items: None,
             }];
@@ -141,12 +143,51 @@ impl App {
             // Only change focus if not in preview mode
             if !preview_only {
                 self.model.navigation.focus_level = 1;
+                self.ensure_need_index(&folder.id);
             }
 
             // Apply initial sorting
             self.sort_current_level();
+            // Preview requests are discarded on the next j/k, so they must not delay status polls
+            let (cap, priority) = if preview_only {
+                (
+                    logic::sync_states::PREVIEW_FILE_INFO_CAP,
+                    services::api::Priority::Low,
+                )
+            } else {
+                (
+                    logic::sync_states::NAVIGATION_FILE_INFO_CAP,
+                    services::api::Priority::Medium,
+                )
+            };
+            self.request_level_file_info(0, cap, priority);
         }
         Ok(())
+    }
+
+    /// Fetch the folder's need list (syncing set and need index) on entry, unless the index
+    /// is already current for the folder's sequence or such a fetch is outstanding
+    fn ensure_need_index(&mut self, folder_id: &str) {
+        let syncthing = &self.model.syncthing;
+        let Some(sequence) = syncthing
+            .folder_statuses
+            .get(folder_id)
+            .map(|status| status.sequence)
+        else {
+            self.request_folder_need(folder_id, 0, false);
+            return;
+        };
+        let index_current = syncthing
+            .need_index
+            .get(folder_id)
+            .is_some_and(|index| index.sequence == Some(sequence));
+        let fetch_pending = syncthing
+            .need_fetches
+            .get(folder_id)
+            .is_some_and(|fetch| fetch.sequence == sequence && !fetch.failed);
+        if !index_current && !fetch_pending {
+            self.request_folder_need(folder_id, sequence, false);
+        }
     }
 
     pub(crate) async fn enter_directory(&mut self) -> Result<()> {
@@ -285,7 +326,7 @@ impl App {
                 .truncate(level_idx + 1);
 
             // Load cached sync states for items
-            let mut file_sync_states =
+            let (mut file_sync_states, direct_states) =
                 self.load_sync_states_from_cache(&folder_id, &items, Some(&new_prefix));
             log_debug(&format!(
                 "DEBUG [enter_directory]: Loaded {} cached states for new level with prefix={}",
@@ -330,6 +371,7 @@ impl App {
                     selected_index: None, // sort_current_level will set selection
                     translated_base_path,
                     file_sync_states,
+                    direct_states,
                     ignored_exists,
                     filtered_items: None,
                 });
@@ -348,6 +390,12 @@ impl App {
             if self.model.ui.out_of_sync_filter.is_some() {
                 self.apply_out_of_sync_filter();
             }
+
+            self.request_level_file_info(
+                level_idx + 1,
+                logic::sync_states::NAVIGATION_FILE_INFO_CAP,
+                services::api::Priority::Medium,
+            );
         }
 
         Ok(())
@@ -451,7 +499,8 @@ impl App {
         self.model.performance.last_load_time_ms = Some(start.elapsed().as_millis() as u64);
 
         // Load cached sync states for items
-        let mut file_sync_states = self.load_sync_states_from_cache(&folder_id, &items, None);
+        let (mut file_sync_states, direct_states) =
+            self.load_sync_states_from_cache(&folder_id, &items, None);
 
         // Mark local-only items with LocalOnly sync state
         for local_item_name in &local_items {
@@ -470,6 +519,8 @@ impl App {
             parent_exists,
         );
 
+        self.ensure_need_index(&folder_id);
+
         // Clear any existing breadcrumb trail and create first breadcrumb level
         self.model.navigation.breadcrumb_trail.clear();
         self.model
@@ -484,6 +535,7 @@ impl App {
                 selected_index: None,
                 translated_base_path: folder_path,
                 file_sync_states,
+                direct_states,
                 ignored_exists,
                 filtered_items: None,
             });
@@ -502,6 +554,12 @@ impl App {
         if self.model.ui.out_of_sync_filter.is_some() {
             self.apply_out_of_sync_filter();
         }
+
+        self.request_level_file_info(
+            0,
+            logic::sync_states::NAVIGATION_FILE_INFO_CAP,
+            services::api::Priority::Medium,
+        );
 
         Ok(())
     }

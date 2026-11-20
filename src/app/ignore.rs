@@ -7,20 +7,33 @@
 use crate::{App, SyncState, log_debug, logic, model, services};
 use anyhow::Result;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const UNIGNORE_FOLLOW_UP_DELAY: Duration = Duration::from_secs(2);
+
+/// What `toggle_ignore` did, so the key handler can give feedback.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IgnoreToggle {
+    Unchanged,
+    Ignored,
+    /// Holds the item name.
+    Unignored(String),
+    /// Several patterns match; the pattern selection menu is open.
+    ChoosePattern,
+}
 
 impl App {
-    pub(crate) async fn toggle_ignore(&mut self) -> Result<()> {
+    pub(crate) async fn toggle_ignore(&mut self) -> Result<IgnoreToggle> {
         // Only works when focused on a breadcrumb level (not folder list)
         if self.model.navigation.focus_level == 0
             || self.model.navigation.breadcrumb_trail.is_empty()
         {
-            return Ok(());
+            return Ok(IgnoreToggle::Unchanged);
         }
 
         let level_idx = self.model.navigation.focus_level - 1;
         if level_idx >= self.model.navigation.breadcrumb_trail.len() {
-            return Ok(());
+            return Ok(IgnoreToggle::Unchanged);
         }
 
         let level = &self.model.navigation.breadcrumb_trail[level_idx];
@@ -30,12 +43,12 @@ impl App {
         // Get selected item (respects filtered view if active)
         let selected_idx = match level.selected_index {
             Some(idx) => idx,
-            None => return Ok(()),
+            None => return Ok(IgnoreToggle::Unchanged),
         };
 
         let item = match level.display_items().get(selected_idx) {
             Some(item) => item,
-            None => return Ok(()),
+            None => return Ok(IgnoreToggle::Unchanged),
         };
         let item_name = item.name.clone(); // Clone for later use
         let sync_state = level
@@ -76,7 +89,7 @@ impl App {
                     "Blocked un-ignore: path {:?} is pending deletion",
                     pending_path
                 ));
-                return Ok(());
+                return Ok(IgnoreToggle::Unchanged);
             }
 
             // File is ignored - find matching patterns and remove them
@@ -84,7 +97,7 @@ impl App {
             let matching_patterns = logic::ignore::find_matching_patterns(&patterns, &file_path);
 
             if matching_patterns.is_empty() {
-                return Ok(()); // No patterns match (shouldn't happen)
+                return Ok(IgnoreToggle::Unchanged); // No patterns match (shouldn't happen)
             }
 
             if matching_patterns.len() == 1 {
@@ -99,46 +112,13 @@ impl App {
                     .set_ignore_patterns(&folder_id, updated_patterns)
                     .await?;
 
-                // Don't add optimistic update for unignore - the final state is unpredictable
-                // (could be Synced, RemoteOnly, OutOfSync, LocalOnly, or Syncing)
-                // Let the FileInfo API response provide the correct state
-
-                if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
-                    // Clear Ignored state (will be updated by FileInfo)
-                    level.file_sync_states.remove(&item_name);
-
-                    // Update ignored_exists (file is no longer ignored)
-                    self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Unknown);
-                }
-
-                // Trigger rescan in background - ItemStarted/ItemFinished events will update state
-                // Also fetch file info after delay as fallback (for files that don't need syncing)
-                let client = self.client.clone();
-                let folder_id_clone = folder_id.clone();
                 let file_path_for_api = if let Some(ref prefix) = prefix {
                     format!("{}/{}", prefix.trim_matches('/'), item_name)
                 } else {
                     item_name.clone()
                 };
-                let api_tx = self.api_tx.clone();
-
-                tokio::spawn(async move {
-                    // Wait a moment for Syncthing to process the .stignore change
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-                    // Now trigger rescan
-                    let _ = client.rescan_folder(&folder_id_clone).await;
-
-                    // Wait longer for ItemStarted event (for files that need syncing)
-                    // Syncthing needs time to discover file, calculate hashes, start transfer
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                    // Fetch file info as fallback (for files already synced, no ItemStarted will fire)
-                    let _ = api_tx.send(services::api::ApiRequest::GetFileInfo {
-                        folder_id: folder_id_clone,
-                        file_path: file_path_for_api,
-                        priority: services::api::Priority::Medium,
-                    });
-                });
+                self.finish_unignore(&folder_id, file_path_for_api);
+                return Ok(IgnoreToggle::Unignored(item_name));
             } else {
                 // Multiple patterns match - show selection menu
                 self.model.ui.pattern_selection = Some(model::PatternSelectionState {
@@ -147,6 +127,7 @@ impl App {
                     patterns: matching_patterns,
                     selected_index: Some(0),
                 });
+                return Ok(IgnoreToggle::ChoosePattern);
             }
         } else {
             // File is not ignored - add it to ignore
@@ -154,7 +135,7 @@ impl App {
 
             // Check if pattern already exists
             if patterns.contains(&new_pattern) {
-                return Ok(());
+                return Ok(IgnoreToggle::Unchanged);
             }
 
             let mut updated_patterns = patterns;
@@ -194,7 +175,39 @@ impl App {
             });
         }
 
-        Ok(())
+        Ok(IgnoreToggle::Ignored)
+    }
+
+    /// Rescan after an unignore and refresh the item's state.
+    ///
+    /// The item keeps its Ignored state and icon until a FileInfo response replaces them.
+    /// `POST /rest/db/scan` returns once the scan has finished, so the first FileInfo
+    /// reflects the new ignore patterns. The second one catches flags the puller updates
+    /// after the scan (an unignored file that only exists remotely).
+    pub(crate) fn finish_unignore(&self, folder_id: &str, file_path: String) {
+        log_debug(&format!(
+            "DEBUG [finish_unignore]: folder={} path={}",
+            folder_id, file_path
+        ));
+
+        let client = self.client.clone();
+        let folder_id = folder_id.to_string();
+        let api_tx = self.api_tx.clone();
+
+        tokio::spawn(async move {
+            // Give Syncthing a moment to apply the new .stignore before scanning
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            let _ = client.rescan_folder(&folder_id).await;
+
+            let request = || services::api::ApiRequest::GetFileInfo {
+                folder_id: folder_id.clone(),
+                file_path: file_path.clone(),
+                priority: services::api::Priority::High,
+            };
+            let _ = api_tx.send(request());
+            tokio::time::sleep(UNIGNORE_FOLLOW_UP_DELAY).await;
+            let _ = api_tx.send(request());
+        });
     }
 
     pub(crate) async fn ignore_and_delete(&mut self) -> Result<()> {

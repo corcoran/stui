@@ -44,7 +44,11 @@ pub struct BreadcrumbLevel {
     pub items: Vec<BrowseItem>, // Source of truth (unfiltered)
     pub filtered_items: Option<Vec<BrowseItem>>, // Filtered view (if filter active)
     pub selected_index: Option<usize>,
+    /// Displayed states (FileInfo, cache, or derived from the need index)
     pub file_sync_states: HashMap<String, SyncState>,
+    /// Directories' own states from FileInfo or the cache, never derived. Displayed directory
+    /// states are recomputed from these, so a derived state can't outlive the index behind it.
+    pub direct_states: HashMap<String, SyncState>,
     pub ignored_exists: HashMap<String, bool>,
     pub translated_base_path: String,
 }
@@ -342,6 +346,7 @@ mod tests {
             ],
             selected_index: None,
             file_sync_states: HashMap::new(),
+            direct_states: Default::default(),
             ignored_exists: HashMap::new(),
             translated_base_path: "/test".to_string(),
             filtered_items: None,
@@ -390,6 +395,7 @@ mod tests {
             filtered_items: Some(vec![dir2.clone()]), // Filtered: [dir2] only
             selected_index: Some(0), // Select index 0 (should be dir2 from filtered list)
             file_sync_states: HashMap::new(),
+            direct_states: Default::default(),
             ignored_exists: HashMap::new(),
             translated_base_path: "/test".to_string(),
         };
@@ -429,6 +435,7 @@ mod tests {
             ],
             selected_index: None,
             file_sync_states: HashMap::new(),
+            direct_states: Default::default(),
             ignored_exists: HashMap::new(),
             translated_base_path: "/test".to_string(),
             filtered_items: Some(vec![]), // Zero matches - should show empty list
@@ -467,6 +474,7 @@ mod tests {
             ],
             selected_index: None,
             file_sync_states: HashMap::new(),
+            direct_states: Default::default(),
             ignored_exists: HashMap::new(),
             translated_base_path: "/test".to_string(),
             filtered_items: None, // No filter active

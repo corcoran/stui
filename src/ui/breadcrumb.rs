@@ -10,15 +10,24 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-/// Format ISO timestamp into human-readable string (e.g., "2025-10-26 20:58")
+/// Format ISO timestamp into local-time string (e.g., "2025-10-26 20:58")
 fn format_timestamp(timestamp: &str) -> String {
+    format_timestamp_with(timestamp, |ts| {
+        crate::logic::formatting::format_rfc3339_local(ts, "%Y-%m-%d %H:%M")
+    })
+}
+
+/// Formats via `convert`, falling back to slicing the raw string ("YYYY-MM-DD HH:MM")
+/// when the input is not valid RFC 3339.
+fn format_timestamp_with(timestamp: &str, convert: impl Fn(&str) -> Option<String>) -> String {
     if timestamp.is_empty() {
         return String::new();
     }
 
-    // Try to parse and format
-    // Input format: "2025-10-26T20:58:21.580021398Z"
-    // Output format: "2025-10-26 20:58"
+    if let Some(formatted) = convert(timestamp) {
+        return formatted;
+    }
+
     if let Some(datetime_part) = timestamp.split('T').next() {
         if let Some(time_part) = timestamp.split('T').nth(1) {
             let time = time_part.split(':').take(2).collect::<Vec<_>>().join(":");
@@ -276,5 +285,48 @@ pub fn render_breadcrumb_panel(
             }),
             &mut scrollbar_state,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logic::formatting::format_rfc3339_in;
+
+    fn est_fmt(ts: &str) -> String {
+        let tz = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+        format_timestamp_with(ts, |t| format_rfc3339_in(t, &tz, "%Y-%m-%d %H:%M"))
+    }
+
+    // ========================================
+    // TIMESTAMP DISPLAY
+    // ========================================
+
+    #[test]
+    fn test_timestamp_z_converted_across_midnight() {
+        assert_eq!(
+            est_fmt("2025-01-16T03:44:21.580021398Z"),
+            "2025-01-15 22:44"
+        );
+    }
+
+    #[test]
+    fn test_timestamp_non_utc_offset_converted() {
+        assert_eq!(est_fmt("2025-01-15T22:30:00+02:00"), "2025-01-15 15:30");
+    }
+
+    #[test]
+    fn test_timestamp_empty_stays_empty() {
+        assert_eq!(est_fmt(""), "");
+    }
+
+    #[test]
+    fn test_timestamp_unparseable_with_t_slices_raw() {
+        assert_eq!(est_fmt("2025-10-26T20:58:xx"), "2025-10-26 20:58");
+    }
+
+    #[test]
+    fn test_timestamp_unparseable_without_t_returns_whole_string() {
+        assert_eq!(est_fmt("garbage"), "garbage");
     }
 }

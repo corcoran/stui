@@ -22,6 +22,8 @@ use crate::services::api::{ApiRequest, ApiResponse, Priority};
 /// - RescanResult: Result of folder rescan operation
 /// - SystemStatusResult: System info (uptime, device name)
 /// - ConnectionStatsResult: Transfer statistics
+/// - FolderNeed: Need list (replaces the folder's syncing set and need index)
+/// - LocalChangedIndex: Receive-only local changes for the need index
 pub fn handle_api_response(app: &mut App, response: ApiResponse) {
     match response {
         ApiResponse::BrowseResult {
@@ -180,9 +182,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     idx, folder_id, prefix
                 ));
 
-                // Load cached states (for instant display, will be replaced by FileInfo)
-                let cached_states =
-                    app.load_sync_states_from_cache(&folder_id, &items, prefix.as_deref());
+                let cached_states = app.cached_sync_states(&folder_id, &items, prefix.as_deref());
+                let derive_ctx =
+                    crate::app::sync_states::derive_context(&app.model.syncthing, &folder_id);
 
                 if let Some(level) = app.model.navigation.breadcrumb_trail.get_mut(idx) {
                     // Save currently selected item name BEFORE replacing items
@@ -191,13 +193,30 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         .and_then(|sel_idx| level.display_items().get(sel_idx))
                         .map(|item| item.name.clone());
 
-                    // Start with cached states (no preservation logic)
-                    let mut sync_states = cached_states;
-
-                    // Merge in local-only items
-                    for local_item_name in &local_item_names {
-                        sync_states.insert(local_item_name.clone(), SyncState::LocalOnly);
+                    // Directories' own states: cached, else the previous own state
+                    let mut direct_states =
+                        crate::logic::sync_states::directory_states(&items, &cached_states);
+                    for item in &items {
+                        if let Some(state) = level.direct_states.get(&item.name)
+                            && !direct_states.contains_key(&item.name)
+                            && item.item_type == "FILE_INFO_TYPE_DIRECTORY"
+                        {
+                            direct_states.insert(item.name.clone(), *state);
+                        }
                     }
+                    let mut sync_states = crate::logic::sync_states::merge_level_states(
+                        &level.file_sync_states,
+                        cached_states,
+                        &items,
+                        &local_item_names,
+                    );
+                    crate::logic::sync_states::apply_derived_states(
+                        &items,
+                        prefix.as_deref(),
+                        &mut sync_states,
+                        &direct_states,
+                        &derive_ctx,
+                    );
 
                     crate::log_debug(&format!(
                         "DEBUG [BrowseResult]: Updating level {} with {} items (was {})",
@@ -209,6 +228,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     // Update level
                     level.items = items.clone(); // Update unfiltered source
                     level.file_sync_states = sync_states;
+                    level.direct_states = direct_states;
 
                     // DON'T touch filtered_items here - let the filter functions manage it
 
@@ -341,28 +361,6 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             // Successful API call - mark as connected
             app.model.syncthing.connection_state = ConnectionState::Connected;
 
-            // Check if this response is still relevant to current navigation
-            let is_relevant = if app.model.navigation.focus_level != 0
-                && !app.model.navigation.breadcrumb_trail.is_empty()
-            {
-                // Check if this folder_id matches any level in our current breadcrumb trail
-                app.model
-                    .navigation
-                    .breadcrumb_trail
-                    .iter()
-                    .any(|level| level.folder_id == folder_id)
-            } else {
-                false
-            };
-
-            if !is_relevant {
-                crate::log_debug(&format!(
-                    "DEBUG [FileInfoResult]: Skipping irrelevant response for folder={} path={}",
-                    folder_id, file_path
-                ));
-                return; // Skip saving and UI updates for irrelevant responses
-            }
-
             let file_sequence = file_details
                 .local
                 .as_ref()
@@ -376,7 +374,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 folder_id, file_path, state, file_sequence
             ));
 
-            // Queue for batched write instead of immediate write
+            // Cached even when the folder is no longer on screen, so it isn't fetched again
             app.pending_sync_state_writes.push((
                 folder_id.clone(),
                 file_path.clone(),
@@ -384,57 +382,84 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 file_sequence,
             ));
 
-            // Update UI if this file is visible in current level
-            let mut updated = false;
+            // Preview panels (folder list focused) count: their trail level is on screen
+            let is_relevant = crate::logic::sync_states::is_file_info_relevant(
+                &folder_id,
+                app.model
+                    .navigation
+                    .breadcrumb_trail
+                    .iter()
+                    .map(|level| level.folder_id.as_str()),
+            );
+            if !is_relevant {
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult]: folder={} not in breadcrumb trail, cached only",
+                    folder_id
+                ));
+                return;
+            }
+
+            // Update the level that lists this path as a direct child
+            let mut matched_level = false;
+            let derive_ctx =
+                crate::app::sync_states::derive_context(&app.model.syncthing, &folder_id);
             for level in app.model.navigation.breadcrumb_trail.iter_mut() {
-                if level.folder_id == folder_id {
-                    // Check if this file path belongs to this level
-                    let level_prefix = level.prefix.as_deref().unwrap_or("");
-                    crate::log_debug(&format!(
-                        "DEBUG [FileInfoResult UI update]: checking level with prefix={:?}",
-                        level_prefix
-                    ));
-                    if file_path.starts_with(level_prefix) {
-                        let item_name = file_path.strip_prefix(level_prefix).unwrap_or(&file_path);
+                if level.folder_id != folder_id {
+                    continue;
+                }
+                let Some(item_name) =
+                    crate::logic::sync_states::level_item_name(&file_path, level.prefix.as_deref())
+                else {
+                    continue;
+                };
+                matched_level = true;
 
-                        // Get current state for tracking changes
-                        let current_state = level.file_sync_states.get(item_name).copied();
+                // FileInfo of a directory covers only its own entry; a worse aggregate wins
+                let is_dir = level.items.iter().any(|item| {
+                    item.name == item_name && item.item_type == "FILE_INFO_TYPE_DIRECTORY"
+                });
+                if is_dir {
+                    level.direct_states.insert(item_name.to_string(), state);
+                }
+                let state = if is_dir {
+                    let derived = crate::logic::sync_states::derived_state(
+                        &file_path,
+                        true,
+                        &derive_ctx,
+                        Some(state),
+                    );
+                    crate::logic::sync_states::resolve_directory_state(Some(state), derived)
+                        .unwrap_or(state)
+                } else {
+                    state
+                };
 
-                        // Update state if it changed
-                        if current_state != Some(state) {
-                            crate::log_debug(&format!(
-                                "DEBUG [FileInfo]: Updating {} {:?} -> {:?}",
-                                item_name, current_state, state
-                            ));
-                            level.file_sync_states.insert(item_name.to_string(), state);
+                let current_state = level.file_sync_states.get(item_name).copied();
+                if current_state == Some(state) {
+                    continue;
+                }
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfo]: Updating {} {:?} -> {:?}",
+                    item_name, current_state, state
+                ));
+                level.file_sync_states.insert(item_name.to_string(), state);
 
-                            // Update ignored_exists - do it inline to avoid borrow issues
-                            if state == SyncState::Ignored {
-                                // translated_base_path already includes the full path to this directory level
-                                let host_path = format!(
-                                    "{}/{}",
-                                    level.translated_base_path.trim_end_matches('/'),
-                                    item_name
-                                );
-                                let exists = std::path::Path::new(&host_path).exists();
-                                level.ignored_exists.insert(item_name.to_string(), exists);
-                            } else {
-                                level.ignored_exists.remove(item_name);
-                            }
-
-                            updated = true;
-                        }
-                    } else {
-                        crate::log_debug(&format!(
-                            "DEBUG [FileInfoResult UI update]: NO MATCH - file_path={} doesn't start with level_prefix={}",
-                            file_path, level_prefix
-                        ));
-                    }
+                if state == SyncState::Ignored {
+                    // translated_base_path already includes the full path to this directory level
+                    let host_path = format!(
+                        "{}/{}",
+                        level.translated_base_path.trim_end_matches('/'),
+                        item_name
+                    );
+                    let exists = std::path::Path::new(&host_path).exists();
+                    level.ignored_exists.insert(item_name.to_string(), exists);
+                } else {
+                    level.ignored_exists.remove(item_name);
                 }
             }
-            if !updated {
+            if !matched_level {
                 crate::log_debug(&format!(
-                    "DEBUG [FileInfoResult UI update]: WARNING - No matching level found for folder={} path={}",
+                    "DEBUG [FileInfoResult]: no open level lists folder={} path={}",
                     folder_id, file_path
                 ));
             }
@@ -552,12 +577,22 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 .last_known_receive_only_counts
                 .insert(folder_id.clone(), receive_only_count);
 
+            let prev_state = app
+                .model
+                .syncthing
+                .folder_statuses
+                .get(&folder_id)
+                .map(|s| s.state.clone());
+
             // Save and use fresh status
             let _ = app.cache.save_folder_status(&folder_id, &status, sequence);
             app.model
                 .syncthing
                 .folder_statuses
-                .insert(folder_id, status);
+                .insert(folder_id.clone(), status.clone());
+
+            // After the insert: re-derived states must see this status
+            app.schedule_need_index(&folder_id, prev_state.as_deref(), &status);
         }
 
         ApiResponse::RescanResult {
@@ -809,6 +844,131 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         // This handles the case where cache was invalidated and just refreshed
                         app.apply_out_of_sync_filter();
                     }
+                }
+            }
+        }
+
+        ApiResponse::FolderNeed {
+            folder_id,
+            sequence,
+            requested_at,
+            need,
+            ignore_patterns,
+        } => {
+            // Dropped when sent before the folder was cleared (it would resurrect the syncing
+            // set) or when the index already holds a newer response
+            let accepted = crate::logic::sync_states::accept_need_response(
+                app.model.syncthing.need_fetches.get(&folder_id),
+                app.model
+                    .syncthing
+                    .need_index
+                    .get(&folder_id)
+                    .and_then(|index| index.requested_at),
+                requested_at,
+            );
+            if !accepted {
+                crate::log_debug(&format!(
+                    "DEBUG [FolderNeed]: dropping superseded response folder={} seq={}",
+                    folder_id, sequence
+                ));
+                return;
+            }
+            match need {
+                Ok(need) => {
+                    let syncing = crate::logic::sync_states::syncing_paths_from_need(&need);
+                    crate::log_debug(&format!(
+                        "DEBUG [FolderNeed]: folder={} seq={} in_progress={}",
+                        folder_id,
+                        sequence,
+                        syncing.len()
+                    ));
+                    app.model
+                        .syncthing
+                        .syncing_files
+                        .insert(folder_id.clone(), syncing);
+
+                    // Counts from the status the request was made for; a newer status means
+                    // this list is already stale and a refetch is queued
+                    let complete = app
+                        .model
+                        .syncthing
+                        .folder_statuses
+                        .get(&folder_id)
+                        .is_some_and(|status| {
+                            status.sequence == sequence
+                                && crate::logic::sync_states::need_entry_count(&need)
+                                    >= status.need_total_items
+                        });
+                    let index = app
+                        .model
+                        .syncthing
+                        .need_index
+                        .entry(folder_id.clone())
+                        .or_default();
+                    crate::logic::sync_states::set_index_need(
+                        index,
+                        &need,
+                        sequence,
+                        complete,
+                        ignore_patterns.ok(),
+                    );
+                    index.requested_at = Some(requested_at);
+                    app.refresh_derived_states(&folder_id);
+                }
+                Err(e) => {
+                    crate::log_debug(&format!(
+                        "DEBUG [FolderNeed ERROR]: folder={} error={}",
+                        folder_id, e
+                    ));
+                    // The next poll retries after the refresh interval
+                    if let Some(fetch) = app.model.syncthing.need_fetches.get_mut(&folder_id)
+                        && fetch.at == requested_at
+                    {
+                        fetch.failed = true;
+                    }
+                }
+            }
+        }
+
+        ApiResponse::LocalChangedIndex {
+            folder_id,
+            sequence,
+            files,
+        } => {
+            if app.model.syncthing.local_changed_requested.get(&folder_id) != Some(&sequence) {
+                crate::log_debug(&format!(
+                    "DEBUG [LocalChangedIndex]: dropping superseded response folder={} seq={}",
+                    folder_id, sequence
+                ));
+                return;
+            }
+            match files {
+                Ok(files) => {
+                    crate::log_debug(&format!(
+                        "DEBUG [LocalChangedIndex]: folder={} seq={} files={}",
+                        folder_id,
+                        sequence,
+                        files.len()
+                    ));
+                    let index = app
+                        .model
+                        .syncthing
+                        .need_index
+                        .entry(folder_id.clone())
+                        .or_default();
+                    crate::logic::sync_states::set_index_local_changed(index, &files, sequence);
+                    app.refresh_derived_states(&folder_id);
+                }
+                Err(e) => {
+                    crate::log_debug(&format!(
+                        "DEBUG [LocalChangedIndex ERROR]: folder={} error={}",
+                        folder_id, e
+                    ));
+                    // Lets the next status poll retry
+                    app.model
+                        .syncthing
+                        .local_changed_requested
+                        .remove(&folder_id);
                 }
             }
         }

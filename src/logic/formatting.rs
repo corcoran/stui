@@ -109,35 +109,51 @@ pub fn format_human_size(size: u64) -> String {
     }
 }
 
-/// Format RFC 3339 datetime string to human-readable format (YYYY-MM-DD HH:MM:SS)
+/// Format an RFC 3339 timestamp in the given timezone using a chrono format string.
 ///
-/// Converts ISO 8601/RFC 3339 timestamps (e.g., "2024-01-15T14:30:45Z")
-/// into a clean format matching the folder history display.
-///
-/// # Arguments
-/// * `rfc3339` - RFC 3339 formatted datetime string
-///
-/// # Returns
-/// Formatted string like "2025-01-15 14:30:45", or the original string if parsing fails
-///
-/// # Examples
-/// ```
-/// use stui::logic::formatting::format_datetime;
-///
-/// assert_eq!(format_datetime("2024-01-15T14:30:45Z"), "2024-01-15 14:30:45");
-/// assert_eq!(format_datetime("2024-01-15T14:30:45.123456Z"), "2024-01-15 14:30:45");
-/// assert_eq!(format_datetime("invalid"), "invalid"); // Falls back to original
-/// ```
-pub fn format_datetime(rfc3339: &str) -> String {
-    use chrono::DateTime;
+/// Returns `None` if the input does not parse.
+pub fn format_rfc3339_in<Tz>(rfc3339: &str, tz: &Tz, fmt: &str) -> Option<String>
+where
+    Tz: chrono::TimeZone,
+    Tz::Offset: std::fmt::Display,
+{
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .ok()
+        .map(|dt| dt.with_timezone(tz).format(fmt).to_string())
+}
 
-    // Try to parse as RFC 3339
-    if let Ok(datetime) = DateTime::parse_from_rfc3339(rfc3339) {
-        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-    } else {
-        // Fallback: return original string if parsing fails
-        rfc3339.to_string()
-    }
+/// Format an RFC 3339 timestamp in the machine's local timezone.
+pub fn format_rfc3339_local(rfc3339: &str, fmt: &str) -> Option<String> {
+    format_rfc3339_in(rfc3339, &chrono::Local, fmt)
+}
+
+/// Format a `SystemTime` in the given timezone. Out-of-range values format as the Unix epoch.
+pub fn format_system_time_in<Tz>(time: &std::time::SystemTime, tz: &Tz, fmt: &str) -> String
+where
+    Tz: chrono::TimeZone,
+    Tz::Offset: std::fmt::Display,
+{
+    use std::time::UNIX_EPOCH;
+
+    let secs = time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let utc = chrono::DateTime::from_timestamp(secs, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    utc.with_timezone(tz).format(fmt).to_string()
+}
+
+/// Format a `SystemTime` in the machine's local timezone.
+pub fn format_system_time_local(time: &std::time::SystemTime, fmt: &str) -> String {
+    format_system_time_in(time, &chrono::Local, fmt)
+}
+
+/// Format an RFC 3339 datetime string as local time (YYYY-MM-DD HH:MM:SS)
+///
+/// Returns the original string if parsing fails.
+pub fn format_datetime(rfc3339: &str) -> String {
+    format_rfc3339_local(rfc3339, "%Y-%m-%d %H:%M:%S").unwrap_or_else(|| rfc3339.to_string())
 }
 
 /// Format time since event for status bar
@@ -305,5 +321,67 @@ mod tests {
         let timestamp = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
         let formatted = format_time_since(timestamp);
         assert!(formatted.contains("hr ago"));
+    }
+
+    // ========================================
+    // LOCAL TIME CONVERSION
+    // ========================================
+
+    fn est() -> chrono::FixedOffset {
+        chrono::FixedOffset::west_opt(5 * 3600).unwrap()
+    }
+
+    #[test]
+    fn test_rfc3339_z_converts_to_offset() {
+        let out = format_rfc3339_in("2025-10-26T20:58:21.580021398Z", &est(), "%Y-%m-%d %H:%M");
+        assert_eq!(out.as_deref(), Some("2025-10-26 15:58"));
+    }
+
+    #[test]
+    fn test_rfc3339_z_crosses_midnight_to_previous_date() {
+        let out = format_rfc3339_in("2025-01-16T03:44:10Z", &est(), "%Y-%m-%d %H:%M:%S");
+        assert_eq!(out.as_deref(), Some("2025-01-15 22:44:10"));
+    }
+
+    #[test]
+    fn test_rfc3339_zero_offset_form_converts() {
+        let out = format_rfc3339_in("2025-01-16T03:44:10+00:00", &est(), "%H:%M");
+        assert_eq!(out.as_deref(), Some("22:44"));
+    }
+
+    #[test]
+    fn test_rfc3339_non_utc_offset_converts() {
+        let out = format_rfc3339_in("2025-01-15T22:30:00+02:00", &est(), "%Y-%m-%d %H:%M");
+        assert_eq!(out.as_deref(), Some("2025-01-15 15:30"));
+    }
+
+    #[test]
+    fn test_rfc3339_unparseable_returns_none() {
+        assert_eq!(format_rfc3339_in("invalid", &est(), "%H:%M"), None);
+        assert_eq!(format_rfc3339_in("", &est(), "%H:%M"), None);
+    }
+
+    #[test]
+    fn test_system_time_converts_to_offset() {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_736_999_050);
+        // 2025-01-16 03:44:10 UTC
+        assert_eq!(
+            format_system_time_in(&t, &est(), "%Y-%m-%d %H:%M:%S"),
+            "2025-01-15 22:44:10"
+        );
+    }
+
+    #[test]
+    fn test_system_time_before_epoch_formats_as_epoch_in_tz() {
+        let t = std::time::UNIX_EPOCH - std::time::Duration::from_secs(10);
+        assert_eq!(
+            format_system_time_in(&t, &est(), "%Y-%m-%d %H:%M:%S"),
+            "1969-12-31 19:00:00"
+        );
+    }
+
+    #[test]
+    fn test_format_datetime_invalid_falls_back_to_original() {
+        assert_eq!(format_datetime("invalid"), "invalid");
     }
 }

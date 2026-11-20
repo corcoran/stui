@@ -5,7 +5,7 @@
 use crate::SortMode;
 use crate::api::{BrowseItem, SyncState};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Compare two browse items according to the given sort mode
 ///
@@ -77,6 +77,24 @@ pub fn compare_browse_items(
     };
 
     if reverse { result.reverse() } else { result }
+}
+
+/// Sort `items` in place using the displayed sync state.
+///
+/// In-flight transfers in `syncing` are overlaid on `base_states` exactly as the breadcrumb
+/// renderer does, so a downloading file or a directory with a downloading descendant sorts
+/// in the Syncing group. `prefix` is the level's path relative to the folder root.
+pub fn sort_browse_items(
+    items: &mut [BrowseItem],
+    sort_mode: SortMode,
+    reverse: bool,
+    base_states: &HashMap<String, SyncState>,
+    prefix: Option<&str>,
+    syncing: Option<&HashSet<String>>,
+) {
+    let states =
+        crate::logic::sync_states::overlay_syncing_states(items, base_states, prefix, syncing);
+    items.sort_by(|a, b| compare_browse_items(a, b, sort_mode, reverse, &states));
 }
 
 #[cfg(test)]
@@ -230,5 +248,108 @@ mod tests {
             compare_browse_items(&a, &b, SortMode::FileSize, false, &states),
             Ordering::Less
         );
+    }
+
+    // ========================================
+    // SYNCING OVERLAY
+    // ========================================
+
+    fn names(items: &[BrowseItem]) -> Vec<&str> {
+        items.iter().map(|i| i.name.as_str()).collect()
+    }
+
+    fn base_states(pairs: &[(&str, SyncState)]) -> HashMap<String, SyncState> {
+        pairs.iter().map(|(n, s)| (n.to_string(), *s)).collect()
+    }
+
+    #[test]
+    fn test_sort_syncing_file_uses_syncing_priority() {
+        let mut items = vec![
+            make_file("a", 1, "2023-01-01T00:00:00Z"),
+            make_file("b", 1, "2023-01-01T00:00:00Z"),
+            make_file("c", 1, "2023-01-01T00:00:00Z"),
+        ];
+        let base = base_states(&[
+            ("a", SyncState::RemoteOnly),
+            ("b", SyncState::RemoteOnly),
+            ("c", SyncState::Synced),
+        ]);
+        let syncing: HashSet<String> = ["b".to_string()].into();
+
+        sort_browse_items(
+            &mut items,
+            SortMode::VisualIndicator,
+            false,
+            &base,
+            None,
+            Some(&syncing),
+        );
+
+        // Syncing (1) < RemoteOnly (2) < Synced (6)
+        assert_eq!(names(&items), vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn test_sort_without_syncing_set_uses_base_states() {
+        let mut items = vec![
+            make_file("a", 1, "2023-01-01T00:00:00Z"),
+            make_file("b", 1, "2023-01-01T00:00:00Z"),
+        ];
+        let base = base_states(&[("a", SyncState::RemoteOnly), ("b", SyncState::RemoteOnly)]);
+
+        sort_browse_items(
+            &mut items,
+            SortMode::VisualIndicator,
+            false,
+            &base,
+            None,
+            None,
+        );
+
+        assert_eq!(names(&items), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_sort_directory_with_syncing_descendant_is_syncing() {
+        let mut items = vec![make_dir("aaa"), make_dir("bbb"), make_dir("ccc")];
+        let base = base_states(&[
+            ("aaa", SyncState::RemoteOnly),
+            ("bbb", SyncState::Synced),
+            ("ccc", SyncState::Synced),
+        ]);
+        let syncing: HashSet<String> = ["sub/ccc/deep/file.bin".to_string()].into();
+
+        sort_browse_items(
+            &mut items,
+            SortMode::VisualIndicator,
+            false,
+            &base,
+            Some("sub/"),
+            Some(&syncing),
+        );
+
+        assert_eq!(names(&items), vec!["ccc", "aaa", "bbb"]);
+    }
+
+    #[test]
+    fn test_sort_syncing_overlay_respects_prefix() {
+        let mut items = vec![
+            make_file("a", 1, "2023-01-01T00:00:00Z"),
+            make_file("b", 1, "2023-01-01T00:00:00Z"),
+        ];
+        let base = base_states(&[("a", SyncState::Synced), ("b", SyncState::Synced)]);
+        // "b" at the folder root is syncing, not "sub/b"
+        let syncing: HashSet<String> = ["b".to_string()].into();
+
+        sort_browse_items(
+            &mut items,
+            SortMode::VisualIndicator,
+            false,
+            &base,
+            Some("sub/"),
+            Some(&syncing),
+        );
+
+        assert_eq!(names(&items), vec!["a", "b"]);
     }
 }

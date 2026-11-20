@@ -153,14 +153,7 @@ pub fn render_folder_history_modal(
     }
 }
 
-/// Format timestamp for display (YYYY-MM-DD HH:MM:SS)
+/// Format timestamp for display in local time (YYYY-MM-DD HH:MM:SS)
 fn format_timestamp(timestamp: &std::time::SystemTime) -> String {
-    use chrono::{DateTime, Utc};
-    use std::time::UNIX_EPOCH;
-
-    let duration = timestamp.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let datetime: DateTime<Utc> = DateTime::from_timestamp(duration.as_secs() as i64, 0)
-        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
-
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    crate::logic::formatting::format_system_time_local(timestamp, "%Y-%m-%d %H:%M:%S")
 }

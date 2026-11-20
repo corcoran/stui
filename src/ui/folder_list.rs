@@ -1,4 +1,4 @@
-use super::icons::IconRenderer;
+use super::icons::{FolderState, IconRenderer};
 use crate::api::{Folder, FolderStatus};
 use crate::logic::folder_card::{
     FolderCardState, calculate_folder_card_state, format_file_count, format_folder_type,
@@ -23,7 +23,7 @@ pub fn render_folder_list(
     _statuses_loaded: bool,
     folders_state: &mut ListState,
     is_focused: bool,
-    _icon_renderer: &IconRenderer,
+    icon_renderer: &IconRenderer,
     _last_folder_updates: &HashMap<String, (std::time::SystemTime, String)>,
 ) {
     // Calculate title with folder counts
@@ -59,7 +59,14 @@ pub fn render_folder_list(
             let status = folder_statuses.get(&folder.id);
             let card_state = calculate_folder_card_state(folder, status);
 
-            render_folder_card(folder, status, &card_state, max_size_width, max_count_width)
+            render_folder_card(
+                folder,
+                status,
+                &card_state,
+                icon_renderer,
+                max_size_width,
+                max_count_width,
+            )
         })
         .collect();
 
@@ -132,11 +139,24 @@ fn calculate_folder_list_title(
     format!(" Folders ({}) ", parts.join(", "))
 }
 
+/// Map a card state to the icon state used by `IconRenderer`
+fn card_state_to_folder_state(state: &FolderCardState) -> FolderState {
+    match state {
+        FolderCardState::Synced => FolderState::Synced,
+        FolderCardState::OutOfSync { .. } => FolderState::OutOfSync,
+        FolderCardState::Syncing { .. } => FolderState::Syncing,
+        FolderCardState::Paused => FolderState::Paused,
+        FolderCardState::Error => FolderState::Error,
+        FolderCardState::Loading => FolderState::Loading,
+    }
+}
+
 /// Render a single folder card as a multi-line ListItem
 fn render_folder_card(
     folder: &Folder,
     status: Option<&FolderStatus>,
     state: &FolderCardState,
+    icon_renderer: &IconRenderer,
     max_size_width: usize,
     max_count_width: usize,
 ) -> ListItem<'static> {
@@ -144,21 +164,10 @@ fn render_folder_card(
 
     // Line 1: Folder icon + sync status + name
     let display_name = folder.label.as_ref().unwrap_or(&folder.id);
-    let icon = match state {
-        FolderCardState::Synced => "✅",
-        FolderCardState::OutOfSync { .. } => "⚠️",
-        FolderCardState::Syncing { .. } => "🔄",
-        FolderCardState::Paused => "⏸",
-        FolderCardState::Error => "❌",
-        FolderCardState::Loading => "⏳",
-    };
-
-    lines.push(Line::from(vec![
-        Span::raw("📁"),
-        Span::raw(icon),
-        Span::raw(" "),
-        Span::raw(display_name.to_string()),
-    ]));
+    let mut line1 = icon_renderer.folder_with_status(card_state_to_folder_state(state));
+    line1.push(Span::raw(" "));
+    line1.push(Span::raw(display_name.to_string()));
+    lines.push(Line::from(line1));
 
     // Line 2: Type | Size | File Count | Status
     // Use fixed width for Type (14) and dynamic widths for Size/Count based on actual data
@@ -209,4 +218,92 @@ fn render_folder_card(
     lines.push(Line::from(""));
 
     ListItem::new(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::icons::{FolderState, IconMode, IconTheme};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn test_folder() -> Folder {
+        Folder {
+            id: "abc".to_string(),
+            label: Some("Docs".to_string()),
+            path: "/data/docs".to_string(),
+            paused: false,
+            folder_type: "sendreceive".to_string(),
+            devices: vec![],
+        }
+    }
+
+    fn render_card_text(mode: IconMode, state: &FolderCardState) -> String {
+        let renderer = IconRenderer::new(mode, IconTheme::default());
+        let item = render_folder_card(&test_folder(), None, state, &renderer, 3, 3);
+        let backend = TestBackend::new(60, 4);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| f.render_widget(List::new(vec![item]), f.area()))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    // ========================================
+    // CARD STATE MAPPING
+    // ========================================
+
+    #[test]
+    fn test_card_state_to_folder_state_mapping() {
+        let oos = FolderCardState::OutOfSync {
+            remote_needed: 1,
+            local_changes: 0,
+        };
+        let syncing = FolderCardState::Syncing {
+            remote_needed: 1,
+            local_changes: 0,
+        };
+        assert_eq!(
+            card_state_to_folder_state(&FolderCardState::Synced),
+            FolderState::Synced
+        );
+        assert_eq!(card_state_to_folder_state(&oos), FolderState::OutOfSync);
+        assert_eq!(card_state_to_folder_state(&syncing), FolderState::Syncing);
+        assert_eq!(
+            card_state_to_folder_state(&FolderCardState::Paused),
+            FolderState::Paused
+        );
+        assert_eq!(
+            card_state_to_folder_state(&FolderCardState::Error),
+            FolderState::Error
+        );
+        assert_eq!(
+            card_state_to_folder_state(&FolderCardState::Loading),
+            FolderState::Loading
+        );
+    }
+
+    // ========================================
+    // CARD ICON RENDERING
+    // ========================================
+
+    #[test]
+    fn test_card_nerdfont_mode_has_no_emoji_folder() {
+        let text = render_card_text(IconMode::NerdFont, &FolderCardState::Synced);
+        assert!(!text.contains('📁'), "emoji folder leaked: {text:?}");
+        assert!(!text.contains('📂'), "emoji folder leaked: {text:?}");
+        assert!(
+            text.contains('\u{F07C}'),
+            "nerdfont glyph missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_card_emoji_mode_has_emoji_folder() {
+        let text = render_card_text(IconMode::Emoji, &FolderCardState::Synced);
+        assert!(text.contains('📂'), "emoji folder missing: {text:?}");
+        assert!(!text.contains('\u{F07C}'));
+    }
 }

@@ -83,6 +83,7 @@ fn create_test_level_with_filter() -> BreadcrumbLevel {
         selected_index: None,
         prefix: None,
         file_sync_states: std::collections::HashMap::new(),
+        direct_states: Default::default(),
         ignored_exists: std::collections::HashMap::new(),
         translated_base_path: "/test/path".to_string(),
     }

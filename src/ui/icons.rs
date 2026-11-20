@@ -15,7 +15,6 @@ pub enum IconMode {
 /// Folder states for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderState {
-    #[allow(dead_code)]
     Loading,
     Paused,
     Syncing,

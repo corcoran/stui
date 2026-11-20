@@ -186,13 +186,8 @@ impl CacheDb {
         )?;
 
         let result = stmt.query_row(params![folder_id], |row| {
-            let cached_state: String = row.get(0)?;
-            // Don't restore transient states like "scanning" from cache - default to "idle"
-            let state = if cached_state == "scanning" || cached_state == "syncing" {
-                "idle".to_string()
-            } else {
-                cached_state
-            };
+            // Transient states are returned as stored; they are polled until they resolve.
+            let state: String = row.get(0)?;
 
             Ok(FolderStatus {
                 state,
@@ -1005,6 +1000,92 @@ impl CacheDb {
 mod tests {
     use super::*;
     use crate::api::{FileInfo, NeedResponse};
+
+    fn status_with(state: &str, need_total_items: u64) -> FolderStatus {
+        FolderStatus {
+            state: state.to_string(),
+            sequence: 7,
+            global_bytes: 0,
+            global_deleted: 0,
+            global_directories: 0,
+            global_files: 10,
+            global_symlinks: 0,
+            global_total_items: 10,
+            in_sync_bytes: 0,
+            in_sync_files: 0,
+            local_bytes: 0,
+            local_deleted: 0,
+            local_directories: 0,
+            local_files: 5,
+            local_symlinks: 0,
+            local_total_items: 5,
+            need_bytes: 0,
+            need_deletes: 0,
+            need_directories: 0,
+            need_files: need_total_items,
+            need_symlinks: 0,
+            need_total_items,
+            receive_only_changed_bytes: 0,
+            receive_only_changed_deletes: 0,
+            receive_only_changed_directories: 0,
+            receive_only_changed_files: 0,
+            receive_only_changed_symlinks: 0,
+            receive_only_total_items: 0,
+            errors: 0,
+        }
+    }
+
+    // ========================================
+    // FOLDER STATUS ROUND TRIP
+    // ========================================
+
+    #[test]
+    fn test_folder_status_roundtrip_preserves_syncing_state() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .save_folder_status("f1", &status_with("syncing", 5), 7)
+            .unwrap();
+
+        let loaded = cache.get_folder_status("f1").unwrap().unwrap();
+        assert_eq!(loaded.state, "syncing");
+
+        let folder = crate::api::Folder {
+            id: "f1".to_string(),
+            label: None,
+            path: "/f1".to_string(),
+            paused: false,
+            folder_type: "sendreceive".to_string(),
+            devices: vec![],
+        };
+        let card = crate::logic::folder_card::calculate_folder_card_state(&folder, Some(&loaded));
+        assert!(
+            matches!(
+                card,
+                crate::logic::folder_card::FolderCardState::Syncing { .. }
+            ),
+            "expected Syncing, got {card:?}"
+        );
+    }
+
+    #[test]
+    fn test_folder_status_roundtrip_preserves_scanning_state() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .save_folder_status("f1", &status_with("scanning", 0), 7)
+            .unwrap();
+        let loaded = cache.get_folder_status("f1").unwrap().unwrap();
+        assert_eq!(loaded.state, "scanning");
+    }
+
+    #[test]
+    fn test_folder_status_roundtrip_preserves_idle_state() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .save_folder_status("f1", &status_with("idle", 0), 7)
+            .unwrap();
+        let loaded = cache.get_folder_status("f1").unwrap().unwrap();
+        assert_eq!(loaded.state, "idle");
+    }
 
     #[test]
     fn test_cache_needed_files_stores_categories() {

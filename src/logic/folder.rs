@@ -166,9 +166,62 @@ pub fn is_transient_state(state: &str) -> bool {
     )
 }
 
+/// Folders whose startup status came from the cache and so need a fresh API fetch,
+/// in folder order.
+pub fn folders_needing_refresh_after_cache_load(
+    folders: &[crate::api::Folder],
+    served_from_cache: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    folders
+        .iter()
+        .filter(|f| served_from_cache.contains(&f.id))
+        .map(|f| f.id.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================
+    // STARTUP REFRESH AFTER CACHE LOAD
+    // ========================================
+
+    fn test_folder(id: &str) -> crate::api::Folder {
+        crate::api::Folder {
+            id: id.to_string(),
+            label: None,
+            path: format!("/{id}"),
+            paused: false,
+            folder_type: "sendreceive".to_string(),
+            devices: vec![],
+        }
+    }
+
+    #[test]
+    fn test_refresh_after_cache_load_includes_cached_folders_in_order() {
+        let folders = vec![test_folder("a"), test_folder("b"), test_folder("c")];
+        let served: std::collections::HashSet<String> =
+            ["c".to_string(), "a".to_string()].into_iter().collect();
+        assert_eq!(
+            folders_needing_refresh_after_cache_load(&folders, &served),
+            vec!["a".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_refresh_after_cache_load_empty_when_nothing_cached() {
+        let folders = vec![test_folder("a")];
+        let served = std::collections::HashSet::new();
+        assert!(folders_needing_refresh_after_cache_load(&folders, &served).is_empty());
+    }
+
+    #[test]
+    fn test_refresh_after_cache_load_ignores_unknown_ids() {
+        let folders = vec![test_folder("a")];
+        let served: std::collections::HashSet<String> = ["gone".to_string()].into_iter().collect();
+        assert!(folders_needing_refresh_after_cache_load(&folders, &served).is_empty());
+    }
 
     fn create_test_status(receive_only_items: u64) -> FolderStatus {
         FolderStatus {

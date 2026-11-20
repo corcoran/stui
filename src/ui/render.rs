@@ -1,5 +1,8 @@
 use crate::App;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 use stui::DisplayMode;
 
 use super::{
@@ -42,9 +45,15 @@ pub fn render(f: &mut Frame, app: &mut App) {
             // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
             let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
             let item_count = Some(display_items.len());
+            let syncing = app.model.syncthing.syncing_files.get(&level.folder_id);
             let selected_item = level.selected_index.and_then(|sel| {
                 display_items.get(sel).map(|item| {
-                    let sync_state = level.file_sync_states.get(&item.name).copied();
+                    let sync_state = crate::logic::sync_states::item_sync_state(
+                        level.file_sync_states.get(&item.name).copied(),
+                        level.prefix.as_deref(),
+                        item,
+                        syncing,
+                    );
                     let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
                     let exists = if is_ignored {
                         level.ignored_exists.get(&item.name).copied()
@@ -184,7 +193,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             crate::DisplayMode::TimestampAndSize => DisplayMode::TimestampAndSize,
         };
 
-        // Syncing states now come from ItemStarted events (no override needed)
+        // In-flight transfers are overlaid here only; level.file_sync_states stays the base
+        let sync_states = crate::logic::sync_states::overlay_syncing_states(
+            &level.items,
+            &level.file_sync_states,
+            level.prefix.as_deref(),
+            app.model.syncthing.syncing_files.get(&level.folder_id),
+        );
 
         // Create temporary ListState for rendering
         let mut temp_state = ratatui::widgets::ListState::default();
@@ -194,7 +209,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             area,
             &level.items,                  // Unfiltered source
             level.filtered_items.as_ref(), // Filtered view (if active)
-            &level.file_sync_states,
+            &sync_states,
             &level.ignored_exists,
             &mut temp_state,
             &title,
@@ -271,6 +286,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         &app.model.syncthing.last_folder_updates,
         app.model.syncthing.connected_device_count,
     );
+
+    // Everything drawn from here on is an overlay; recede what is behind it
+    maybe_dim_background(f.buffer_mut(), size, &app.model);
 
     // Render confirmation dialogs if active
     if let Some(action) = &app.model.ui.confirm_action {
@@ -376,5 +394,144 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Render toast notification if active
     if let Some((message, _timestamp)) = &app.model.ui.toast_message {
         toast::render_toast(f, size, message);
+    }
+}
+
+/// Style applied to everything behind an open modal.
+/// Resets bg and strips every modifier except DIM so selection bars and bold/reversed
+/// text recede along with the rest.
+fn dim_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .bg(Color::Reset)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::all() - Modifier::DIM)
+}
+
+/// Dim the background when a modal is open; no-op otherwise.
+fn maybe_dim_background(buf: &mut Buffer, area: Rect, model: &crate::model::Model) {
+    if crate::logic::ui::modal_open(model) {
+        dim_background(buf, area);
+    }
+}
+
+/// Dim every cell in `area`. Overlays drawn afterwards keep their own styling.
+fn dim_background(buf: &mut Buffer, area: Rect) {
+    buf.set_style(area, dim_style());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    // ========================================
+    // DIM BACKGROUND
+    // ========================================
+
+    fn is_dimmed(buf: &Buffer, x: u16, y: u16) -> bool {
+        let cell = &buf[(x, y)];
+        cell.fg == Color::DarkGray
+            && cell.bg == Color::Reset
+            && cell.modifier.contains(Modifier::DIM)
+    }
+
+    #[test]
+    fn test_dim_background_dims_every_cell_and_keeps_text() {
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 0, "hello", Style::default().fg(Color::Green));
+        dim_background(&mut buf, area);
+        for y in 0..3 {
+            for x in 0..10 {
+                assert!(is_dimmed(&buf, x, y), "cell ({x},{y}) not dimmed");
+            }
+        }
+        assert_eq!(buf[(0, 0)].symbol(), "h");
+    }
+
+    #[test]
+    fn test_dim_background_overrides_highlight_bg_and_modifiers() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(
+            0,
+            0,
+            "selected",
+            Style::default()
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        );
+        dim_background(&mut buf, area);
+        assert_eq!(buf[(0, 0)].bg, Color::Reset);
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn test_popup_drawn_after_dim_keeps_normal_style() {
+        let backend = TestBackend::new(30, 9);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let full = f.area();
+                f.render_widget(
+                    Paragraph::new("background text everywhere")
+                        .style(Style::default().fg(Color::Cyan)),
+                    full,
+                );
+                dim_background(f.buffer_mut(), full);
+                let popup = Rect::new(10, 3, 10, 3);
+                f.render_widget(Clear, popup);
+                f.render_widget(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::Yellow)),
+                    popup,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        assert!(is_dimmed(buf, 0, 0));
+        assert!(is_dimmed(buf, 29, 8));
+        assert!(!is_dimmed(buf, 10, 3));
+        assert_eq!(buf[(10, 3)].fg, Color::Yellow);
+        assert!(!buf[(10, 3)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn test_no_modal_leaves_buffer_untouched() {
+        let model = crate::model::Model::new(false);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 0, "text", Style::default().fg(Color::Green));
+        maybe_dim_background(&mut buf, area, &model);
+        assert_eq!(buf[(0, 0)].fg, Color::Green);
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn test_modal_open_dims_buffer_via_maybe_dim() {
+        let mut model = crate::model::Model::new(false);
+        model.ui.show_setup_help = true;
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 0, "text", Style::default().fg(Color::Green));
+        maybe_dim_background(&mut buf, area, &model);
+        assert!(is_dimmed(&buf, 0, 0));
+    }
+
+    #[test]
+    fn test_toast_only_does_not_dim_via_maybe_dim() {
+        let mut model = crate::model::Model::new(false);
+        model.ui.show_toast("hi".to_string());
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 0, "text", Style::default().fg(Color::Green));
+        maybe_dim_background(&mut buf, area, &model);
+        assert_eq!(buf[(0, 0)].fg, Color::Green);
     }
 }

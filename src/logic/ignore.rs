@@ -93,6 +93,100 @@ pub fn find_matching_patterns(patterns: &[String], file_path: &str) -> Vec<Strin
         .collect()
 }
 
+/// One positive ignore pattern, compiled for `may_be_ignored`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompiledIgnore {
+    rooted: bool,
+    glob: glob::Pattern,
+}
+
+/// Ignore patterns compiled once per fetch for `may_be_ignored`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IgnoreMatcher {
+    Patterns(Vec<CompiledIgnore>),
+    /// Syntax we don't model; every path counts as possibly ignored
+    MatchAll,
+}
+
+/// Compile .stignore lines (preferably the `expanded` list) for `may_be_ignored`.
+///
+/// Negations are dropped and prefixes stripped. Unsupported syntax (`#include`, `#escape`,
+/// `{a,b}`, backslash escapes, invalid globs) yields `MatchAll`.
+pub fn compile_ignore_patterns(patterns: &[String]) -> IgnoreMatcher {
+    let mut compiled = Vec::new();
+    for line in patterns {
+        let mut pattern = line.trim();
+        if pattern.is_empty() || pattern.starts_with("//") {
+            continue;
+        }
+        if pattern.starts_with("#include")
+            || pattern.starts_with("#escape")
+            || pattern.contains('{')
+            || pattern.contains('\\')
+        {
+            return IgnoreMatcher::MatchAll;
+        }
+        loop {
+            let stripped = pattern
+                .strip_prefix("(?d)")
+                .or_else(|| pattern.strip_prefix("(?i)"));
+            match stripped {
+                Some(rest) => pattern = rest,
+                None => break,
+            }
+        }
+        if pattern.starts_with('!') {
+            continue;
+        }
+        let body = pattern.trim_matches('/').to_lowercase();
+        if body.is_empty() {
+            return IgnoreMatcher::MatchAll;
+        }
+        let Ok(glob) = glob::Pattern::new(&body) else {
+            return IgnoreMatcher::MatchAll;
+        };
+        compiled.push(CompiledIgnore {
+            rooted: pattern.starts_with('/'),
+            glob,
+        });
+    }
+    IgnoreMatcher::Patterns(compiled)
+}
+
+/// Whether any pattern could ignore `path` (folder-relative, no leading slash).
+///
+/// Over-matches on purpose: false must mean "certainly not ignored". Negations are skipped,
+/// matching is case-insensitive, ancestors are checked, unrooted patterns are tried at every
+/// depth, and unsupported syntax makes every path match.
+pub fn may_be_ignored(matcher: &IgnoreMatcher, path: &str) -> bool {
+    let patterns = match matcher {
+        IgnoreMatcher::MatchAll => return true,
+        IgnoreMatcher::Patterns(patterns) if patterns.is_empty() => return false,
+        IgnoreMatcher::Patterns(patterns) => patterns,
+    };
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: false,
+        require_literal_leading_dot: false,
+    };
+    let path = path.trim_matches('/').to_lowercase();
+    let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+
+    // Every ancestor (and the path itself), as a slice of components
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+    for start in 0..components.len() {
+        for end in (start + 1)..=components.len() {
+            candidates.push((start, components[start..end].join("/")));
+        }
+    }
+    patterns.iter().any(|p| {
+        candidates
+            .iter()
+            .filter(|(start, _)| !p.rooted || *start == 0)
+            .any(|(_, candidate)| p.glob.matches_with(candidate, options))
+    })
+}
+
 /// Validate an ignore pattern for common syntax errors
 ///
 /// Checks for common pattern syntax errors before sending to the Syncthing API.
@@ -331,5 +425,62 @@ mod tests {
         assert!(validate_pattern("file-name.txt").is_ok());
         assert!(validate_pattern("file_name.txt").is_ok());
         assert!(validate_pattern("file.name.txt").is_ok());
+    }
+
+    // ========================================
+    // MAY BE IGNORED (conservative)
+    // ========================================
+
+    fn pats(list: &[&str]) -> IgnoreMatcher {
+        let lines: Vec<String> = list.iter().map(|p| p.to_string()).collect();
+        compile_ignore_patterns(&lines)
+    }
+
+    #[test]
+    fn test_may_be_ignored_no_patterns() {
+        assert!(!may_be_ignored(&pats(&[]), "a/b.txt"));
+        assert!(!may_be_ignored(&pats(&["", "// comment"]), "a/b.txt"));
+    }
+
+    #[test]
+    fn test_may_be_ignored_rooted_dir_covers_children() {
+        let p = pats(&["/website"]);
+        assert!(may_be_ignored(&p, "website"));
+        assert!(may_be_ignored(&p, "website/build.log"));
+        assert!(!may_be_ignored(&p, "websites"));
+        assert!(!may_be_ignored(&p, "other/website"));
+    }
+
+    #[test]
+    fn test_may_be_ignored_unrooted_matches_at_any_depth() {
+        let p = pats(&["scratch.txt", "build/out"]);
+        assert!(may_be_ignored(&p, "notes/scratch.txt"));
+        assert!(may_be_ignored(&p, "x/build/out/y.o"));
+        assert!(!may_be_ignored(&p, "notes"));
+        assert!(!may_be_ignored(&p, "notes/todo.txt"));
+    }
+
+    #[test]
+    fn test_may_be_ignored_globs_and_prefixes() {
+        let p = pats(&["(?d)(?i)*.LOG", "!keep.log"]);
+        assert!(may_be_ignored(&p, "a/debug.log"));
+        // Negations are skipped, so a re-included file still counts as possibly ignored
+        assert!(may_be_ignored(&p, "keep.log"));
+        assert!(!may_be_ignored(&p, "a/readme.md"));
+        assert!(may_be_ignored(&pats(&["/cache/**"]), "cache/x/y"));
+        assert!(may_be_ignored(&pats(&["/trailing/"]), "trailing/x"));
+    }
+
+    #[test]
+    fn test_may_be_ignored_unsupported_syntax_matches_everything() {
+        assert!(may_be_ignored(&pats(&["#include other"]), "a.txt"));
+        assert!(may_be_ignored(&pats(&["*.{jpg,png}"]), "a.txt"));
+        assert!(may_be_ignored(&pats(&["a**b"]), "a.txt"));
+    }
+
+    #[test]
+    fn test_may_be_ignored_escapes_match_everything() {
+        assert!(may_be_ignored(&pats(&["foo\\*bar"]), "a.txt"));
+        assert!(may_be_ignored(&pats(&["#escape=|", "x"]), "a.txt"));
     }
 }

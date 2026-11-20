@@ -599,6 +599,10 @@ impl App {
     }
 
     async fn load_folder_statuses(&mut self) {
+        let mut served_from_cache: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut folders_to_refresh: Vec<String> = Vec::new();
+        let mut fresh_statuses: Vec<(String, Option<String>, api::FolderStatus)> = Vec::new();
         for folder in &self.model.syncthing.folders {
             // Try cache first - use it without validation on initial load
             if !self.model.syncthing.statuses_loaded
@@ -608,6 +612,7 @@ impl App {
                     .syncthing
                     .folder_statuses
                     .insert(folder.id.clone(), cached_status);
+                served_from_cache.insert(folder.id.clone());
                 continue;
             }
 
@@ -619,20 +624,9 @@ impl App {
                 if let Some(&last_seq) = self.model.performance.last_known_sequences.get(&folder.id)
                     && last_seq != sequence
                 {
-                    // Sequence changed! Invalidate cached data for this folder
-                    let _ = self.cache.invalidate_folder(&folder.id);
-
-                    // Clear in-memory sync states for this folder if we're currently viewing it
-                    // This ensures files that changed get refreshed
-                    if !self.model.navigation.breadcrumb_trail.is_empty()
-                        && self.model.navigation.breadcrumb_trail[0].folder_id == folder.id
-                    {
-                        for level in &mut self.model.navigation.breadcrumb_trail {
-                            if level.folder_id == folder.id {
-                                level.file_sync_states.clear();
-                            }
-                        }
-                    }
+                    // Sequence changed: re-browse open levels, keeping their states until fresh
+                    // FileInfo arrives
+                    folders_to_refresh.push(folder.id.clone());
                 }
 
                 // Update last known sequence
@@ -643,11 +637,34 @@ impl App {
 
                 // Save fresh status and use it
                 let _ = self.cache.save_folder_status(&folder.id, &status, sequence);
+                let prev_state = self
+                    .model
+                    .syncthing
+                    .folder_statuses
+                    .get(&folder.id)
+                    .map(|s| s.state.clone());
+                fresh_statuses.push((folder.id.clone(), prev_state, status.clone()));
                 self.model
                     .syncthing
                     .folder_statuses
                     .insert(folder.id.clone(), status);
             }
+        }
+        // These bypass FolderStatusResult, so schedule their need index here
+        for (folder_id, prev_state, status) in &fresh_statuses {
+            self.schedule_need_index(folder_id, prev_state.as_deref(), status);
+        }
+        for folder_id in &folders_to_refresh {
+            self.invalidate_and_refresh_folder(folder_id);
+        }
+        // Cached statuses may be stale (e.g. cached mid-sync), so confirm them without blocking
+        for folder_id in logic::folder::folders_needing_refresh_after_cache_load(
+            &self.model.syncthing.folders,
+            &served_from_cache,
+        ) {
+            let _ = self
+                .api_tx
+                .send(services::api::ApiRequest::GetFolderStatus { folder_id });
         }
         self.model.syncthing.statuses_loaded = true;
         self.last_status_update = Instant::now();
@@ -714,7 +731,27 @@ impl App {
         local_item_names
     }
 
+    /// States for a level being opened: cached states plus states derived from the need index,
+    /// and the directories' own (cached) states for `BreadcrumbLevel::direct_states`
     fn load_sync_states_from_cache(
+        &self,
+        folder_id: &str,
+        items: &[BrowseItem],
+        prefix: Option<&str>,
+    ) -> (HashMap<String, SyncState>, HashMap<String, SyncState>) {
+        let mut sync_states = self.cached_sync_states(folder_id, items, prefix);
+        let direct = logic::sync_states::directory_states(items, &sync_states);
+        logic::sync_states::apply_derived_states(
+            items,
+            prefix,
+            &mut sync_states,
+            &direct,
+            &app::sync_states::derive_context(&self.model.syncthing, folder_id),
+        );
+        (sync_states, direct)
+    }
+
+    fn cached_sync_states(
         &self,
         folder_id: &str,
         items: &[BrowseItem],
@@ -1216,10 +1253,12 @@ where
                 app.apply_search_filter();
             }
 
-            // Update directory states based on their children (uses cache only, non-blocking)
+            // Update directory states based on their children (cache queries, so throttled)
             if app.model.navigation.focus_level > 0
                 && !app.model.navigation.breadcrumb_trail.is_empty()
+                && app.last_directory_update.elapsed() >= Duration::from_secs(2)
             {
+                app.last_directory_update = Instant::now();
                 app.update_directory_states(app.model.navigation.focus_level - 1);
             }
         }

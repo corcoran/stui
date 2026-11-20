@@ -4,6 +4,21 @@
 
 use crate::{DisplayMode, SortMode, model::VimCommandState};
 
+/// True when any modal overlay (dialog, menu, popup, summary or history modal) is open.
+///
+/// Toasts and the search bar are not modal. The render path dims the background
+/// behind overlays when this is true, so it must cover every overlay `ui::render` draws.
+pub fn modal_open(model: &crate::model::Model) -> bool {
+    let ui = &model.ui;
+    ui.confirm_action.is_some()
+        || ui.show_setup_help
+        || ui.pattern_selection.is_some()
+        || ui.folder_type_selection.is_some()
+        || ui.file_info_popup.is_some()
+        || ui.out_of_sync_summary.is_some()
+        || ui.folder_history_modal.is_some()
+}
+
 /// Cycle to the next display mode: Off → TimestampOnly → TimestampAndSize → Off
 ///
 /// Display modes control what information is shown for files and directories:
@@ -360,5 +375,142 @@ mod tests {
         assert!(should_dismiss_toast(1500));
         assert!(should_dismiss_toast(2000));
         assert!(should_dismiss_toast(5000));
+    }
+
+    // ========================================
+    // MODAL OPEN PREDICATE
+    // ========================================
+
+    use crate::model::{
+        ConfirmAction, FileInfoPopupState, FolderHistoryModal, FolderTypeSelectionState, Model,
+        OutOfSyncSummaryState, PatternSelectionState,
+    };
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn test_modal_open_false_with_no_popups() {
+        assert!(!modal_open(&Model::new(false)));
+    }
+
+    #[test]
+    fn test_modal_open_false_with_only_toast() {
+        let mut model = Model::new(false);
+        model.ui.show_toast("hello".to_string());
+        assert!(!modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_each_confirm_action() {
+        let actions = vec![
+            ConfirmAction::Revert {
+                folder_id: "f".into(),
+                changed_files: vec![],
+            },
+            ConfirmAction::Delete {
+                path: "/p".into(),
+                name: "n".into(),
+                is_dir: false,
+            },
+            ConfirmAction::IgnoreDelete {
+                path: "/p".into(),
+                name: "n".into(),
+                is_dir: true,
+            },
+            ConfirmAction::PauseResume {
+                folder_id: "f".into(),
+                label: "l".into(),
+                is_paused: false,
+            },
+            ConfirmAction::Rescan {
+                folder_id: "f".into(),
+                folder_label: "l".into(),
+            },
+        ];
+        for action in actions {
+            let mut model = Model::new(false);
+            model.ui.confirm_action = Some(action);
+            assert!(modal_open(&model));
+        }
+    }
+
+    #[test]
+    fn test_modal_open_true_for_setup_help() {
+        let mut model = Model::new(false);
+        model.ui.show_setup_help = true;
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_pattern_selection() {
+        let mut model = Model::new(false);
+        model.ui.pattern_selection = Some(PatternSelectionState {
+            folder_id: "f".into(),
+            item_name: "n".into(),
+            patterns: vec![],
+            selected_index: None,
+        });
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_folder_type_selection() {
+        let mut model = Model::new(false);
+        model.ui.folder_type_selection = Some(FolderTypeSelectionState {
+            folder_id: "f".into(),
+            folder_label: "l".into(),
+            current_type: "sendreceive".into(),
+            selected_index: 1,
+        });
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_file_info_popup() {
+        let mut model = Model::new(false);
+        model.ui.file_info_popup = Some(FileInfoPopupState {
+            folder_id: "f".into(),
+            file_path: "a.txt".into(),
+            browse_item: crate::api::BrowseItem {
+                name: "a.txt".into(),
+                item_type: "FILE_INFO_TYPE_FILE".into(),
+                mod_time: String::new(),
+                size: 0,
+            },
+            file_details: None,
+            file_content: Ok(String::new()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 0,
+        });
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_out_of_sync_summary() {
+        let mut model = Model::new(false);
+        model.ui.out_of_sync_summary = Some(OutOfSyncSummaryState {
+            selected_index: 0,
+            breakdowns: HashMap::new(),
+            loading: HashSet::new(),
+        });
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_folder_history_modal() {
+        let mut model = Model::new(false);
+        model.ui.folder_history_modal = Some(FolderHistoryModal {
+            folder_id: "f".into(),
+            folder_label: "l".into(),
+            entries: vec![],
+            selected_index: 0,
+            total_files_scanned: 0,
+            loading: false,
+            has_more: false,
+            current_offset: 0,
+            all_files_sorted: None,
+        });
+        assert!(modal_open(&model));
     }
 }

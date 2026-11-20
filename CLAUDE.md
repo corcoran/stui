@@ -523,8 +523,11 @@ SQLite at `~/.cache/stui/cache.db` with browse, sync state, folder status caches
 ### ANSI Art Rendering
 Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, line buffer with cursor positioning, SGR colors (fg 30-37/90-97, bg 40-47/100-107), SAUCE stripping.
 
-### State Transition Validation
-`ManualStateChange` tracks SetIgnored/SetUnignored. After SetIgnored → only accept Ignored. After SetUnignored → accept any except Ignored. 10s safety timeout. `syncing_files` HashSet tracks ItemStarted/ItemFinished.
+### Syncing State
+`model.syncthing.syncing_files` maps folder id to the paths Syncthing is downloading: seeded from the `progress` list of the per-folder need fetch (`GetFolderNeed`), updated by ItemStarted/ItemFinished, and cleared when the folder leaves `syncing`/`sync-preparing`. It is overlaid on `file_sync_states` only at render time (`logic::sync_states::overlay_syncing_states` / `item_sync_state`), so base states never hold `Syncing`.
+
+### Derived States
+`model.syncthing.need_index` holds each folder's queued/rest need entries, receive-only local changes and ignore patterns, refetched on sequence changes and syncing transitions. `logic::sync_states::derived_state` fills states the cache and FileInfo haven't supplied: listed paths and their ancestors get the listed state (a directory's aggregate beats its own Synced FileInfo), and anything else is Synced only when the folder is idle, the index is complete for the current sequence and no ignore pattern could match.
 
 ## Current State
 

@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
 use crate::api::{
-    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, NeedResponse, SyncthingClient,
-    SystemStatus,
+    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, LocalChangedFile, NeedResponse,
+    SyncthingClient, SystemStatus,
 };
 use crate::utils;
 
@@ -25,6 +25,23 @@ fn log_debug(msg: &str) {
     {
         let _ = writeln!(file, "{}", msg);
     }
+}
+
+/// Page size of the need fetch behind the syncing set and the need index. Pagination spans
+/// progress, queued and rest in that order; a folder needing more items gets an incomplete index.
+pub const NEED_INDEX_PER_PAGE: u32 = 1000;
+
+/// Index to insert a request of `priority` so the queue stays highest-priority first
+/// (`High < Medium < Low` in `Ord`) and FIFO within a priority.
+fn queue_insert_position(queued: impl Iterator<Item = Priority>, priority: Priority) -> usize {
+    let mut len = 0;
+    for (idx, p) in queued.enumerate() {
+        if p > priority {
+            return idx;
+        }
+        len = idx + 1;
+    }
+    len
 }
 
 /// Priority level for API requests
@@ -57,6 +74,14 @@ pub(crate) enum RequestKey {
     },
     LocalChanged {
         folder_id: String,
+    },
+    FolderNeed {
+        folder_id: String,
+        requested_at: std::time::Instant,
+    },
+    LocalChangedIndex {
+        folder_id: String,
+        sequence: u64,
     },
 }
 
@@ -101,11 +126,22 @@ pub enum ApiRequest {
 
     /// Get local changed files (receive-only folders)
     GetLocalChanged { folder_id: String },
+
+    /// First page of /rest/db/need plus the expanded ignore patterns, feeding the syncing set
+    /// and the need index. `requested_at` identifies the request (see `accept_need_response`).
+    GetFolderNeed {
+        folder_id: String,
+        sequence: u64,
+        requested_at: std::time::Instant,
+    },
+
+    /// /rest/db/localchanged for the need index (receive-only folders)
+    GetLocalChangedIndex { folder_id: String, sequence: u64 },
 }
 
 impl ApiRequest {
     /// Extract priority from request
-    fn priority(&self) -> Priority {
+    pub(crate) fn priority(&self) -> Priority {
         match self {
             ApiRequest::BrowseFolder { priority, .. } => *priority,
             ApiRequest::GetFileInfo { priority, .. } => *priority,
@@ -149,6 +185,21 @@ impl ApiRequest {
             },
             ApiRequest::GetLocalChanged { folder_id } => RequestKey::LocalChanged {
                 folder_id: folder_id.clone(),
+            },
+            ApiRequest::GetFolderNeed {
+                folder_id,
+                requested_at,
+                ..
+            } => RequestKey::FolderNeed {
+                folder_id: folder_id.clone(),
+                requested_at: *requested_at,
+            },
+            ApiRequest::GetLocalChangedIndex {
+                folder_id,
+                sequence,
+            } => RequestKey::LocalChangedIndex {
+                folder_id: folder_id.clone(),
+                sequence: *sequence,
             },
         }
     }
@@ -201,6 +252,20 @@ pub enum ApiResponse {
         folder_id: String,
         file_paths: Vec<String>,
     },
+
+    FolderNeed {
+        folder_id: String,
+        sequence: u64,
+        requested_at: std::time::Instant,
+        need: Result<NeedResponse, anyhow::Error>,
+        ignore_patterns: Result<Vec<String>, anyhow::Error>,
+    },
+
+    LocalChangedIndex {
+        folder_id: String,
+        sequence: u64,
+        files: Result<Vec<LocalChangedFile>, anyhow::Error>,
+    },
 }
 
 /// Internal message for tracking completed requests
@@ -244,11 +309,8 @@ impl ApiService {
         let priority = request.priority();
 
         // Insert based on priority (high priority at front)
-        let insert_pos = self
-            .request_queue
-            .iter()
-            .position(|(_, p)| *p < priority)
-            .unwrap_or(self.request_queue.len());
+        let insert_pos =
+            queue_insert_position(self.request_queue.iter().map(|(_, p)| *p), priority);
 
         self.request_queue.insert(insert_pos, (request, priority));
     }
@@ -445,6 +507,49 @@ impl ApiService {
                     }
                 }
             }
+
+            ApiRequest::GetFolderNeed {
+                folder_id,
+                sequence,
+                requested_at,
+            } => {
+                let (need, ignore_patterns) = tokio::join!(
+                    client.get_needed_files(&folder_id, Some(1), Some(NEED_INDEX_PER_PAGE)),
+                    client.get_ignores(&folder_id),
+                );
+                let ignore_patterns = ignore_patterns.map(crate::api::Ignores::effective);
+                if let Err(e) = &need {
+                    log_debug(&format!("Failed to get need for {}: {}", folder_id, e));
+                }
+                if let Err(e) = &ignore_patterns {
+                    log_debug(&format!("Failed to get ignores for {}: {}", folder_id, e));
+                }
+                ApiResponse::FolderNeed {
+                    folder_id,
+                    sequence,
+                    requested_at,
+                    need,
+                    ignore_patterns,
+                }
+            }
+
+            ApiRequest::GetLocalChangedIndex {
+                folder_id,
+                sequence,
+            } => {
+                let files = client.get_local_changed_entries(&folder_id).await;
+                if let Err(e) = &files {
+                    log_debug(&format!(
+                        "Failed to get local changes for {}: {}",
+                        folder_id, e
+                    ));
+                }
+                ApiResponse::LocalChangedIndex {
+                    folder_id,
+                    sequence,
+                    files,
+                }
+            }
         }
     }
 }
@@ -497,4 +602,54 @@ pub fn spawn_api_service(
     });
 
     (request_tx, response_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================
+    // QUEUE ORDERING
+    // ========================================
+
+    fn insert(queue: &mut Vec<Priority>, p: Priority) {
+        let pos = queue_insert_position(queue.iter().copied(), p);
+        queue.insert(pos, p);
+    }
+
+    #[test]
+    fn test_high_goes_ahead_of_lower_priorities() {
+        let mut q = vec![Priority::Medium, Priority::Low];
+        insert(&mut q, Priority::High);
+        assert_eq!(q, vec![Priority::High, Priority::Medium, Priority::Low]);
+    }
+
+    #[test]
+    fn test_low_goes_behind_higher_priorities() {
+        let mut q = vec![Priority::High, Priority::Medium];
+        insert(&mut q, Priority::Low);
+        assert_eq!(q, vec![Priority::High, Priority::Medium, Priority::Low]);
+    }
+
+    #[test]
+    fn test_same_priority_is_fifo() {
+        let mut q = vec![Priority::High, Priority::Medium, Priority::Low];
+        let pos = queue_insert_position(q.iter().copied(), Priority::Medium);
+        assert_eq!(pos, 2, "new Medium goes after existing Medium, before Low");
+        q.insert(pos, Priority::Medium);
+        assert_eq!(
+            q,
+            vec![
+                Priority::High,
+                Priority::Medium,
+                Priority::Medium,
+                Priority::Low
+            ]
+        );
+    }
+
+    #[test]
+    fn test_empty_queue_inserts_at_front() {
+        assert_eq!(queue_insert_position(std::iter::empty(), Priority::Low), 0);
+    }
 }

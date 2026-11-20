@@ -8,7 +8,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::App;
-use crate::api::SyncState;
 use crate::model::{self, ConfirmAction};
 
 /// Check if folder history modal should load more files
@@ -22,6 +21,11 @@ fn should_load_more_history(modal: &crate::model::types::FolderHistoryModal) -> 
 /// Handle keyboard input
 ///
 /// Processes all keyboard events and dispatches to appropriate actions.
+/// The Ignored icon stays until FileInfo returns, so this is the immediate feedback.
+fn unignore_toast(item_name: &str) -> String {
+    format!("Unignored {}, rescanning...", item_name)
+}
+
 pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     // Update last user action timestamp for idle detection
     app.model.performance.last_user_action = Instant::now();
@@ -196,6 +200,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
                                         // Remove from sync states
                                         level.file_sync_states.remove(&item_name);
+                                        level.direct_states.remove(&item_name);
 
                                         // Adjust selection based on display_items() (respects filter)
                                         let display_len = level.display_items().len();
@@ -539,67 +544,20 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         .set_ignore_patterns(&folder_id, updated_patterns)
                         .await?;
 
-                    // Immediately show as Unknown to give user feedback
                     if app.model.navigation.focus_level > 0
                         && app.model.navigation.focus_level
                             <= app.model.navigation.breadcrumb_trail.len()
                     {
                         let level_idx = app.model.navigation.focus_level - 1;
-                        if let Some(level) =
-                            app.model.navigation.breadcrumb_trail.get_mut(level_idx)
-                        {
-                            level
-                                .file_sync_states
-                                .insert(item_name.clone(), SyncState::Unknown);
-
-                            // Update ignored_exists (file is no longer ignored) - do it inline to avoid borrow issues
-                            level.ignored_exists.remove(&item_name);
-
-                            // Don't add optimistic update for unignore - final state is unpredictable
-                        }
+                        let file_path = crate::logic::sync_states::breadcrumb_item_path(
+                            app.model.navigation.breadcrumb_trail[level_idx]
+                                .prefix
+                                .as_deref(),
+                            &item_name,
+                        );
+                        app.finish_unignore(&folder_id, file_path);
+                        app.model.ui.show_toast(unignore_toast(&item_name));
                     }
-
-                    // Wait for Syncthing to process .stignore change before rescanning
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-                    // Trigger rescan - ItemStarted/ItemFinished events will update state
-                    // Also fetch file info after delay as fallback (for files that don't need syncing)
-                    app.client.rescan_folder(&folder_id).await?;
-
-                    let folder_id_clone = folder_id.clone();
-                    let api_tx = app.api_tx.clone();
-                    let item_name_clone = item_name.clone();
-
-                    let file_path_for_api = if app.model.navigation.focus_level > 0
-                        && app.model.navigation.focus_level
-                            <= app.model.navigation.breadcrumb_trail.len()
-                    {
-                        let level_idx = app.model.navigation.focus_level - 1;
-                        if let Some(level) = app.model.navigation.breadcrumb_trail.get(level_idx) {
-                            if let Some(ref prefix) = level.prefix {
-                                format!("{}/{}", prefix.trim_matches('/'), item_name_clone)
-                            } else {
-                                item_name_clone.clone()
-                            }
-                        } else {
-                            item_name_clone.clone()
-                        }
-                    } else {
-                        item_name_clone
-                    };
-
-                    tokio::spawn(async move {
-                        // Wait longer for ItemStarted event to potentially fire
-                        // Syncthing needs time to discover file, calculate hashes, start transfer
-                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-                        // Fetch file info as fallback
-                        let _ = api_tx.send(crate::services::api::ApiRequest::GetFileInfo {
-                            folder_id: folder_id_clone,
-                            file_path: file_path_for_api,
-                            priority: crate::services::api::Priority::Medium,
-                        });
-                    });
                 }
                 return Ok(());
             }
@@ -922,7 +880,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('i') => {
             // Toggle ignore state (add or remove from .stignore)
-            let _ = app.toggle_ignore().await;
+            if let Ok(crate::app::ignore::IgnoreToggle::Unignored(item_name)) =
+                app.toggle_ignore().await
+            {
+                app.model.ui.show_toast(unignore_toast(&item_name));
+            }
         }
         KeyCode::Char('I') => {
             // Flush pending writes before destructive operation

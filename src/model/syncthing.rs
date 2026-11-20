@@ -3,11 +3,12 @@
 //! This sub-model contains all state related to the Syncthing API:
 //! folders, devices, statuses, system information, and connection stats.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Instant, SystemTime};
 
-use crate::api::{ConnectionStats, Device, Folder, FolderStatus, SystemStatus};
+use crate::api::{ConnectionStats, Device, Folder, FolderStatus, SyncState, SystemStatus};
 use crate::logic::errors::ErrorType;
+use crate::logic::ignore::IgnoreMatcher;
 
 /// Connection state for the Syncthing API
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +26,56 @@ pub enum ConnectionState {
         error_type: ErrorType,
         message: String,
     },
+}
+
+/// Out-of-sync paths of one folder, from /rest/db/need and /rest/db/localchanged.
+///
+/// Paths are relative to the folder root with no trailing slash. In-flight downloads (the
+/// `progress` list) are not stored here; they live in `SyncthingModel::syncing_files`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NeedIndex {
+    /// Queued/rest entries of /rest/db/need
+    pub need: HashMap<String, SyncState>,
+    /// Folder sequence the need list was requested for
+    pub sequence: Option<u64>,
+    /// Whether the need list holds every needed item of `sequence`
+    pub complete: bool,
+    /// Ignore patterns fetched with the need list (None: not fetched or failed)
+    pub ignore: Option<IgnoreMatcher>,
+    /// Receive-only local changes from /rest/db/localchanged
+    pub local_changed: HashMap<String, SyncState>,
+    /// Folder sequence the local changes were requested for
+    pub local_changed_sequence: Option<u64>,
+    /// Send time of the need request this index was built from
+    pub requested_at: Option<Instant>,
+    /// Worst state among the indexed descendants of each directory path
+    pub descendants: HashMap<String, SyncState>,
+}
+
+/// The latest /rest/db/need request of a folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeedFetch {
+    /// When the latest request was sent
+    pub at: Instant,
+    /// Folder sequence the latest request was sent for
+    pub sequence: u64,
+    /// Responses to requests sent before this are dropped (bumped when the folder leaves
+    /// syncing, so a late response can't resurrect the syncing set)
+    pub floor: Instant,
+    /// The latest request failed; the next one waits for the refresh interval
+    pub failed: bool,
+}
+
+impl NeedFetch {
+    /// A fresh, outstanding request sent at `at`
+    pub fn new(at: Instant, sequence: u64) -> Self {
+        Self {
+            at,
+            sequence,
+            floor: at,
+            failed: false,
+        }
+    }
 }
 
 /// Syncthing API data (external state from Syncthing REST API)
@@ -74,6 +125,19 @@ pub struct SyncthingModel {
     // ============================================
     /// Last update timestamp for each folder (folder_id -> (timestamp, filename))
     pub last_folder_updates: HashMap<String, (SystemTime, String)>,
+
+    /// Files Syncthing is actively downloading (folder_id -> paths relative to the folder root,
+    /// no trailing slash). Overlaid on breadcrumb sync states at render time.
+    pub syncing_files: HashMap<String, HashSet<String>>,
+
+    /// Latest /rest/db/need request per folder; feeds both `syncing_files` and `need_index`
+    pub need_fetches: HashMap<String, NeedFetch>,
+
+    /// Out-of-sync paths per folder, used to derive states of items never fetched
+    pub need_index: HashMap<String, NeedIndex>,
+
+    /// Folder sequence of the latest /rest/db/localchanged request feeding `need_index`
+    pub local_changed_requested: HashMap<String, u64>,
 }
 
 impl SyncthingModel {
@@ -96,6 +160,10 @@ impl SyncthingModel {
             last_transfer_rates: None,
             connected_device_count: None,
             last_folder_updates: HashMap::new(),
+            syncing_files: HashMap::new(),
+            need_fetches: HashMap::new(),
+            need_index: HashMap::new(),
+            local_changed_requested: HashMap::new(),
         }
     }
 

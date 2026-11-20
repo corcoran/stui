@@ -31,15 +31,15 @@ impl App {
             });
 
             // Sort items
-            level.items.sort_by(|a, b| {
-                logic::sorting::compare_browse_items(
-                    a,
-                    b,
-                    sort_mode,
-                    reverse,
-                    &level.file_sync_states,
-                )
-            });
+            // Sort by the displayed state: in-flight transfers are overlaid like in render
+            logic::sorting::sort_browse_items(
+                &mut level.items,
+                sort_mode,
+                reverse,
+                &level.file_sync_states,
+                level.prefix.as_deref(),
+                self.model.syncthing.syncing_files.get(&level.folder_id),
+            );
 
             // Restore selection to the same item
             if let Some(name) = selected_name {

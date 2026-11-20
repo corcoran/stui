@@ -116,6 +116,29 @@ pub struct FileInfo {
     pub platform: serde_json::Value,
 }
 
+/// Response of GET /rest/db/ignores
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ignores {
+    /// Raw .stignore lines
+    pub lines: Vec<String>,
+    /// Lines after `#include` expansion (absent on old Syncthing versions)
+    pub expanded: Option<Vec<String>>,
+}
+
+impl Ignores {
+    /// The expanded patterns, or the raw lines when Syncthing didn't expand them
+    pub fn effective(self) -> Vec<String> {
+        self.expanded.unwrap_or(self.lines)
+    }
+}
+
+/// One entry of /rest/db/localchanged
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalChangedFile {
+    pub name: String,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NeedResponse {
     pub progress: Vec<FileInfo>,
@@ -271,6 +294,12 @@ pub struct FolderStats {
     /// Last scan timestamp (not currently used)
     #[allow(dead_code)]
     pub last_scan: String,
+}
+
+/// False for the placeholder `lastFile` Syncthing reports for folders with no activity
+/// (`at: "0001-01-01T00:00:00Z"`, `filename: ""`).
+fn is_real_last_file(at: std::time::SystemTime, filename: &str) -> bool {
+    !filename.is_empty() && at > std::time::UNIX_EPOCH
 }
 
 #[derive(Clone)]
@@ -448,6 +477,19 @@ impl SyncthingClient {
     }
 
     pub async fn get_local_changed_files(&self, folder_id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .get_local_changed_entries(folder_id)
+            .await?
+            .into_iter()
+            .map(|f| f.name)
+            .collect())
+    }
+
+    /// Receive-only local changes, including deletions
+    pub async fn get_local_changed_entries(
+        &self,
+        folder_id: &str,
+    ) -> Result<Vec<LocalChangedFile>> {
         let url = format!(
             "{}/rest/db/localchanged?folder={}",
             self.base_url, folder_id
@@ -470,8 +512,14 @@ impl SyncthingClient {
             .await
             .context("Failed to parse local changed files")?;
 
-        // Extract just the filenames
-        Ok(data.files.iter().map(|f| f.name.clone()).collect())
+        Ok(data
+            .files
+            .into_iter()
+            .map(|f| LocalChangedFile {
+                name: f.name,
+                deleted: f.deleted,
+            })
+            .collect())
     }
 
     pub async fn get_local_changed_items(
@@ -569,7 +617,8 @@ impl SyncthingClient {
             .context("Failed to parse need response")
     }
 
-    pub async fn get_ignore_patterns(&self, folder_id: &str) -> Result<Vec<String>> {
+    /// The folder's .stignore lines and their `#include`-expanded form
+    pub async fn get_ignores(&self, folder_id: &str) -> Result<Ignores> {
         let url = format!("{}/rest/db/ignores?folder={}", self.base_url, folder_id);
         let response = self
             .client
@@ -582,6 +631,7 @@ impl SyncthingClient {
         #[derive(Deserialize)]
         struct IgnoresResponse {
             ignore: Option<Vec<String>>,
+            expanded: Option<Vec<String>>,
         }
 
         let data: IgnoresResponse = response
@@ -589,7 +639,14 @@ impl SyncthingClient {
             .await
             .context("Failed to parse ignore patterns")?;
 
-        Ok(data.ignore.unwrap_or_default())
+        Ok(Ignores {
+            lines: data.ignore.unwrap_or_default(),
+            expanded: data.expanded,
+        })
+    }
+
+    pub async fn get_ignore_patterns(&self, folder_id: &str) -> Result<Vec<String>> {
+        Ok(self.get_ignores(folder_id).await?.lines)
     }
 
     pub async fn set_ignore_patterns(&self, folder_id: &str, patterns: Vec<String>) -> Result<()> {
@@ -698,8 +755,10 @@ impl SyncthingClient {
             let timestamp =
                 crate::services::events::parse_event_time_public(&folder_stats.last_file.at);
 
-            // Include all files, even deleted ones - matches Syncthing web GUI behavior
-            // The "deleted" flag just indicates the last operation was a deletion
+            // Include deleted files too (matches the web GUI); skip folders with no activity
+            if !is_real_last_file(timestamp, &folder_stats.last_file.filename) {
+                continue;
+            }
             updates.insert(folder_id, (timestamp, folder_stats.last_file.filename));
         }
 
@@ -864,6 +923,40 @@ impl FileDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================
+    // LAST FILE FILTER
+    // ========================================
+
+    fn parse(at: &str) -> std::time::SystemTime {
+        crate::services::events::parse_event_time_public(at)
+    }
+
+    #[test]
+    fn test_is_real_last_file_skips_zero_time() {
+        assert!(!is_real_last_file(
+            parse("0001-01-01T00:00:00Z"),
+            "file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_is_real_last_file_skips_unix_epoch() {
+        assert!(!is_real_last_file(
+            parse("1970-01-01T00:00:00Z"),
+            "file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_is_real_last_file_skips_empty_filename() {
+        assert!(!is_real_last_file(parse("2024-05-01T12:00:00Z"), ""));
+    }
+
+    #[test]
+    fn test_is_real_last_file_keeps_normal_entry() {
+        assert!(is_real_last_file(parse("2024-05-01T12:00:00Z"), "a/b.txt"));
+    }
 
     #[tokio::test]
     async fn test_get_needed_files_builds_correct_url() {
