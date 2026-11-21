@@ -66,7 +66,7 @@ impl App {
             status.state == "paused" || syncthing.get_folder(folder_id).is_some_and(|f| f.paused);
         if paused {
             // Also invalidates any outstanding fetch, so a late response can't resurrect state
-            syncthing.syncing_files.remove(folder_id);
+            syncthing.clear_syncing(folder_id);
             syncthing.need_fetches.remove(folder_id);
             return;
         }
@@ -89,6 +89,7 @@ impl App {
         let fetch = plan.fetch && wanted;
         if plan.clear_syncing {
             let restoring = syncthing.restoring_in(folder_id);
+            syncthing.path_events.remove(folder_id);
             if restoring.is_empty() {
                 syncthing.syncing_files.remove(folder_id);
             } else {
@@ -157,6 +158,7 @@ impl App {
             .send(services::api::ApiRequest::GetLocalChangedIndex {
                 folder_id: folder_id.to_string(),
                 sequence,
+                requested_at: std::time::Instant::now(),
             });
     }
 
@@ -259,6 +261,7 @@ impl App {
                 folder_id: folder_id.clone(),
                 file_path,
                 priority,
+                requested_at: std::time::Instant::now(),
             });
             queued += 1;
         }
@@ -460,6 +463,7 @@ impl App {
                 folder_id: folder_id.clone(),
                 file_path: file_path.clone(),
                 priority: services::api::Priority::Medium,
+                requested_at: std::time::Instant::now(),
             });
         }
     }
@@ -575,6 +579,7 @@ impl App {
                 folder_id: folder_id.clone(),
                 file_path: dir_path.to_string(),
                 priority: services::api::Priority::Low, // Low priority, it's speculative prefetch
+                requested_at: std::time::Instant::now(),
             });
         }
     }
@@ -632,6 +637,7 @@ impl App {
                     folder_id: folder_id.to_string(),
                     prefix: Some(dir_path.to_string()),
                     priority: services::api::Priority::Low,
+                    requested_at: std::time::Instant::now(),
                 });
             }
             return; // Skip this iteration, will process when cached
@@ -743,6 +749,7 @@ impl App {
                 folder_id: folder_id.clone(),
                 file_path: dir_path.clone(),
                 priority: services::api::Priority::Medium,
+                requested_at: std::time::Instant::now(),
             });
         }
     }
@@ -796,6 +803,7 @@ impl App {
                 folder_id: level.folder_id.clone(),
                 file_path: file_path.clone(),
                 priority: services::api::Priority::High, // High priority for selected item
+                requested_at: std::time::Instant::now(),
             });
         }
     }

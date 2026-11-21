@@ -376,6 +376,7 @@ impl App {
                 folder_id: folder_id.clone(),
                 file_path: file_path.clone(),
                 priority: services::api::Priority::High,
+                requested_at: std::time::Instant::now(),
             };
             let _ = api_tx.send(request());
             tokio::time::sleep(UNIGNORE_FOLLOW_UP_DELAY).await;

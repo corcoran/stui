@@ -136,6 +136,7 @@ impl App {
                             folder_id: folder_id.to_string(),
                             prefix: level.prefix.clone(),
                             priority: services::api::Priority::High,
+                            requested_at: std::time::Instant::now(),
                         });
 
                         log_debug(&format!(

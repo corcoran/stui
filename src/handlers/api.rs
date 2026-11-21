@@ -29,10 +29,26 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             folder_id,
             prefix,
             items,
+            requested_at,
         } => {
             // Mark browse as no longer loading
             let browse_key = format!("{}:{}", folder_id, prefix.as_deref().unwrap_or(""));
             app.model.performance.loading_browse.remove(&browse_key);
+
+            let applied_key = (folder_id.clone(), prefix.clone());
+            if app
+                .model
+                .syncthing
+                .browse_applied_at
+                .get(&applied_key)
+                .is_some_and(|applied| requested_at < *applied)
+            {
+                crate::log_debug(&format!(
+                    "DEBUG [BrowseResult]: Dropping listing older than the one shown for folder={} prefix={:?}",
+                    folder_id, prefix
+                ));
+                return;
+            }
 
             let Ok(mut items) = items else {
                 // API call failed - only update state if we're not already in Connecting mode
@@ -82,6 +98,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 ));
                 return; // Skip saving and UI updates for responses from folders we've left
             }
+            app.model
+                .syncthing
+                .browse_applied_at
+                .insert(applied_key, requested_at);
 
             // Get folder sequence for cache
             let folder_sequence = app
@@ -286,6 +306,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                                 folder_id: folder_id.clone(),
                                 file_path,
                                 priority: Priority::Medium,
+                                requested_at: std::time::Instant::now(),
                             });
                         }
                     }
@@ -331,10 +352,30 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             folder_id,
             file_path,
             details,
+            requested_at,
         } => {
             // Mark as no longer loading
             let sync_key = format!("{}:{}", folder_id, file_path);
             app.model.performance.loading_sync_states.remove(&sync_key);
+
+            // An item event newer than the request already said more than this reply can
+            let superseded = app
+                .model
+                .syncthing
+                .path_events
+                .get(&folder_id)
+                .and_then(|events| events.get(file_path.trim_end_matches('/')))
+                .is_some_and(|event| {
+                    event.kind == crate::model::syncthing::PathEventKind::Finished
+                        && event.at > requested_at
+                });
+            if superseded {
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult]: dropping reply older than ItemFinished folder={} path={}",
+                    folder_id, file_path
+                ));
+                return;
+            }
 
             let file_details = match details.as_ref() {
                 Ok(details) => details,
@@ -464,7 +505,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         }
 
-        ApiResponse::FolderStatusResult { folder_id, status } => {
+        ApiResponse::FolderStatusResult {
+            folder_id,
+            status,
+            requested_at,
+        } => {
             let Ok(status) = status else {
                 // API call failed - only update state if we're not already in Connecting mode
                 // (Background reconnection manages the Connecting state)
@@ -488,6 +533,24 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
                 return;
             };
+
+            if app
+                .model
+                .syncthing
+                .status_applied_at
+                .get(&folder_id)
+                .is_some_and(|applied| requested_at < *applied)
+            {
+                crate::log_debug(&format!(
+                    "DEBUG [FolderStatusResult]: Dropping status older than the one shown for folder={}",
+                    folder_id
+                ));
+                return;
+            }
+            app.model
+                .syncthing
+                .status_applied_at
+                .insert(folder_id.clone(), requested_at);
 
             // Successful API call - mark as connected
             let was_disconnected = !matches!(
@@ -555,6 +618,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                                     folder_id: folder_id.clone(),
                                     prefix: level.prefix.clone(),
                                     priority: Priority::High,
+                                    requested_at: std::time::Instant::now(),
                                 });
 
                                 crate::log_debug(&format!(
@@ -611,7 +675,10 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
 
                 // Immediately request folder status to detect sequence changes
                 // This makes the rescan feel more responsive
-                let _ = app.api_tx.send(ApiRequest::GetFolderStatus { folder_id });
+                let _ = app.api_tx.send(ApiRequest::GetFolderStatus {
+                    folder_id,
+                    requested_at: std::time::Instant::now(),
+                });
             } else {
                 crate::log_debug(&format!(
                     "DEBUG [RescanResult ERROR]: Failed to rescan folder={} error={:?}",
@@ -851,7 +918,15 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
             match need {
                 Ok(need) => {
-                    let syncing = crate::logic::sync_states::syncing_paths_from_need(&need);
+                    let progress: Vec<String> =
+                        crate::logic::sync_states::syncing_paths_from_need(&need)
+                            .into_iter()
+                            .collect();
+                    let syncing = crate::logic::sync_states::syncing_from_need(
+                        &progress,
+                        requested_at,
+                        app.model.syncthing.path_events.get(&folder_id),
+                    );
                     crate::log_debug(&format!(
                         "DEBUG [FolderNeed]: folder={} seq={} in_progress={}",
                         folder_id,
@@ -911,6 +986,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         ApiResponse::LocalChangedIndex {
             folder_id,
             sequence,
+            requested_at: _,
             files,
         } => {
             if app.model.syncthing.local_changed_requested.get(&folder_id) != Some(&sequence) {
@@ -979,5 +1055,130 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{
+        create_test_app, create_test_app_with_api_rx, file_item, folder_status, view_folder_root,
+    };
+    use std::time::Duration;
+
+    fn status_with_sequence(folder: &str, sequence: u64, requested_at: Instant) -> ApiResponse {
+        let mut status = folder_status("idle");
+        status.sequence = sequence;
+        ApiResponse::FolderStatusResult {
+            folder_id: folder.to_string(),
+            status: Ok(status),
+            requested_at,
+        }
+    }
+
+    fn listing(folder: &str, names: &[&str], requested_at: Instant) -> ApiResponse {
+        ApiResponse::BrowseResult {
+            folder_id: folder.to_string(),
+            prefix: None,
+            items: Ok(names.iter().map(|n| file_item(n)).collect()),
+            requested_at,
+        }
+    }
+
+    fn shown_names(app: &App) -> Vec<String> {
+        app.model.navigation.breadcrumb_trail[0]
+            .items
+            .iter()
+            .map(|i| i.name.clone())
+            .collect()
+    }
+
+    // ========================================
+    // OUT-OF-ORDER REPLIES
+    // ========================================
+
+    #[test]
+    fn test_older_folder_status_reply_is_dropped() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+
+        handle_api_response(&mut app, status_with_sequence("f", 7, t1));
+        while rx.try_recv().is_ok() {}
+        handle_api_response(&mut app, status_with_sequence("f", 3, t0));
+
+        assert_eq!(app.model.syncthing.folder_statuses["f"].sequence, 7);
+        assert_eq!(app.model.performance.last_known_sequences["f"], 7);
+        let queued: Vec<ApiRequest> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            !queued
+                .iter()
+                .any(|r| matches!(r, ApiRequest::BrowseFolder { .. })),
+            "dropped reply queued a browse: {:?}",
+            queued
+        );
+    }
+
+    #[test]
+    fn test_newer_folder_status_reply_is_applied() {
+        let mut app = create_test_app();
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+
+        handle_api_response(&mut app, status_with_sequence("f", 3, t0));
+        handle_api_response(&mut app, status_with_sequence("f", 7, t1));
+
+        assert_eq!(app.model.syncthing.folder_statuses["f"].sequence, 7);
+        assert_eq!(app.model.syncthing.status_applied_at["f"], t1);
+    }
+
+    #[test]
+    fn test_older_browse_reply_is_dropped_and_clears_loading() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![]);
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+
+        handle_api_response(&mut app, listing("f", &["a", "b"], t1));
+        app.model
+            .performance
+            .loading_browse
+            .insert("f:".to_string());
+        handle_api_response(&mut app, listing("f", &["a", "b", "c"], t0));
+
+        assert_eq!(shown_names(&app), vec!["a", "b"]);
+        assert!(!app.model.performance.loading_browse.contains("f:"));
+    }
+
+    #[test]
+    fn test_newer_browse_reply_is_applied() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![]);
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+
+        handle_api_response(&mut app, listing("f", &["a", "b"], t0));
+        handle_api_response(&mut app, listing("f", &["a", "b", "c"], t1));
+
+        assert_eq!(shown_names(&app), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_browse_order_is_tracked_per_prefix() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![]);
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+
+        let sub = |at| ApiResponse::BrowseResult {
+            folder_id: "f".to_string(),
+            prefix: Some("sub/".to_string()),
+            items: Ok(vec![file_item("x")]),
+            requested_at: at,
+        };
+        handle_api_response(&mut app, sub(t1));
+        handle_api_response(&mut app, listing("f", &["a"], t0));
+
+        assert_eq!(shown_names(&app), vec!["a"]);
     }
 }

@@ -52,6 +52,19 @@ pub struct NeedIndex {
     pub descendants: HashMap<String, SyncState>,
 }
 
+/// What an ItemStarted/ItemFinished event said about a path, and when stui received it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathEvent {
+    pub at: Instant,
+    pub kind: PathEventKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathEventKind {
+    Started,
+    Finished,
+}
+
 /// The latest /rest/db/need request of a folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NeedFetch {
@@ -193,6 +206,10 @@ pub struct SyncthingModel {
     /// show syncing from the keypress until the download ends.
     pub restoring: HashMap<String, HashSet<String>>,
 
+    /// Latest ItemStarted/ItemFinished per path (folder_id -> path -> event). Lets replies to
+    /// requests sent before an event defer to it. Cleared with the folder's `syncing_files`.
+    pub path_events: HashMap<String, HashMap<String, PathEvent>>,
+
     /// Latest /rest/db/need request per folder; feeds both `syncing_files` and `need_index`
     pub need_fetches: HashMap<String, NeedFetch>,
 
@@ -210,10 +227,36 @@ pub struct SyncthingModel {
 
     /// When the latest /rest/db/localchanged request failed; retried after the refresh interval
     pub local_changed_failed_at: HashMap<String, Instant>,
+
+    /// Request time of the status reply last applied per folder; older replies are dropped
+    pub status_applied_at: HashMap<String, Instant>,
+
+    /// Request time of the listing last applied per (folder, prefix); older replies are dropped
+    pub browse_applied_at: HashMap<(String, Option<String>), Instant>,
 }
 
 impl SyncthingModel {
     /// The folder's files being restored, to keep in a rebuilt syncing set
+    /// Records an item event received now; `path` is trimmed like `syncing_files` keys.
+    pub fn record_path_event(&mut self, folder_id: &str, path: &str, kind: PathEventKind) {
+        self.path_events
+            .entry(folder_id.to_string())
+            .or_default()
+            .insert(
+                path.trim_end_matches('/').to_string(),
+                PathEvent {
+                    at: Instant::now(),
+                    kind,
+                },
+            );
+    }
+
+    /// Forgets a folder's syncing set and the events that refine it.
+    pub fn clear_syncing(&mut self, folder_id: &str) {
+        self.syncing_files.remove(folder_id);
+        self.path_events.remove(folder_id);
+    }
+
     pub fn restoring_in(&self, folder_id: &str) -> HashSet<String> {
         self.restoring.get(folder_id).cloned().unwrap_or_default()
     }
@@ -241,12 +284,15 @@ impl SyncthingModel {
             last_folder_updates: HashMap::new(),
             syncing_files: HashMap::new(),
             restoring: HashMap::new(),
+            path_events: HashMap::new(),
             need_fetches: HashMap::new(),
             need_index: HashMap::new(),
             need_paging: HashMap::new(),
             need_paging_generation: 0,
             local_changed_requested: HashMap::new(),
             local_changed_failed_at: HashMap::new(),
+            status_applied_at: HashMap::new(),
+            browse_applied_at: HashMap::new(),
         }
     }
 

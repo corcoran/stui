@@ -3,7 +3,7 @@
 //! This module contains logic for sync state management and transitions.
 
 use crate::api::{BrowseItem, FolderStatus, LocalChangedFile, NeedResponse, SyncState};
-use crate::model::syncthing::{NeedFetch, NeedIndex};
+use crate::model::syncthing::{NeedFetch, NeedIndex, PathEvent, PathEventKind};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -150,6 +150,26 @@ pub fn syncing_paths_from_need(need: &NeedResponse) -> HashSet<String> {
         .iter()
         .map(|f| f.name.trim_end_matches('/').to_string())
         .collect()
+}
+
+/// The syncing set for a need response requested at `requested_at`: its `progress` paths,
+/// minus those an event reported finished since, plus those an event reported started since.
+pub fn syncing_from_need(
+    progress: &[String],
+    requested_at: Instant,
+    events: Option<&HashMap<String, PathEvent>>,
+) -> HashSet<String> {
+    let mut syncing: HashSet<String> = progress.iter().cloned().collect();
+    for (path, event) in events.into_iter().flatten() {
+        if event.at <= requested_at {
+            continue;
+        }
+        match event.kind {
+            PathEventKind::Started => syncing.insert(path.clone()),
+            PathEventKind::Finished => syncing.remove(path),
+        };
+    }
+    syncing
 }
 
 /// Path of a breadcrumb item relative to the folder root.
@@ -722,6 +742,64 @@ pub fn need_fetch_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event(at: Instant, kind: PathEventKind) -> PathEvent {
+        PathEvent { at, kind }
+    }
+
+    fn events(entries: &[(&str, PathEvent)]) -> HashMap<String, PathEvent> {
+        entries
+            .iter()
+            .map(|(path, event)| (path.to_string(), *event))
+            .collect()
+    }
+
+    fn progress(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn test_syncing_from_need_drops_path_finished_after_request() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(1);
+        let events = events(&[("a", event(t1, PathEventKind::Finished))]);
+
+        let syncing = syncing_from_need(&progress(&["a", "b"]), t0, Some(&events));
+
+        assert_eq!(syncing, HashSet::from(["b".to_string()]));
+    }
+
+    #[test]
+    fn test_syncing_from_need_adds_path_started_after_request() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(1);
+        let events = events(&[("c", event(t1, PathEventKind::Started))]);
+
+        let syncing = syncing_from_need(&progress(&["a"]), t0, Some(&events));
+
+        assert_eq!(syncing, HashSet::from(["a".to_string(), "c".to_string()]));
+    }
+
+    #[test]
+    fn test_syncing_from_need_keeps_events_older_than_request_out() {
+        let t0 = Instant::now();
+        let before = t0 - Duration::from_millis(1);
+        let events = events(&[
+            ("a", event(before, PathEventKind::Finished)),
+            ("c", event(before, PathEventKind::Started)),
+        ]);
+
+        let syncing = syncing_from_need(&progress(&["a"]), t0, Some(&events));
+
+        assert_eq!(syncing, HashSet::from(["a".to_string()]));
+    }
+
+    #[test]
+    fn test_syncing_from_need_without_events_is_progress() {
+        let syncing = syncing_from_need(&progress(&["a", "b"]), Instant::now(), None);
+
+        assert_eq!(syncing.len(), 2);
+    }
 
     #[test]
     fn test_sync_state_priority_order() {

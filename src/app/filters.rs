@@ -84,6 +84,7 @@ impl App {
                         folder_id: folder_id.to_string(),
                         prefix: Some(subdir_prefix),
                         priority: services::api::Priority::Low,
+                        requested_at: std::time::Instant::now(),
                     });
                 }
             }

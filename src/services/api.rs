@@ -96,6 +96,7 @@ pub enum ApiRequest {
         folder_id: String,
         prefix: Option<String>,
         priority: Priority,
+        requested_at: std::time::Instant,
     },
 
     /// Get detailed file information
@@ -103,10 +104,14 @@ pub enum ApiRequest {
         folder_id: String,
         file_path: String,
         priority: Priority,
+        requested_at: std::time::Instant,
     },
 
     /// Get folder sync status
-    GetFolderStatus { folder_id: String },
+    GetFolderStatus {
+        folder_id: String,
+        requested_at: std::time::Instant,
+    },
 
     /// Trigger folder rescan (always high priority). Empty `paths` scans the whole folder,
     /// otherwise only those folder-relative paths.
@@ -150,7 +155,11 @@ pub enum ApiRequest {
     },
 
     /// /rest/db/localchanged for the need index (receive-only folders)
-    GetLocalChangedIndex { folder_id: String, sequence: u64 },
+    GetLocalChangedIndex {
+        folder_id: String,
+        sequence: u64,
+        requested_at: std::time::Instant,
+    },
 }
 
 impl ApiRequest {
@@ -184,7 +193,7 @@ impl ApiRequest {
                 folder_id: folder_id.clone(),
                 file_path: file_path.clone(),
             },
-            ApiRequest::GetFolderStatus { folder_id } => RequestKey::FolderStatus {
+            ApiRequest::GetFolderStatus { folder_id, .. } => RequestKey::FolderStatus {
                 folder_id: folder_id.clone(),
             },
             // Write operations don't deduplicate
@@ -220,6 +229,7 @@ impl ApiRequest {
             ApiRequest::GetLocalChangedIndex {
                 folder_id,
                 sequence,
+                ..
             } => RequestKey::LocalChangedIndex {
                 folder_id: folder_id.clone(),
                 sequence: *sequence,
@@ -235,17 +245,20 @@ pub enum ApiResponse {
         folder_id: String,
         prefix: Option<String>,
         items: Result<Vec<BrowseItem>, anyhow::Error>,
+        requested_at: std::time::Instant,
     },
 
     FileInfoResult {
         folder_id: String,
         file_path: String,
         details: Box<Result<FileDetails, anyhow::Error>>,
+        requested_at: std::time::Instant,
     },
 
     FolderStatusResult {
         folder_id: String,
         status: Result<FolderStatus, anyhow::Error>,
+        requested_at: std::time::Instant,
     },
 
     RescanResult {
@@ -295,6 +308,8 @@ pub enum ApiResponse {
     LocalChangedIndex {
         folder_id: String,
         sequence: u64,
+        #[allow(dead_code)]
+        requested_at: std::time::Instant,
         files: Result<Vec<LocalChangedFile>, anyhow::Error>,
     },
 }
@@ -405,7 +420,10 @@ impl ApiService {
     async fn execute_request(client: &SyncthingClient, request: ApiRequest) -> ApiResponse {
         match request {
             ApiRequest::BrowseFolder {
-                folder_id, prefix, ..
+                folder_id,
+                prefix,
+                requested_at,
+                ..
             } => {
                 let items = client.browse_folder(&folder_id, prefix.as_deref()).await;
 
@@ -413,12 +431,14 @@ impl ApiService {
                     folder_id,
                     prefix,
                     items,
+                    requested_at,
                 }
             }
 
             ApiRequest::GetFileInfo {
                 folder_id,
                 file_path,
+                requested_at,
                 ..
             } => {
                 log_debug(&format!(
@@ -447,13 +467,21 @@ impl ApiService {
                     folder_id,
                     file_path,
                     details: Box::new(details),
+                    requested_at,
                 }
             }
 
-            ApiRequest::GetFolderStatus { folder_id } => {
+            ApiRequest::GetFolderStatus {
+                folder_id,
+                requested_at,
+            } => {
                 let status = client.get_folder_status(&folder_id).await;
 
-                ApiResponse::FolderStatusResult { folder_id, status }
+                ApiResponse::FolderStatusResult {
+                    folder_id,
+                    status,
+                    requested_at,
+                }
             }
 
             ApiRequest::RescanFolder { folder_id, paths } => {
@@ -567,6 +595,7 @@ impl ApiService {
             ApiRequest::GetLocalChangedIndex {
                 folder_id,
                 sequence,
+                requested_at,
             } => {
                 let files = client.get_local_changed_entries(&folder_id).await;
                 if let Err(e) = &files {
@@ -578,6 +607,7 @@ impl ApiService {
                 ApiResponse::LocalChangedIndex {
                     folder_id,
                     sequence,
+                    requested_at,
                     files,
                 }
             }

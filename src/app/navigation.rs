@@ -601,6 +601,7 @@ impl App {
                         folder_id,
                         prefix,
                         priority: services::api::Priority::High,
+                        requested_at: std::time::Instant::now(),
                     });
                 }
             }
@@ -619,6 +620,7 @@ impl App {
                     folder_id,
                     prefix,
                     priority: services::api::Priority::High,
+                    requested_at: std::time::Instant::now(),
                 });
             }
 

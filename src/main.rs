@@ -43,6 +43,8 @@ mod handlers;
 mod logic;
 mod model;
 mod services;
+#[cfg(test)]
+mod test_support;
 mod ui;
 mod utils;
 
@@ -238,6 +240,7 @@ impl App {
             .api_tx
             .send(services::api::ApiRequest::GetFolderStatus {
                 folder_id: folder_id.to_string(),
+                requested_at: std::time::Instant::now(),
             });
     }
 
@@ -720,7 +723,10 @@ impl App {
         ) {
             let _ = self
                 .api_tx
-                .send(services::api::ApiRequest::GetFolderStatus { folder_id });
+                .send(services::api::ApiRequest::GetFolderStatus {
+                    folder_id,
+                    requested_at: std::time::Instant::now(),
+                });
         }
         self.model.syncthing.statuses_loaded = true;
         self.last_status_update = Instant::now();
@@ -738,6 +744,7 @@ impl App {
                     .api_tx
                     .send(services::api::ApiRequest::GetFolderStatus {
                         folder_id: folder.id.clone(),
+                        requested_at: std::time::Instant::now(),
                     });
             }
         }
@@ -847,6 +854,7 @@ impl App {
                 folder_id,
                 prefix,
                 priority: services::api::Priority::High,
+                requested_at: std::time::Instant::now(),
             });
         }
 
@@ -865,6 +873,7 @@ impl App {
                 folder_id,
                 prefix,
                 priority: services::api::Priority::High,
+                requested_at: std::time::Instant::now(),
             });
         }
 
@@ -1213,6 +1222,7 @@ where
                     ));
                     let _ = app.api_tx.send(services::api::ApiRequest::GetFolderStatus {
                         folder_id: folder_id.clone(),
+                        requested_at: std::time::Instant::now(),
                     });
                 }
             }
