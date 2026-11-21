@@ -140,13 +140,16 @@ fn read_tar(
             Err(_) if hit.get() => break,
             Err(err) => return Err(err.to_string()),
         };
+        if entry.header().entry_type().is_pax_global_extensions() {
+            continue;
+        }
         if entries.len() >= max_entries {
             stopped_early = Some(format!("Showing the first {} entries", entries.len()));
             break;
         }
         let header = entry.header();
         let is_dir = header.entry_type().is_dir();
-        let size = header.size().unwrap_or(0);
+        let size = entry.size();
         if !is_dir {
             total_files += 1;
             total_size = total_size.saturating_add(size);
@@ -627,5 +630,36 @@ mod tests {
         let result = read_archive(&path, ArchiveKind::TarGz);
         std::fs::remove_file(&path).unwrap();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pax_global_header_is_not_listed() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let record = b"22 comment=from git\n";
+        let mut global = tar::Header::new_ustar();
+        global.set_entry_type(tar::EntryType::XGlobalHeader);
+        global.set_size(record.len() as u64);
+        global.set_cksum();
+        builder
+            .append_data(&mut global, "pax_global_header", &record[..])
+            .unwrap();
+        let mut header = tar::Header::new_ustar();
+        header.set_size(3);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "a.txt", &b"abc"[..])
+            .unwrap();
+        let path = write_temp("pax.tar", &builder.into_inner().unwrap());
+        let l = read_archive_with_limits(&path, ArchiveKind::Tar, MAX_ARCHIVE_BYTES, 1).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            l.entries
+                .iter()
+                .map(|e| e.path.as_str())
+                .collect::<Vec<_>>(),
+            ["a.txt"]
+        );
+        assert_eq!((l.total_files, l.total_size), (1, 3));
+        assert_eq!(l.stopped_early, None);
     }
 }
