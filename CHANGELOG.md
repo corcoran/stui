@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🔧 Improvements
 
 - The preview popup keeps one column of space inside the borders of its info and text panes
+- ANSI art previews in the classic DOS colors on black, the same in every terminal. Uncolored text is light grey instead of your terminal's text color, and bold text is bright
 
 ### 🐛 Bug Fixes
 
@@ -34,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Previewing an image that is not on disk says why, instead of staying on "Loading image..."
 - Sorting by sync state (`s`) follows the icons: a file being restored by a revert sorts with syncing files, and a file deleted locally sorts with local changes
 - A config without `path_map` loads instead of failing with "missing field `path_map`"
+- ANSI art previews show color 37 as light grey and 97 as white; they were swapped, as were backgrounds 47 and 107. Codes 39 and 49 switch back to the default colors
+- Text and ANSI art previews keep blank lines, so art lines up as drawn. Blank lines at the end are dropped
+- ANSI art that moves the cursor up, down or back draws in the right place, instead of adding extra lines between rows
+- ANSI art keeps a color across line breaks until the file changes it, instead of resetting at each new line
 - `clipboard_command` and `open_command` accept arguments, for example `xclip -selection clipboard`
 - The shipped `config.yaml.example` lists `terminal_title`, says where the file goes, and no longer suggests `vim` as an `open_command`
 

@@ -761,13 +761,21 @@ fn render_preview_column(
             (false, _) => format!("Preview ({})", scroll_keys),
         };
 
-        // NOTE: Don't set .style() on the Paragraph - it would override ANSI colors
+        // Spans patch over this base style, so the art's own colors still win
+        let base_style = if is_ansi_art {
+            Style::default()
+                .fg(crate::logic::file::ANSI_ART_FG)
+                .bg(crate::logic::file::ANSI_ART_BG)
+        } else {
+            Style::default()
+        };
         let paragraph = Paragraph::new(parsed_text)
+            .style(base_style)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .padding(Padding::horizontal(1))
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(Color::Cyan).bg(Color::Reset))
                     .title(title),
             )
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -1239,6 +1247,50 @@ mod tests {
             "{:#?}",
             rows
         );
+    }
+
+    fn render_cell_style(state: &mut FileInfoPopupState, x: u16, y: u16) -> Style {
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        let mut images = std::collections::HashMap::new();
+        terminal
+            .draw(|f| render_preview_column(f, f.area(), state, None, &mut images))
+            .unwrap();
+        terminal.backend().buffer()[(x, y)].style()
+    }
+
+    #[test]
+    fn test_ansi_art_defaults_to_light_grey_on_black() {
+        use crate::logic::file::{ANSI_ART_BG, ANSI_ART_FG};
+        let mut state = popup("art.ans", "plain\x1b[31mred", false);
+        let text_cell = render_cell_style(&mut state, 2, 1);
+        assert_eq!(text_cell.fg, Some(ANSI_ART_FG));
+        assert_eq!(text_cell.bg, Some(ANSI_ART_BG));
+        let empty_cell = render_cell_style(&mut state, 20, 3);
+        assert_eq!(empty_cell.bg, Some(ANSI_ART_BG));
+    }
+
+    #[test]
+    fn test_ansi_art_border_keeps_terminal_background() {
+        let mut state = popup("art.ans", "plain", false);
+        for (x, y) in [(0, 0), (0, 2), (39, 2), (20, 5), (3, 0)] {
+            let cell = render_cell_style(&mut state, x, y);
+            assert_eq!(cell.bg, Some(Color::Reset), "cell ({}, {})", x, y);
+        }
+    }
+
+    #[test]
+    fn test_ansi_art_keeps_its_own_colors() {
+        let mut state = popup("art.ans", "\x1b[31mred", false);
+        let cell = render_cell_style(&mut state, 2, 1);
+        assert_eq!(cell.fg, Some(crate::logic::file::cga_color(1)));
+    }
+
+    #[test]
+    fn test_plain_text_preview_keeps_terminal_colors() {
+        let mut state = popup("notes.txt", "plain", false);
+        let cell = render_cell_style(&mut state, 2, 1);
+        assert_eq!(cell.fg, Some(Color::Reset));
+        assert_eq!(cell.bg, Some(Color::Reset));
     }
 
     #[test]

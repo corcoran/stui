@@ -138,32 +138,116 @@ pub fn contains_ansi_codes(bytes: &[u8]) -> bool {
     false
 }
 
+/// The 16 CGA text colors ANSI art was drawn for, indexed like SGR colors 0-15
+const CGA_PALETTE: [(u8, u8, u8); 16] = [
+    (0x00, 0x00, 0x00),
+    (0xAA, 0x00, 0x00),
+    (0x00, 0xAA, 0x00),
+    (0xAA, 0x55, 0x00),
+    (0x00, 0x00, 0xAA),
+    (0xAA, 0x00, 0xAA),
+    (0x00, 0xAA, 0xAA),
+    (0xAA, 0xAA, 0xAA),
+    (0x55, 0x55, 0x55),
+    (0xFF, 0x55, 0x55),
+    (0x55, 0xFF, 0x55),
+    (0xFF, 0xFF, 0x55),
+    (0x55, 0x55, 0xFF),
+    (0xFF, 0x55, 0xFF),
+    (0x55, 0xFF, 0xFF),
+    (0xFF, 0xFF, 0xFF),
+];
+
+/// Text color of ANSI art where the file sets none (CGA light grey)
+pub const ANSI_ART_FG: ratatui::style::Color = ratatui::style::Color::Rgb(0xAA, 0xAA, 0xAA);
+/// Background of ANSI art where the file sets none (CGA black)
+pub const ANSI_ART_BG: ratatui::style::Color = ratatui::style::Color::Rgb(0x00, 0x00, 0x00);
+
+/// Exact RGB for CGA color `index` (0-15), so the terminal theme can't remap it
+pub fn cga_color(index: u8) -> ratatui::style::Color {
+    let (r, g, b) = CGA_PALETTE[(index & 0x0F) as usize];
+    ratatui::style::Color::Rgb(r, g, b)
+}
+
+/// SGR state of the ANSI parser. Colors are CGA indexes; None is the pane default.
+#[derive(Clone, Copy, Default)]
+struct SgrState {
+    fg: Option<u8>,
+    bg: Option<u8>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl SgrState {
+    fn apply(&mut self, code: u8) {
+        match code {
+            0 => *self = SgrState::default(),
+            1 => self.bold = true,
+            3 => self.italic = true,
+            4 => self.underline = true,
+            22 => self.bold = false,
+            23 => self.italic = false,
+            24 => self.underline = false,
+            30..=37 => self.fg = Some(code - 30),
+            39 => self.fg = None,
+            40..=47 => self.bg = Some(code - 40),
+            49 => self.bg = None,
+            90..=97 => self.fg = Some(code - 90 + 8),
+            100..=107 => self.bg = Some(code - 100 + 8),
+            _ => {}
+        }
+    }
+
+    /// Bold means high intensity, as on DOS: it brightens colors 0-7 and the default
+    /// grey, and does not change the font.
+    fn style(&self) -> ratatui::style::Style {
+        use ratatui::style::{Modifier, Style};
+        let fg = match (self.fg, self.bold) {
+            (Some(i), true) if i < 8 => Some(i + 8),
+            (None, true) => Some(15),
+            (fg, _) => fg,
+        };
+        let mut style = Style::default();
+        if let Some(i) = fg {
+            style = style.fg(cga_color(i));
+        }
+        if let Some(i) = self.bg {
+            style = style.bg(cga_color(i));
+        }
+        if self.italic {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        if self.underline {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        style
+    }
+}
+
 /// Parse ANSI codes and convert to Ratatui Text with styling
 ///
-/// This is a safe, custom ANSI parser that ONLY handles SGR (color/style) codes.
-/// It ignores all cursor positioning, screen clearing, and other potentially
-/// dangerous ANSI codes that could corrupt the TUI.
+/// Draws the text on an 80-column grid of rows, like the DOS screen ANSI art was made
+/// on, and returns the rows. Nothing reaches the real terminal. Relative cursor moves
+/// (CSI A/B/C/D) move within the grid; screen clearing, absolute positioning and other
+/// codes are ignored.
 ///
 /// Supported SGR codes:
 /// - 0: Reset
-/// - 1: Bold
-/// - 3: Italic
-/// - 4: Underline
-/// - 30-37: Foreground colors (8 colors)
-/// - 40-47: Background colors (8 colors)
-/// - 90-97: Bright foreground colors
-/// - 100-107: Bright background colors
+/// - 1 / 22: Bright (high intensity) on / off
+/// - 3 / 23: Italic on / off
+/// - 4 / 24: Underline on / off
+/// - 30-37, 90-97: Foreground colors; 39: default
+/// - 40-47, 100-107: Background colors; 49: default
 ///
 /// # Arguments
 /// * `text` - Text with ANSI escape codes
 ///
 /// # Returns
-/// Ratatui `Text` with styling applied, all non-SGR codes stripped
+/// Ratatui `Text` with styling applied, all escape codes stripped
 pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
-    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::style::Style;
     use ratatui::text::{Line, Span, Text};
-
-    let mut lines = Vec::new();
 
     // Strip SAUCE metadata if present (common in ANSI art files)
     // SAUCE starts with Ctrl-Z (0x1A) followed by "SAUCE00"
@@ -174,48 +258,51 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
     };
 
     // Handle different line endings: \n, \r\n, or \r
-    // Replace \r\n with \n first, then split on both \n and \r
     let normalized_text = text_without_sauce.replace("\r\n", "\n").replace('\r', "\n");
 
-    // Use fixed-width line buffer for proper ANSI art rendering
-    // ANSI art uses cursor positioning to create multi-column layouts
-    // Standard ANSI art wraps at 80 columns
+    // ANSI art is drawn on an 80-column screen; cursor codes move around a grid of rows
     const LINE_WIDTH: usize = 80;
+    let blank_row = vec![(' ', Style::default()); LINE_WIDTH];
+    let mut rows: Vec<Vec<(char, Style)>> = vec![blank_row.clone()];
+    let mut row: usize = 0;
+    let mut col: usize = 0;
+    // Writing column 80 wraps to the next row at once, as on DOS. A newline right after
+    // that wrap ends the same line, so it doesn't add a blank row.
+    let mut just_wrapped = false;
 
-    for line_text in normalized_text.lines() {
-        // Create a line buffer with (char, style) pairs
-        let mut line_buffer: Vec<(char, Style)> = vec![(' ', Style::default()); LINE_WIDTH];
-        let mut current_column = 0;
-        let mut current_style = Style::default();
-        let mut chars = line_text.chars().peekable();
+    // SGR state carries across line breaks until the file changes it
+    let mut sgr = SgrState::default();
+    let mut current_style = sgr.style();
 
-        while let Some(ch) = chars.next() {
-            if ch == '\x1b' && chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
+    let mut chars = normalized_text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
 
-                // Parse the parameter bytes
-                let mut params = String::new();
-                while let Some(&next_ch) = chars.peek() {
-                    if next_ch.is_ascii_digit() || next_ch == ';' {
-                        params.push(next_ch);
-                        chars.next();
-                    } else {
-                        break;
-                    }
+            let mut params = String::new();
+            while let Some(&next_ch) = chars.peek() {
+                if next_ch.is_ascii_digit() || next_ch == ';' {
+                    params.push(next_ch);
+                    chars.next();
+                } else {
+                    break;
                 }
+            }
 
-                // Get the final byte (command)
-                let command = chars.next();
-
-                // Handle cursor forward (CUF) - move cursor n columns forward
-                if command == Some('C') {
-                    let move_amount = params.parse::<usize>().unwrap_or(1);
-                    current_column = (current_column + move_amount).min(LINE_WIDTH - 1);
+            let count = || params.parse::<usize>().unwrap_or(1).max(1);
+            match chars.next() {
+                Some('A') => {
+                    row = row.saturating_sub(count());
+                    just_wrapped = false;
                 }
-                // Only process SGR codes (ending in 'm')
-                else if command == Some('m') {
-                    // Parse SGR parameters
-                    // Empty params = reset (0)
+                Some('B') => {
+                    row += count();
+                    just_wrapped = false;
+                }
+                Some('C') => col = (col + count()).min(LINE_WIDTH - 1),
+                Some('D') => col = col.saturating_sub(count()),
+                Some('m') => {
+                    // Empty params or an empty parameter mean reset (0)
                     let codes: Vec<u8> = if params.is_empty() {
                         vec![0]
                     } else {
@@ -224,107 +311,62 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
                             .filter_map(|s| {
                                 let trimmed = s.trim();
                                 if trimmed.is_empty() {
-                                    Some(0) // Empty parameter = reset
+                                    Some(0)
                                 } else {
                                     trimmed.parse().ok()
                                 }
                             })
                             .collect()
                     };
-
                     for code in codes {
-                        match code {
-                            0 => current_style = Style::default(), // Reset
-                            1 => current_style = current_style.add_modifier(Modifier::BOLD),
-                            3 => current_style = current_style.add_modifier(Modifier::ITALIC),
-                            4 => current_style = current_style.add_modifier(Modifier::UNDERLINED),
-                            // Foreground colors (30-37)
-                            30 => current_style = current_style.fg(Color::Black),
-                            31 => current_style = current_style.fg(Color::Red),
-                            32 => current_style = current_style.fg(Color::Green),
-                            33 => current_style = current_style.fg(Color::Yellow),
-                            34 => current_style = current_style.fg(Color::Blue),
-                            35 => current_style = current_style.fg(Color::Magenta),
-                            36 => current_style = current_style.fg(Color::Cyan),
-                            37 => current_style = current_style.fg(Color::White),
-                            // Background colors (40-47)
-                            40 => current_style = current_style.bg(Color::Black),
-                            41 => current_style = current_style.bg(Color::Red),
-                            42 => current_style = current_style.bg(Color::Green),
-                            43 => current_style = current_style.bg(Color::Yellow),
-                            44 => current_style = current_style.bg(Color::Blue),
-                            45 => current_style = current_style.bg(Color::Magenta),
-                            46 => current_style = current_style.bg(Color::Cyan),
-                            47 => current_style = current_style.bg(Color::White),
-                            // Bright foreground colors (90-97)
-                            90 => current_style = current_style.fg(Color::DarkGray),
-                            91 => current_style = current_style.fg(Color::LightRed),
-                            92 => current_style = current_style.fg(Color::LightGreen),
-                            93 => current_style = current_style.fg(Color::LightYellow),
-                            94 => current_style = current_style.fg(Color::LightBlue),
-                            95 => current_style = current_style.fg(Color::LightMagenta),
-                            96 => current_style = current_style.fg(Color::LightCyan),
-                            97 => current_style = current_style.fg(Color::Gray),
-                            // Bright background colors (100-107)
-                            100 => current_style = current_style.bg(Color::DarkGray),
-                            101 => current_style = current_style.bg(Color::LightRed),
-                            102 => current_style = current_style.bg(Color::LightGreen),
-                            103 => current_style = current_style.bg(Color::LightYellow),
-                            104 => current_style = current_style.bg(Color::LightBlue),
-                            105 => current_style = current_style.bg(Color::LightMagenta),
-                            106 => current_style = current_style.bg(Color::LightCyan),
-                            107 => current_style = current_style.bg(Color::Gray),
-                            _ => {} // Ignore unknown SGR codes
-                        }
+                        sgr.apply(code);
                     }
+                    current_style = sgr.style();
                 }
-                // All non-SGR codes are silently ignored (cursor movement, etc.)
-            } else {
-                // Write character to buffer at current position
-                if current_column < LINE_WIDTH {
-                    line_buffer[current_column] = (ch, current_style);
-                    current_column += 1;
-
-                    // If we hit column 80, flush the buffer as a line and start new one
-                    if current_column >= LINE_WIDTH {
-                        // Build spans from current line buffer
-                        let spans = build_spans_from_buffer(&line_buffer);
-                        lines.push(Line::from(spans));
-
-                        // Reset buffer for next line
-                        line_buffer = vec![(' ', Style::default()); LINE_WIDTH];
-                        current_column = 0;
-                    }
-                }
+                // Screen clearing, absolute positioning and the rest are ignored
+                _ => {}
             }
-        }
-
-        // Convert remaining line buffer to spans, trimming trailing spaces
-        let mut max_col = 0;
-        for (i, (ch, _)) in line_buffer.iter().enumerate() {
-            if *ch != ' ' {
-                max_col = i + 1;
+        } else if ch == '\n' {
+            if !just_wrapped {
+                row += 1;
             }
-        }
-
-        // Build spans from line buffer only if there's content
-        if max_col > 0 {
-            let spans = build_spans_from_buffer_upto(&line_buffer, max_col);
-            lines.push(Line::from(spans));
-        } else if lines.is_empty() {
-            // Empty line at start - add it
-            lines.push(Line::from(vec![Span::raw("")]));
+            col = 0;
+            just_wrapped = false;
+        } else {
+            if rows.len() <= row {
+                rows.resize(row + 1, blank_row.clone());
+            }
+            rows[row][col] = (ch, current_style);
+            col += 1;
+            just_wrapped = col == LINE_WIDTH;
+            if just_wrapped {
+                row += 1;
+                col = 0;
+            }
         }
     }
 
-    Text::from(lines)
-}
+    // Rows between written rows stay blank: blank lines position the art vertically
+    let mut lines: Vec<Line<'static>> = rows
+        .iter()
+        .map(|cells| {
+            let width = cells
+                .iter()
+                .rposition(|(ch, _)| *ch != ' ')
+                .map_or(0, |i| i + 1);
+            if width == 0 {
+                Line::from(vec![Span::raw("")])
+            } else {
+                Line::from(build_spans_from_buffer_upto(cells, width))
+            }
+        })
+        .collect();
 
-/// Helper function to build spans from entire line buffer
-fn build_spans_from_buffer(
-    line_buffer: &[(char, ratatui::style::Style)],
-) -> Vec<ratatui::text::Span<'static>> {
-    build_spans_from_buffer_upto(line_buffer, line_buffer.len())
+    while lines.len() > 1 && lines.last().is_some_and(|l| l.width() == 0) {
+        lines.pop();
+    }
+
+    Text::from(lines)
 }
 
 /// Helper function to build spans from line buffer up to a certain column
@@ -632,12 +674,132 @@ mod tests {
 
     #[test]
     fn test_parse_ansi_to_text_colors() {
-        use ratatui::style::Color;
-
         // Red foreground
         let text = parse_ansi_to_text("\x1b[31mRed\x1b[0m");
         assert_eq!(text.lines.len(), 1);
-        assert_eq!(text.lines[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(text.lines[0].spans[0].style.fg, Some(cga_color(1)));
+    }
+
+    fn first_style(input: &str) -> ratatui::style::Style {
+        parse_ansi_to_text(input).lines[0].spans[0].style
+    }
+
+    #[test]
+    fn test_cga_palette_values() {
+        use ratatui::style::Color::Rgb;
+        let expected = [
+            Rgb(0x00, 0x00, 0x00),
+            Rgb(0xAA, 0x00, 0x00),
+            Rgb(0x00, 0xAA, 0x00),
+            Rgb(0xAA, 0x55, 0x00),
+            Rgb(0x00, 0x00, 0xAA),
+            Rgb(0xAA, 0x00, 0xAA),
+            Rgb(0x00, 0xAA, 0xAA),
+            Rgb(0xAA, 0xAA, 0xAA),
+            Rgb(0x55, 0x55, 0x55),
+            Rgb(0xFF, 0x55, 0x55),
+            Rgb(0x55, 0xFF, 0x55),
+            Rgb(0xFF, 0xFF, 0x55),
+            Rgb(0x55, 0x55, 0xFF),
+            Rgb(0xFF, 0x55, 0xFF),
+            Rgb(0x55, 0xFF, 0xFF),
+            Rgb(0xFF, 0xFF, 0xFF),
+        ];
+        for (i, color) in expected.iter().enumerate() {
+            assert_eq!(cga_color(i as u8), *color, "index {}", i);
+        }
+        assert_eq!(ANSI_ART_FG, cga_color(7));
+        assert_eq!(ANSI_ART_BG, cga_color(0));
+    }
+
+    #[test]
+    fn test_sgr_foreground_codes_use_cga_palette() {
+        for code in 30..=37u8 {
+            let style = first_style(&format!("\x1b[{}mX", code));
+            assert_eq!(style.fg, Some(cga_color(code - 30)), "SGR {}", code);
+        }
+        for code in 90..=97u8 {
+            let style = first_style(&format!("\x1b[{}mX", code));
+            assert_eq!(style.fg, Some(cga_color(code - 90 + 8)), "SGR {}", code);
+        }
+    }
+
+    #[test]
+    fn test_sgr_background_codes_use_cga_palette() {
+        for code in 40..=47u8 {
+            let style = first_style(&format!("\x1b[{}mX", code));
+            assert_eq!(style.bg, Some(cga_color(code - 40)), "SGR {}", code);
+        }
+        for code in 100..=107u8 {
+            let style = first_style(&format!("\x1b[{}mX", code));
+            assert_eq!(style.bg, Some(cga_color(code - 100 + 8)), "SGR {}", code);
+        }
+    }
+
+    #[test]
+    fn test_white_is_light_grey_and_bright_white_is_white() {
+        use ratatui::style::Color::Rgb;
+        assert_eq!(first_style("\x1b[37mX").fg, Some(Rgb(0xAA, 0xAA, 0xAA)));
+        assert_eq!(first_style("\x1b[97mX").fg, Some(Rgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn test_uncolored_text_has_no_color_so_the_pane_default_applies() {
+        let style = first_style("plain");
+        assert_eq!(style.fg, None);
+        assert_eq!(style.bg, None);
+    }
+
+    #[test]
+    fn test_bold_brightens_base_colors() {
+        assert_eq!(first_style("\x1b[1;31mX").fg, Some(cga_color(9)));
+        assert_eq!(first_style("\x1b[31;1mX").fg, Some(cga_color(9)));
+        assert_eq!(first_style("\x1b[1;37mX").fg, Some(cga_color(15)));
+    }
+
+    #[test]
+    fn test_bold_default_text_is_bright_white() {
+        assert_eq!(first_style("\x1b[1mX").fg, Some(cga_color(15)));
+    }
+
+    #[test]
+    fn test_bold_leaves_bright_colors_and_backgrounds_alone() {
+        assert_eq!(first_style("\x1b[1;91mX").fg, Some(cga_color(9)));
+        assert_eq!(first_style("\x1b[1;41mX").bg, Some(cga_color(1)));
+    }
+
+    #[test]
+    fn test_bold_does_not_change_the_font() {
+        use ratatui::style::Modifier;
+        assert!(
+            !first_style("\x1b[1;31mX")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn test_sgr_22_ends_bold() {
+        assert_eq!(first_style("\x1b[1;31;22mX").fg, Some(cga_color(1)));
+    }
+
+    #[test]
+    fn test_sgr_39_and_49_restore_default_colors() {
+        let style = first_style("\x1b[31;44;39;49mX");
+        assert_eq!(style.fg, None);
+        assert_eq!(style.bg, None);
+    }
+
+    #[test]
+    fn test_reset_after_color_returns_to_default() {
+        let text = parse_ansi_to_text("\x1b[1;31mRed\x1b[0mPlain");
+        let plain = text.lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content == "Plain")
+            .expect("plain span");
+        assert_eq!(plain.style.fg, None);
+        assert_eq!(plain.style.bg, None);
     }
 
     #[test]
@@ -667,6 +829,98 @@ mod tests {
         assert_eq!(text.lines.len(), 2);
         assert_eq!(text.lines[0].spans[0].content, "x".repeat(80));
         assert_eq!(text.lines[1].spans[0].content, "x");
+    }
+
+    fn line_texts(input: &str) -> Vec<String> {
+        parse_ansi_to_text(input)
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn test_blank_lines_between_content_are_kept() {
+        assert_eq!(line_texts("A\n\n\nB"), ["A", "", "", "B"]);
+    }
+
+    #[test]
+    fn test_leading_blank_lines_are_kept() {
+        assert_eq!(line_texts("\r\n\r\n\r\nA"), ["", "", "", "A"]);
+    }
+
+    #[test]
+    fn test_lines_of_only_spaces_or_codes_count_as_blank() {
+        assert_eq!(line_texts("A\n   \n\x1b[0m\nB"), ["A", "", "", "B"]);
+    }
+
+    #[test]
+    fn test_full_80_column_line_adds_no_blank_line() {
+        let full = "x".repeat(80);
+        assert_eq!(line_texts(&format!("{}\nB", full)), [full.as_str(), "B"]);
+    }
+
+    #[test]
+    fn test_blank_line_after_full_80_column_line_is_kept() {
+        let full = "x".repeat(80);
+        assert_eq!(
+            line_texts(&format!("{}\n\nB", full)),
+            [full.as_str(), "", "B"]
+        );
+    }
+
+    #[test]
+    fn test_cursor_up_and_forward_finish_the_previous_row() {
+        // 79 columns per line, then up one row and forward 79 to write the 80th
+        let input = format!("{}\r\n\x1b[A\x1b[79Cy{}", "x".repeat(79), "z".repeat(3));
+        let first = format!("{}y", "x".repeat(79));
+        assert_eq!(line_texts(&input), [first.as_str(), "zzz"]);
+    }
+
+    #[test]
+    fn test_cursor_forward_after_a_full_row_moves_in_the_next_row() {
+        let input = format!("{}\x1b[3CB", "x".repeat(80));
+        assert_eq!(line_texts(&input), ["x".repeat(80).as_str(), "   B"]);
+    }
+
+    #[test]
+    fn test_cursor_up_overwrites_without_erasing() {
+        assert_eq!(line_texts("abcdef\n\x1b[A\x1b[2CXY"), ["abXYef"]);
+    }
+
+    #[test]
+    fn test_cursor_up_stops_at_the_first_row() {
+        assert_eq!(line_texts("\x1b[5Aab"), ["ab"]);
+    }
+
+    #[test]
+    fn test_cursor_down_keeps_the_column() {
+        assert_eq!(line_texts("a\x1b[2Bb"), ["a", "", " b"]);
+    }
+
+    #[test]
+    fn test_cursor_back_moves_left() {
+        assert_eq!(line_texts("abc\x1b[2DX"), ["aXc"]);
+        assert_eq!(line_texts("ab\x1b[9DX"), ["Xb"]);
+    }
+
+    #[test]
+    fn test_colors_carry_over_to_the_next_line() {
+        let text = parse_ansi_to_text("\x1b[1;31;44mA\nB");
+        let style = text.lines[1].spans[0].style;
+        assert_eq!(style.fg, Some(cga_color(9)));
+        assert_eq!(style.bg, Some(cga_color(4)));
+    }
+
+    #[test]
+    fn test_reset_carries_over_to_the_next_line() {
+        let text = parse_ansi_to_text("\x1b[31mA\x1b[0m\nB");
+        assert_eq!(text.lines[1].spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn test_trailing_blank_lines_are_dropped() {
+        assert_eq!(line_texts("A\n\n\n"), ["A"]);
     }
 
     #[test]
@@ -699,15 +953,13 @@ mod tests {
 
     #[test]
     fn test_parse_ansi_to_text_background_stripped_from_spaces() {
-        use ratatui::style::Color;
-
         // Set background color, write text, then spaces via cursor forward
         let text = parse_ansi_to_text("\x1b[41mText\x1b[5C");
         let line = &text.lines[0];
 
         // First span should have red background (the "Text")
         assert_eq!(line.spans[0].content, "Text");
-        assert_eq!(line.spans[0].style.bg, Some(Color::Red));
+        assert_eq!(line.spans[0].style.bg, Some(cga_color(1)));
 
         // Spaces from cursor forward should NOT have background
         if line.spans.len() > 1 {
@@ -717,16 +969,16 @@ mod tests {
 
     #[test]
     fn test_parse_ansi_to_text_multiple_styles() {
-        use ratatui::style::{Color, Modifier};
+        use ratatui::style::Modifier;
 
-        // Bold + Red foreground + Black background
-        let text = parse_ansi_to_text("\x1b[1;31;40mStyled\x1b[0m");
+        // Bold + Red foreground + Black background + Underline
+        let text = parse_ansi_to_text("\x1b[1;31;40;4mStyled\x1b[0m");
         let span = &text.lines[0].spans[0];
 
         assert_eq!(span.content, "Styled");
-        assert_eq!(span.style.fg, Some(Color::Red));
-        assert_eq!(span.style.bg, Some(Color::Black));
-        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(span.style.fg, Some(cga_color(9)));
+        assert_eq!(span.style.bg, Some(cga_color(0)));
+        assert!(span.style.add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]

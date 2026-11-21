@@ -389,7 +389,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - **Markdown files**: Rendered (headings, lists, code blocks, links, tables); `r` toggles the raw source
   - **Stepping**: `Shift+↑/↓` (or `K`/`J` in vim mode) previews the previous/next file, skipping directories
   - **Open**: `o` opens the previewed file like `o` in the file list; the preview reloads after an editor returns
-  - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors
+  - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors in the CGA palette on black
   - **Image files**: Terminal rendering (Kitty/iTerm2/Sixel/Halfblocks), non-blocking load
   - **Binary files**: Extracted text or metadata
 - `c`: **Context-aware action**:
@@ -526,7 +526,7 @@ Async API service with priority queue, cache-first rendering, sequence-based val
 SQLite at `~/.cache/stui/cache.db` with browse, sync state, folder status caches. Event ID persists. Manual clear on schema changes: `rm ~/.cache/stui/cache.db`
 
 ### ANSI Art Rendering
-Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, line buffer with cursor positioning, SGR colors (fg 30-37/90-97, bg 40-47/100-107), SAUCE stripping.
+Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column grid of rows with relative cursor moves (CSI A/B/C/D; writing column 80 wraps at once, as on DOS), SGR colors (fg 30-37/90-97, bg 40-47/100-107, 39/49 default) that carry across line breaks, blank lines kept (trailing ones dropped; a line that fills 80 columns adds no blank line after it), SAUCE stripping. Colors are exact CGA RGB (`logic::file::cga_color`), so terminal themes can't remap them. Bold brightens colors 0-7 and doesn't change the font. Text the file doesn't color has no span color: the preview pane's base style supplies `ANSI_ART_FG` (light grey) on `ANSI_ART_BG` (black), and the border keeps the terminal background. Plain text previews use the same parser without that base style, so they keep the terminal's colors.
 
 ### Syncing State
 `model.syncthing.syncing_files` maps folder id to the paths Syncthing is downloading: seeded from the `progress` list of the per-folder need fetch (`GetFolderNeed`), updated by ItemStarted/ItemFinished, and cleared when the folder leaves `syncing`/`sync-preparing`. It is overlaid on `file_sync_states` only when an item is drawn or sorted (`logic::display::level_item_display`, through `item_sync_state`), so base states never hold `Syncing`.
