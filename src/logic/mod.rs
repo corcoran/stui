@@ -21,6 +21,7 @@
 
 pub mod clipboard;
 pub mod command;
+pub mod csv;
 pub mod display;
 pub mod errors;
 pub mod file;
