@@ -14,9 +14,10 @@ impl App {
         if let Some(selected) = self.model.navigation.folders_state_selection
             && let Some(folder) = self.model.syncthing.folders.get(selected).cloned()
         {
-            // Don't try to browse paused folders
+            // A paused folder can't be browsed: stay on the folder list with no pane, so
+            // the previous folder's contents don't look like this one's
             if folder.paused {
-                // Stay on folder list, don't enter the folder
+                self.model.navigation.breadcrumb_trail.clear();
                 return Ok(());
             }
 

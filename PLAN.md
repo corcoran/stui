@@ -21,7 +21,6 @@
 
 ### Known Bugs
 
-- Selecting a paused folder in the folder list keeps showing the previously selected folder's contents in the preview pane, so it looks like the paused folder's files. Pausing the selected folder leaves its pane open too. A paused folder can't be browsed, so its preview pane should be cleared (or show that it's paused) on both
 - While a folder is syncing, `overlay_syncing_states` clones each breadcrumb level's state map every frame. Fine at normal sizes, costly for directories with tens of thousands of entries. Computing per visible row with `item_sync_state` would avoid it
 
 ---

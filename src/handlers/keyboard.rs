@@ -291,6 +291,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                     "resumed"
                                 };
                                 app.model.ui.show_success(format!("Folder {}", action));
+                                app.model.set_folder_paused(&folder_id, new_paused_state);
+
+                                // Clears the pane of a now-paused folder, or loads a resumed one
+                                if app.model.navigation.focus_level == 0
+                                    && app
+                                        .model
+                                        .selected_folder()
+                                        .is_some_and(|f| f.id == folder_id)
+                                {
+                                    let _ = app.load_root_level(true).await;
+                                }
 
                                 // Immediately reload folder list to update paused state
                                 match app.client.get_folders().await {

@@ -4019,4 +4019,74 @@ mod tests {
         );
         assert_eq!(app.model.syncthing.version.as_deref(), Some("v2.1.7"));
     }
+
+    // ========================================
+    // PAUSED FOLDER PREVIEW PANE
+    // ========================================
+
+    fn pausable_folder(id: &str, paused: bool) -> crate::api::Folder {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "label": id, "path": "/data", "paused": paused, "type": "sendreceive"
+        }))
+        .unwrap()
+    }
+
+    /// Folder list with `media` selected and its root shown in the preview pane
+    fn folder_list_previewing_media(app: &mut App, vault_paused: bool) {
+        app.model.set_folders(vec![
+            pausable_folder("media", false),
+            pausable_folder("vault", vault_paused),
+        ]);
+        view_folder_root(app, "media", vec![file_item("a.mkv")]);
+        app.model.navigation.focus_level = 0;
+        app.model.navigation.folders_state_selection = Some(0);
+    }
+
+    #[tokio::test]
+    async fn test_selecting_paused_folder_clears_preview_pane() {
+        let mut app = create_test_app();
+        folder_list_previewing_media(&mut app, true);
+
+        press(&mut app, crossterm::event::KeyCode::Down).await;
+
+        assert_eq!(app.model.selected_folder().unwrap().id, "vault");
+        assert!(
+            app.model.navigation.breadcrumb_trail.is_empty(),
+            "media's files must not stay on screen for paused vault"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pausing_selected_folder_clears_its_pane() {
+        let (url, _captured) = spawn_capturing_stub().await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        folder_list_previewing_media(&mut app, false);
+        app.model.ui.confirm_action = Some(crate::model::ConfirmAction::PauseResume {
+            folder_id: "media".to_string(),
+            label: "media".to_string(),
+            is_paused: false,
+        });
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        assert!(app.model.selected_folder().unwrap().paused);
+        assert!(app.model.navigation.breadcrumb_trail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_resuming_folder_marks_it_unpaused() {
+        let (url, _captured) = spawn_capturing_stub().await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        app.model.set_folders(vec![pausable_folder("vault", true)]);
+        app.model.navigation.folders_state_selection = Some(0);
+        app.model.ui.confirm_action = Some(crate::model::ConfirmAction::PauseResume {
+            folder_id: "vault".to_string(),
+            label: "vault".to_string(),
+            is_paused: true,
+        });
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        assert!(!app.model.selected_folder().unwrap().paused);
+    }
 }

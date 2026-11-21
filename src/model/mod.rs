@@ -61,6 +61,18 @@ impl Model {
         self.reorder_folders(folders);
     }
 
+    /// Mark one folder paused or resumed
+    pub fn set_folder_paused(&mut self, folder_id: &str, paused: bool) {
+        if let Some(folder) = self
+            .syncthing
+            .folders
+            .iter_mut()
+            .find(|f| f.id == folder_id)
+        {
+            folder.paused = paused;
+        }
+    }
+
     /// Set one folder's group, regrouping the list from Syncthing's config order
     pub fn set_folder_group(&mut self, folder_id: &str, group: &str) {
         let mut folders = self.syncthing.folders.clone();

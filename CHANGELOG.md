@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README
 - Photos with an EXIF orientation (most phone and camera shots) preview upright instead of sideways, and their resolution reads the right way round
+- Selecting a paused folder, or pausing the selected one, no longer leaves a folder's files on screen; the pane closes, and resuming the folder shows its files again
 
 ---
 
