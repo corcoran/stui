@@ -605,7 +605,6 @@ pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
 ///
 /// Binary files yield their extracted strings. Invalid UTF-8 is decoded lossily
 /// and flagged binary. `art_width` is set only for CP437 art.
-#[allow(dead_code)]
 pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
     let text_only = |text: String| DecodedText {
         text,

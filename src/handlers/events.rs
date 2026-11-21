@@ -3444,6 +3444,7 @@ mod tests {
             exists_on_disk: true,
             is_binary: false,
             is_image: false,
+            art_width: None,
             scroll_offset: 5,
             raw_view: false,
         });
@@ -3516,6 +3517,7 @@ mod tests {
             exists_on_disk: true,
             is_binary: false,
             is_image: false,
+            art_width: None,
             scroll_offset: 7,
             raw_view: true,
         });
@@ -5570,6 +5572,7 @@ mod tests {
             exists_on_disk: true,
             is_binary: false,
             is_image: false,
+            art_width: None,
             scroll_offset: 0,
             raw_view: false,
         });

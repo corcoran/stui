@@ -700,14 +700,7 @@ fn render_preview_column(
             Err(msg) => format!("Error: {}", msg),
         };
 
-        // Check if this is an ANSI art file (by extension or content)
-        // Auto-detect ANSI codes in any file, not just .ans/.asc
-        let is_ansi_art = {
-            let path_lower = state.file_path.to_lowercase();
-            let has_ansi_extension = path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
-            let has_ansi_content = crate::logic::file::contains_ansi_codes(content_str.as_bytes());
-            has_ansi_extension || has_ansi_content
-        };
+        let is_ansi_art = state.art_width.is_some();
 
         // Create a fixed 80-character width container for ANSI art only
         // ANSI art is often designed for 80 columns
@@ -963,6 +956,7 @@ mod tests {
             exists_on_disk: true,
             is_binary: false,
             is_image: false,
+            art_width: None,
             scroll_offset: 0,
             raw_view,
         }
@@ -1262,6 +1256,7 @@ mod tests {
     fn test_ansi_art_defaults_to_light_grey_on_black() {
         use crate::logic::file::{ANSI_ART_BG, ANSI_ART_FG};
         let mut state = popup("art.ans", "plain\x1b[31mred", false);
+        state.art_width = Some(80);
         let text_cell = render_cell_style(&mut state, 2, 1);
         assert_eq!(text_cell.fg, Some(ANSI_ART_FG));
         assert_eq!(text_cell.bg, Some(ANSI_ART_BG));
@@ -1272,6 +1267,7 @@ mod tests {
     #[test]
     fn test_ansi_art_border_keeps_terminal_background() {
         let mut state = popup("art.ans", "plain", false);
+        state.art_width = Some(80);
         for (x, y) in [(0, 0), (0, 2), (39, 2), (20, 5), (3, 0)] {
             let cell = render_cell_style(&mut state, x, y);
             assert_eq!(cell.bg, Some(Color::Reset), "cell ({}, {})", x, y);
@@ -1281,8 +1277,22 @@ mod tests {
     #[test]
     fn test_ansi_art_keeps_its_own_colors() {
         let mut state = popup("art.ans", "\x1b[31mred", false);
+        state.art_width = Some(80);
         let cell = render_cell_style(&mut state, 2, 1);
         assert_eq!(cell.fg, Some(crate::logic::file::cga_color(1)));
+    }
+
+    #[test]
+    fn test_art_width_decides_art_rendering() {
+        use crate::logic::file::ANSI_ART_BG;
+        let mut named_ans = popup("art.ans", "plain", false);
+        assert_ne!(
+            render_cell_style(&mut named_ans, 2, 1).bg,
+            Some(ANSI_ART_BG)
+        );
+        let mut nfo_text = popup("notes.txt", "plain", false);
+        nfo_text.art_width = Some(80);
+        assert_eq!(render_cell_style(&mut nfo_text, 2, 1).bg, Some(ANSI_ART_BG));
     }
 
     #[test]

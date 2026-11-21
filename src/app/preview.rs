@@ -48,6 +48,7 @@ impl App {
                     exists_on_disk: false,
                     is_binary: false,
                     is_image: false,
+                    art_width: None,
                     scroll_offset: 0,
                     raw_view: false,
                 });
@@ -71,6 +72,7 @@ impl App {
             exists_on_disk: false,
             is_binary: false,
             is_image,
+            art_width: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -79,6 +81,7 @@ impl App {
         let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
 
         // 2. If image, spawn background loading; otherwise read as text
+        let mut art_width: Option<u16> = None;
         let (file_content, exists_on_disk, is_binary, _image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
@@ -162,9 +165,9 @@ impl App {
             }
         } else {
             // Read as text
-            let (content, exists, binary) =
-                Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
-            (content, exists, binary, None)
+            let read = Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
+            art_width = read.art_width;
+            (read.content, read.exists, read.is_binary, None)
         };
 
         let file_content = if !exists_on_disk
@@ -190,6 +193,8 @@ impl App {
             file_content
         };
 
+        let file_content_ok = file_content.is_ok();
+
         // 3. Update popup state with results
         self.model.ui.file_info_popup = Some(model::FileInfoPopupState {
             folder_id,
@@ -202,6 +207,7 @@ impl App {
             // The image pane has nothing to draw for a missing file and would show
             // "Loading image..." forever; the text pane shows why it is missing
             is_image: is_image && exists_on_disk,
+            art_width: art_width.filter(|_| file_content_ok),
             scroll_offset: 0,
             raw_view: false,
         });
@@ -387,9 +393,15 @@ impl App {
         path_map: &HashMap<String, String>,
         folder: &Folder,
         relative_path: &str,
-    ) -> (Result<String, String>, bool, bool) {
+    ) -> TextRead {
         const MAX_SIZE: u64 = 20 * 1024 * 1024; // 20MB
-        const BINARY_CHECK_SIZE: usize = 8192; // First 8KB
+
+        let failed = |message: String, exists: bool| TextRead {
+            content: Err(message),
+            exists,
+            is_binary: false,
+            art_width: None,
+        };
 
         // Translate container path to host path
         let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), relative_path);
@@ -404,79 +416,51 @@ impl App {
             }
         }
 
-        // Check if file exists
         let metadata = match tokio::fs::metadata(&host_path).await {
             Ok(m) => m,
-            Err(_) => return (Err("File not found on disk".to_string()), false, false),
+            Err(_) => return failed("File not found on disk".to_string(), false),
         };
 
-        let exists = true;
-
-        // Check if it's a directory
         if metadata.is_dir() {
-            return (Ok("[Directory]".to_string()), exists, false);
+            return TextRead {
+                content: Ok("[Directory]".to_string()),
+                exists: true,
+                is_binary: false,
+                art_width: None,
+            };
         }
 
-        // Check file size
         if metadata.len() > MAX_SIZE {
-            return (
-                Err(format!(
+            return failed(
+                format!(
                     "File too large ({}) - max 20MB",
                     crate::utils::format_bytes(metadata.len())
-                )),
-                exists,
-                false,
+                ),
+                true,
             );
         }
 
-        // Read file content
         match tokio::fs::read(&host_path).await {
             Ok(bytes) => {
-                // Check if binary (null bytes in first 8KB)
-                // Exception: .ans/.asc files (ANSI art) can have null bytes but should be treated as text
-                let check_size = std::cmp::min(bytes.len(), BINARY_CHECK_SIZE);
-                let path_lower = host_path.to_lowercase();
-                let has_ansi_extension =
-                    path_lower.ends_with(".ans") || path_lower.ends_with(".asc");
-                let is_binary =
-                    !has_ansi_extension && logic::file::is_binary_content(&bytes[..check_size]);
-
-                if is_binary {
-                    // Attempt text extraction (similar to 'strings' command)
-                    let extracted = Self::extract_text_from_binary(&bytes);
-                    (Ok(extracted), exists, true)
-                } else {
-                    // Check if content has ANSI codes on raw bytes BEFORE decoding
-                    // ANSI art files use CP437 encoding and need special handling
-                    let has_ansi_codes = logic::file::contains_ansi_codes(&bytes);
-                    let should_use_cp437 = has_ansi_extension || has_ansi_codes;
-
-                    if should_use_cp437 {
-                        use codepage_437::{BorrowFromCp437, CP437_CONTROL};
-                        // Decode from CP437 to Unicode string
-                        // CP437_CONTROL variant preserves control characters (important for ANSI escape codes)
-                        let decoded = String::borrow_from_cp437(&bytes, &CP437_CONTROL);
-                        (Ok(decoded.to_string()), exists, false)
-                    } else {
-                        // Try to decode as UTF-8
-                        match String::from_utf8(bytes.clone()) {
-                            Ok(content) => (Ok(content), exists, false),
-                            Err(_) => {
-                                // Try lossy conversion
-                                let content = String::from_utf8_lossy(&bytes).to_string();
-                                (Ok(content), exists, true)
-                            }
-                        }
-                    }
+                let decoded = logic::file::decode_preview_bytes(&host_path, &bytes);
+                TextRead {
+                    content: Ok(decoded.text),
+                    exists: true,
+                    is_binary: decoded.is_binary,
+                    art_width: decoded.art_width,
                 }
             }
-            Err(e) => (Err(format!("Failed to read file: {}", e)), exists, false),
+            Err(e) => failed(format!("Failed to read file: {}", e), true),
         }
     }
+}
 
-    fn extract_text_from_binary(bytes: &[u8]) -> String {
-        logic::file::extract_text_from_binary(bytes)
-    }
+/// What reading a file for the text preview produced.
+struct TextRead {
+    content: Result<String, String>,
+    exists: bool,
+    is_binary: bool,
+    art_width: Option<u16>,
 }
 
 /// Decode the image at `path`, rotated and flipped as its EXIF orientation says. Camera
