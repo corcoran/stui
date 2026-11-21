@@ -138,6 +138,23 @@ pub const ANSI_ART_FG: ratatui::style::Color = ratatui::style::Color::Rgb(0xAA, 
 /// Background of ANSI art where the file sets none (CGA black)
 pub const ANSI_ART_BG: ratatui::style::Color = ratatui::style::Color::Rgb(0x00, 0x00, 0x00);
 
+/// DOS glyphs for CP437 bytes 0x00-0x1F, which art uses as picture characters
+const CP437_CONTROL_GLYPHS: [char; 32] = [
+    ' ', '☺', '☻', '♥', '♦', '♣', '♠', '•', '◘', '○', '◙', '♂', '♀', '♪', '♫', '☼', '►', '◄', '↕',
+    '‼', '¶', '§', '▬', '↨', '↑', '↓', '→', '←', '∟', '↔', '▲', '▼',
+];
+
+/// The character DOS showed for a CP437-decoded control character. Tab, LF, CR, the
+/// EOF byte before a SAUCE record (0x1A) and ESC keep their control meaning.
+fn cp437_screen_char(ch: char) -> char {
+    match ch {
+        '\t' | '\n' | '\r' | '\x1a' | '\x1b' => ch,
+        '\x7f' => '⌂',
+        c if (c as u32) < 0x20 => CP437_CONTROL_GLYPHS[c as usize],
+        c => c,
+    }
+}
+
 /// Exact RGB for CGA color `index` (0-15), so the terminal theme can't remap it
 pub fn cga_color(index: u8) -> ratatui::style::Color {
     let (r, g, b) = CGA_PALETTE[(index & 0x0F) as usize];
@@ -644,7 +661,10 @@ pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
             utf16(body, enc == TextEncoding::Utf16Le)
         }
         Some(TextEncoding::Cp437) => DecodedText {
-            text: String::borrow_from_cp437(bytes, &CP437_CONTROL),
+            text: String::borrow_from_cp437(bytes, &CP437_CONTROL)
+                .chars()
+                .map(cp437_screen_char)
+                .collect(),
             is_binary: false,
             art_width: Some(
                 sauce(bytes)
@@ -1530,6 +1550,34 @@ mod tests {
         bytes.insert(0, 0xFE);
         bytes.push(b'x');
         assert_eq!(decode_preview_bytes("a.txt", &bytes).text, "ok");
+    }
+
+    #[test]
+    fn test_cp437_control_bytes_show_their_dos_glyphs() {
+        let bytes: Vec<u8> = (0x01..=0x1Fu8)
+            .filter(|b| ![0x09, 0x0A, 0x0D, 0x1A, 0x1B].contains(b))
+            .chain([0x7F])
+            .collect();
+        assert_eq!(
+            decode_preview_bytes("a.ans", &bytes).text,
+            "☺☻♥♦♣♠•◘♂♀♫☼►◄↕‼¶§▬↨↑↓∟↔▲▼⌂"
+        );
+    }
+
+    #[test]
+    fn test_cp437_keeps_working_control_bytes() {
+        let text = decode_preview_bytes("a.ans", b"\x1b[31mA\tB\r\nC\x1aSAUCE00").text;
+        assert_eq!(text, "\x1b[31mA\tB\r\nC\x1aSAUCE00");
+    }
+
+    #[test]
+    fn test_cp437_nul_is_blank() {
+        assert_eq!(decode_preview_bytes("a.ans", b"A\0B").text, "A B");
+    }
+
+    #[test]
+    fn test_utf8_text_keeps_control_bytes() {
+        assert_eq!(decode_preview_bytes("a.txt", b"A\x01B").text, "A\x01B");
     }
 
     #[test]
