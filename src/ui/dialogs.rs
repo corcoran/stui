@@ -4,10 +4,13 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Wrap,
+        Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
+
+/// Columns a preview popup pane spends on its borders and horizontal padding
+const PANE_CHROME: u16 = 4;
 
 use super::icons::IconRenderer;
 use crate::api::LocalChangedFile;
@@ -574,6 +577,7 @@ fn render_metadata_column(
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .padding(Padding::horizontal(1))
                 .border_style(Style::default().fg(Color::Cyan))
                 .title("Metadata")
                 .title_bottom(if vim_mode {
@@ -605,6 +609,7 @@ fn render_preview_column(
                         .block(
                             Block::default()
                                 .borders(Borders::ALL)
+                                .padding(Padding::horizontal(1))
                                 .border_style(Style::default().fg(Color::Cyan))
                                 .title("Preview"),
                         )
@@ -681,6 +686,7 @@ fn render_preview_column(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .padding(Padding::horizontal(1))
                         .border_style(Style::default().fg(Color::Cyan))
                         .title("Preview"),
                 )
@@ -708,7 +714,7 @@ fn render_preview_column(
         use ratatui::layout::{Constraint, Direction, Layout};
 
         let preview_area = if is_ansi_art {
-            let fixed_width = 82u16; // 80 chars + 2 for borders
+            let fixed_width = 80 + PANE_CHROME;
             if area.width > fixed_width {
                 // Center the container horizontally
                 let horizontal_chunks = Layout::default()
@@ -729,7 +735,7 @@ fn render_preview_column(
             area
         };
 
-        let inner_width = preview_area.width.saturating_sub(2);
+        let inner_width = preview_area.width.saturating_sub(PANE_CHROME);
         let has_rendered_view = crate::logic::file::has_rendered_view(&state.file_path);
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
@@ -760,6 +766,7 @@ fn render_preview_column(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1))
                     .border_style(Style::default().fg(Color::Cyan))
                     .title(title),
             )
@@ -830,6 +837,7 @@ fn render_image_metadata(f: &mut Frame, area: Rect, metadata: &crate::ImageMetad
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .padding(Padding::horizontal(1))
                 .border_style(Style::default().fg(Color::Cyan))
                 .title("Preview (Metadata Only)"),
         )
@@ -1188,6 +1196,46 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|r| r.contains("Error: File not found on disk")),
+            "{:#?}",
+            rows
+        );
+    }
+
+    // ========================================
+    // PADDING
+    // ========================================
+
+    #[test]
+    fn test_preview_text_is_padded_one_column_from_each_border() {
+        // 20 columns: 2 borders + 2 padding leave 16 for text
+        let mut state = popup("notes.txt", "abcdefghijklmnopq", false);
+        let rows = render_rows(&mut state, 20, 6);
+        assert_eq!(rows[1], "│ abcdefghijklmnop │", "{:#?}", rows);
+        assert!(rows[2].starts_with("│ q"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_metadata_is_padded_one_column_from_the_border() {
+        let mut state = popup("notes.txt", "text", false);
+        let icons = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut images = std::collections::HashMap::new();
+        terminal
+            .draw(|f| render_file_info(f, &mut state, &[], None, &icons, None, &mut images, false))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains("│ Name: notes.txt")),
             "{:#?}",
             rows
         );

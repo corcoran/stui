@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Undelete one file**: In a Receive Only folder, press `u` on a file deleted on this device to download it again from your other devices. `R` still reverts the whole folder. Undeletes run in the background, so you can press `u` on several files in a row
 - **Terminal title**: The terminal or tab title follows where you are (`stui · Projects/website`, or the file while previewing) and goes back to the previous title on exit. Set `terminal_title: false` to leave the title alone
 
+### 🔧 Improvements
+
+- The preview popup keeps one column of space inside the borders of its info and text panes
+
 ### 🐛 Bug Fixes
 
 - The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README
