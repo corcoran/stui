@@ -5,7 +5,7 @@
 use crate::SortMode;
 use crate::api::{BrowseItem, SyncState};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Compare two browse items according to the given sort mode
 ///
@@ -79,27 +79,21 @@ pub fn compare_browse_items(
     if reverse { result.reverse() } else { result }
 }
 
-/// Sort `items` in place using the displayed sync state.
-///
-/// In-flight transfers in `syncing` are overlaid on `base_states` exactly as the breadcrumb
-/// renderer does, so a downloading file or a directory with a downloading descendant sorts
-/// in the Syncing group. `prefix` is the level's path relative to the folder root.
+/// Sort `items` in place. `states` maps each name to the state it sorts by, which must
+/// match its icon (`logic::display::level_sort_states`).
 pub fn sort_browse_items(
     items: &mut [BrowseItem],
     sort_mode: SortMode,
     reverse: bool,
-    base_states: &HashMap<String, SyncState>,
-    prefix: Option<&str>,
-    syncing: Option<&HashSet<String>>,
+    states: &HashMap<String, SyncState>,
 ) {
-    let states =
-        crate::logic::sync_states::overlay_syncing_states(items, base_states, prefix, syncing);
-    items.sort_by(|a, b| compare_browse_items(a, b, sort_mode, reverse, &states));
+    items.sort_by(|a, b| compare_browse_items(a, b, sort_mode, reverse, states));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn make_file(name: &str, size: u64, mod_time: &str) -> BrowseItem {
         BrowseItem {
@@ -262,6 +256,18 @@ mod tests {
         pairs.iter().map(|(n, s)| (n.to_string(), *s)).collect()
     }
 
+    /// Sorts by sync state with in-flight transfers overlaid, as the breadcrumb shows them
+    fn sort_overlaid(
+        items: &mut [BrowseItem],
+        base: &HashMap<String, SyncState>,
+        prefix: Option<&str>,
+        syncing: Option<&HashSet<String>>,
+    ) {
+        let states =
+            crate::logic::sync_states::overlay_syncing_states(items, base, prefix, syncing);
+        sort_browse_items(items, SortMode::VisualIndicator, false, &states);
+    }
+
     #[test]
     fn test_sort_syncing_file_uses_syncing_priority() {
         let mut items = vec![
@@ -276,14 +282,7 @@ mod tests {
         ]);
         let syncing: HashSet<String> = ["b".to_string()].into();
 
-        sort_browse_items(
-            &mut items,
-            SortMode::VisualIndicator,
-            false,
-            &base,
-            None,
-            Some(&syncing),
-        );
+        sort_overlaid(&mut items, &base, None, Some(&syncing));
 
         // Syncing (1) < RemoteOnly (2) < Synced (6)
         assert_eq!(names(&items), vec!["b", "a", "c"]);
@@ -297,14 +296,7 @@ mod tests {
         ];
         let base = base_states(&[("a", SyncState::RemoteOnly), ("b", SyncState::RemoteOnly)]);
 
-        sort_browse_items(
-            &mut items,
-            SortMode::VisualIndicator,
-            false,
-            &base,
-            None,
-            None,
-        );
+        sort_overlaid(&mut items, &base, None, None);
 
         assert_eq!(names(&items), vec!["a", "b"]);
     }
@@ -319,14 +311,7 @@ mod tests {
         ]);
         let syncing: HashSet<String> = ["sub/ccc/deep/file.bin".to_string()].into();
 
-        sort_browse_items(
-            &mut items,
-            SortMode::VisualIndicator,
-            false,
-            &base,
-            Some("sub/"),
-            Some(&syncing),
-        );
+        sort_overlaid(&mut items, &base, Some("sub/"), Some(&syncing));
 
         assert_eq!(names(&items), vec!["ccc", "aaa", "bbb"]);
     }
@@ -341,14 +326,7 @@ mod tests {
         // "b" at the folder root is syncing, not "sub/b"
         let syncing: HashSet<String> = ["b".to_string()].into();
 
-        sort_browse_items(
-            &mut items,
-            SortMode::VisualIndicator,
-            false,
-            &base,
-            Some("sub/"),
-            Some(&syncing),
-        );
+        sort_overlaid(&mut items, &base, Some("sub/"), Some(&syncing));
 
         assert_eq!(names(&items), vec!["a", "b"]);
     }

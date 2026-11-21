@@ -6,7 +6,7 @@ use crate::logic::sync_states::{breadcrumb_item_path, is_locally_deleted, item_s
 use crate::model::BreadcrumbLevel;
 use crate::model::pending::{PendingChanges, PendingKind};
 use crate::model::syncthing::{NeedIndex, SyncthingModel};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// How a file or directory is shown: its icon in the list and its state in the status bar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +89,33 @@ pub fn level_item_display(
                     .then_some(&PendingKind::Reverting)
             }),
     })
+}
+
+/// The state an item sorts by in the sync-state sort, matching its icon. A file deleted
+/// locally sorts with local changes, as the out-of-sync filter and revert treat it.
+pub fn sort_state(display: Option<ItemDisplay>) -> SyncState {
+    match display {
+        None => SyncState::Unknown,
+        Some(ItemDisplay::State(state)) => state,
+        Some(ItemDisplay::Ignored { .. }) => SyncState::Ignored,
+        Some(ItemDisplay::LocallyDeleted) => SyncState::LocalOnly,
+    }
+}
+
+/// `sort_state` of every item listed in `level`, keyed by name
+pub fn level_sort_states(
+    syncthing: &SyncthingModel,
+    level: &BreadcrumbLevel,
+    pending: &PendingChanges,
+) -> HashMap<String, SyncState> {
+    level
+        .items
+        .iter()
+        .map(|item| {
+            let display = level_item_display(syncthing, level, item, pending);
+            (item.name.clone(), sort_state(display))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -337,6 +364,27 @@ mod tests {
                 &PendingChanges::default()
             ),
             None
+        );
+    }
+
+    // ========================================
+    // SORT STATE
+    // ========================================
+
+    #[test]
+    fn test_sort_state_follows_the_display() {
+        assert_eq!(sort_state(None), SyncState::Unknown);
+        assert_eq!(
+            sort_state(Some(ItemDisplay::State(SyncState::OutOfSync))),
+            SyncState::OutOfSync
+        );
+        assert_eq!(
+            sort_state(Some(ItemDisplay::Ignored { exists: true })),
+            SyncState::Ignored
+        );
+        assert_eq!(
+            sort_state(Some(ItemDisplay::LocallyDeleted)),
+            SyncState::LocalOnly
         );
     }
 }

@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `R` updates the whole folder at once instead of file by file
 - A failed delete or revert shows an error
 - Previewing an image that is not on disk says why, instead of staying on "Loading image..."
+- Sorting by sync state (`s`) follows the icons: a file being restored by a revert sorts with syncing files, and a file deleted locally sorts with local changes
 
 ### 🧪 Testing
 

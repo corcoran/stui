@@ -4,6 +4,7 @@
 
 use crate::api::{BrowseItem, FolderStatus, LocalChangedFile, NeedResponse, SyncState};
 use crate::model::syncthing::{NeedFetch, NeedIndex, PathEvent, PathEventKind};
+#[cfg(test)]
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -227,10 +228,11 @@ pub fn item_sync_state(
     }
 }
 
-/// Apply `effective_sync_state` to every item in a breadcrumb level.
+/// Apply `effective_sync_state` to every item in a breadcrumb level. Tests only: drawing
+/// and sorting go through `logic::display` one item at a time.
 ///
-/// Borrows `base` unchanged when nothing in the folder is syncing, so the common case
-/// costs no allocation per frame.
+/// Borrows `base` unchanged when nothing in the folder is syncing.
+#[cfg(test)]
 pub fn overlay_syncing_states<'a>(
     items: &[BrowseItem],
     base: &'a HashMap<String, SyncState>,

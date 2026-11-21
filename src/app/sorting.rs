@@ -18,6 +18,17 @@ impl App {
         level_idx: usize,
         preserve_selection_name: Option<String>,
     ) {
+        let Some(states) = self
+            .model
+            .navigation
+            .breadcrumb_trail
+            .get(level_idx)
+            .map(|level| {
+                logic::display::level_sort_states(&self.model.syncthing, level, &self.model.pending)
+            })
+        else {
+            return;
+        };
         if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
             let sort_mode = self.model.ui.sort_mode;
             let reverse = self.model.ui.sort_reverse;
@@ -30,16 +41,7 @@ impl App {
                     .map(|item| item.name.clone())
             });
 
-            // Sort items
-            // Sort by the displayed state: in-flight transfers are overlaid like in render
-            logic::sorting::sort_browse_items(
-                &mut level.items,
-                sort_mode,
-                reverse,
-                &level.file_sync_states,
-                level.prefix.as_deref(),
-                self.model.syncthing.syncing_files.get(&level.folder_id),
-            );
+            logic::sorting::sort_browse_items(&mut level.items, sort_mode, reverse, &states);
 
             // Restore selection to the same item
             if let Some(name) = selected_name {
@@ -104,5 +106,82 @@ impl App {
                 self.apply_search_filter();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::SortMode;
+    use crate::api::SyncState;
+    use crate::model::pending::PendingKind;
+    use crate::test_support::*;
+
+    fn sorted_names(app: &crate::App) -> Vec<String> {
+        app.model.navigation.breadcrumb_trail[0]
+            .items
+            .iter()
+            .map(|i| i.name.clone())
+            .collect()
+    }
+
+    fn set_states(app: &mut crate::App, states: &[(&str, SyncState)]) {
+        let level = &mut app.model.navigation.breadcrumb_trail[0];
+        for (name, state) in states {
+            level.file_sync_states.insert(name.to_string(), *state);
+        }
+    }
+
+    #[test]
+    fn test_sync_state_sort_puts_reverting_file_with_syncing() {
+        let mut app = create_test_app();
+        view_folder_root(
+            &mut app,
+            "docs",
+            vec![file_item("a.txt"), file_item("b.txt"), file_item("c.txt")],
+        );
+        set_states(
+            &mut app,
+            &[
+                ("a.txt", SyncState::Synced),
+                ("b.txt", SyncState::Synced),
+                ("c.txt", SyncState::RemoteOnly),
+            ],
+        );
+        app.record_pending("docs", "b.txt", PendingKind::Reverting);
+        app.model.ui.sort_mode = SortMode::VisualIndicator;
+
+        app.sort_level(0);
+
+        assert_eq!(sorted_names(&app), ["b.txt", "c.txt", "a.txt"]);
+    }
+
+    #[test]
+    fn test_sync_state_sort_puts_locally_deleted_file_with_local_changes() {
+        let mut app = create_test_app();
+        view_folder_root(
+            &mut app,
+            "docs",
+            vec![
+                file_item("a.txt"),
+                file_item("d.txt"),
+                file_item("n.txt"),
+                file_item("r.txt"),
+            ],
+        );
+        set_states(
+            &mut app,
+            &[
+                ("a.txt", SyncState::Synced),
+                ("d.txt", SyncState::RemoteOnly),
+                ("n.txt", SyncState::LocalOnly),
+                ("r.txt", SyncState::RemoteOnly),
+            ],
+        );
+        app.record_pending("docs", "d.txt", PendingKind::DeletedLocally);
+        app.model.ui.sort_mode = SortMode::VisualIndicator;
+
+        app.sort_level(0);
+
+        assert_eq!(sorted_names(&app), ["r.txt", "d.txt", "n.txt", "a.txt"]);
     }
 }
