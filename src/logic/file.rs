@@ -167,6 +167,7 @@ struct SgrState {
     fg: Option<u8>,
     bg: Option<u8>,
     bold: bool,
+    blink: bool,
     italic: bool,
     underline: bool,
 }
@@ -178,9 +179,11 @@ impl SgrState {
             1 => self.bold = true,
             3 => self.italic = true,
             4 => self.underline = true,
+            5 | 6 => self.blink = true,
             22 => self.bold = false,
             23 => self.italic = false,
             24 => self.underline = false,
+            25 => self.blink = false,
             30..=37 => self.fg = Some(code - 30),
             39 => self.fg = None,
             40..=47 => self.bg = Some(code - 40),
@@ -192,7 +195,8 @@ impl SgrState {
     }
 
     /// Bold means high intensity, as on DOS: it brightens colors 0-7 and the default
-    /// grey, and does not change the font.
+    /// grey, and does not change the font. Blink draws blinking text: SAUCE iCE flags
+    /// are unreliable, and blinking is the more common intent.
     fn style(&self) -> ratatui::style::Style {
         use ratatui::style::{Modifier, Style};
         let fg = match (self.fg, self.bold) {
@@ -207,6 +211,9 @@ impl SgrState {
         if let Some(i) = self.bg {
             style = style.bg(cga_color(i));
         }
+        if self.blink {
+            style = style.add_modifier(Modifier::SLOW_BLINK);
+        }
         if self.italic {
             style = style.add_modifier(Modifier::ITALIC);
         }
@@ -220,9 +227,9 @@ impl SgrState {
 /// Parse ANSI codes and convert to Ratatui Text with styling
 ///
 /// Draws the text on a grid of rows `width` columns wide, like the DOS screen ANSI art
-/// was made on, and returns the rows. Nothing reaches the real terminal. Relative cursor moves
-/// (CSI A/B/C/D) move within the grid; screen clearing, absolute positioning and other
-/// codes are ignored.
+/// was made on, and returns the rows. Nothing reaches the real terminal. Cursor moves
+/// (CSI A/B/C/D, H/f) move within the grid, CSI K erases in the row, tab moves to the
+/// next 8-column stop. Screen clearing, private (`ESC[?7h`) and other codes are skipped.
 ///
 /// Supported SGR codes:
 /// - 0: Reset
@@ -272,53 +279,78 @@ pub fn parse_ansi_to_text(text: &str, width: u16) -> ratatui::text::Text<'static
         if ch == '\x1b' && chars.peek() == Some(&'[') {
             chars.next(); // consume '['
 
+            // CSI: parameter bytes 0x30-0x3F, intermediate bytes 0x20-0x2F, final 0x40-0x7E
             let mut params = String::new();
-            while let Some(&next_ch) = chars.peek() {
-                if next_ch.is_ascii_digit() || next_ch == ';' {
-                    params.push(next_ch);
-                    chars.next();
-                } else {
-                    break;
-                }
+            while let Some(&c) = chars.peek().filter(|c| ('\x30'..='\x3f').contains(*c)) {
+                params.push(c);
+                chars.next();
+            }
+            let mut has_intermediate = false;
+            while chars.peek().is_some_and(|c| ('\x20'..='\x2f').contains(c)) {
+                has_intermediate = true;
+                chars.next();
+            }
+            let Some(command) = chars.next() else { break };
+            let private = params.starts_with(['?', '<', '=', '>']);
+            if private || has_intermediate {
+                continue;
             }
 
-            let count = || params.parse::<usize>().unwrap_or(1).max(1);
-            match chars.next() {
-                Some('A') => {
+            let numbers: Vec<usize> = params
+                .split(';')
+                .map(|p| p.trim().parse().unwrap_or(0))
+                .collect();
+            let count = || numbers[0].max(1);
+            match command {
+                'A' => {
                     row = row.saturating_sub(count());
                     just_wrapped = false;
                 }
-                Some('B') => {
+                'B' => {
                     row += count();
                     just_wrapped = false;
                 }
-                Some('C') => col = (col + count()).min(line_width - 1),
-                Some('D') => col = col.saturating_sub(count()),
-                Some('m') => {
-                    // Empty params or an empty parameter mean reset (0)
-                    let codes: Vec<u8> = if params.is_empty() {
-                        vec![0]
-                    } else {
-                        params
-                            .split(';')
-                            .filter_map(|s| {
-                                let trimmed = s.trim();
-                                if trimmed.is_empty() {
-                                    Some(0)
-                                } else {
-                                    trimmed.parse().ok()
-                                }
-                            })
-                            .collect()
+                'C' => col = (col + count()).min(line_width - 1),
+                'D' => col = col.saturating_sub(count()),
+                'H' | 'f' => {
+                    row = numbers[0].max(1) - 1;
+                    col = (numbers.get(1).copied().unwrap_or(1).max(1) - 1).min(line_width - 1);
+                    just_wrapped = false;
+                }
+                'K' => {
+                    if rows.len() <= row {
+                        rows.resize(row + 1, blank_row.clone());
+                    }
+                    let cells = &mut rows[row];
+                    let range = match numbers[0] {
+                        1 => 0..(col + 1).min(line_width),
+                        2 => 0..line_width,
+                        _ => col.min(line_width)..line_width,
                     };
-                    for code in codes {
-                        sgr.apply(code);
+                    for cell in &mut cells[range] {
+                        *cell = (' ', Style::default());
+                    }
+                }
+                'm' => {
+                    // Empty params or an empty parameter mean reset (0)
+                    for code in &numbers {
+                        sgr.apply(u8::try_from(*code).unwrap_or(u8::MAX));
                     }
                     current_style = sgr.style();
                 }
-                // Screen clearing, absolute positioning and the rest are ignored
+                // Screen clearing and the rest are ignored
                 _ => {}
             }
+        } else if ch == '\x1b' {
+            // Other escape sequences: ESC plus one byte, or a charset choice like ESC ( B
+            if let Some(next) = chars.next()
+                && matches!(next, '(' | ')' | '*' | '+')
+            {
+                chars.next();
+            }
+        } else if ch == '\t' {
+            col = ((col / 8 + 1) * 8).min(line_width - 1);
+            just_wrapped = false;
         } else if ch == '\n' {
             if !just_wrapped {
                 row += 1;
@@ -488,14 +520,24 @@ pub enum TextEncoding {
     Utf16Le,
     Utf16Be,
     Cp437,
+    /// ISO-8859-1, the character set of Amiga ASCII art
+    Latin1,
+}
+
+/// How art is drawn: its canvas width in columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtStyle {
+    pub width: u16,
 }
 
 /// The parts of a SAUCE record the preview uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sauce {
     pub width: Option<u16>,
-    /// DataType 1 (Character): the file is CP437 text art
+    /// DataType 1 (Character): the file is text art
     pub character: bool,
+    /// The font name (TInfoS) names an Amiga font, so the text is ISO-8859-1
+    pub amiga_font: bool,
 }
 
 /// Result of decoding a file's bytes for the preview.
@@ -503,7 +545,7 @@ pub struct Sauce {
 pub struct DecodedText {
     pub text: String,
     pub is_binary: bool,
-    pub art_width: Option<u16>,
+    pub art: Option<ArtStyle>,
 }
 
 /// Reads the SAUCE record in the last 128 bytes, if there is one.
@@ -518,8 +560,13 @@ pub fn sauce(bytes: &[u8]) -> Option<Sauce> {
     let width = u16::from_le_bytes([rec[96], rec[97]]);
     let character = rec[94] == 1;
     let character_art = character && rec[95] <= 2;
+    let font = String::from_utf8_lossy(&rec[106..128]).to_ascii_lowercase();
+    let amiga_font = ["amiga", "topaz", "p0t-noodle", "microknight", "mo'soul"]
+        .iter()
+        .any(|name| font.contains(name));
     Some(Sauce {
         character,
+        amiga_font,
         width: (character_art && (1..=1000).contains(&width)).then_some(width),
     })
 }
@@ -532,6 +579,39 @@ pub fn has_cp437_art_run(bytes: &[u8]) -> bool {
     bytes
         .windows(4)
         .any(|w| w.iter().all(|&b| b == w[0]) && (BLOCKS.contains(&w[0]) || LINES.contains(&w[0])))
+}
+
+/// True when the high bytes look like Amiga ASCII (ISO-8859-1) rather than CP437:
+/// Amiga symbols (`¡`-`¯`, `µ¶·¸½¾×Ø`) outnumber both CP437 drawing bytes (shades,
+/// blocks, box lines, dots) and accented letters (`À`-`ÿ`). The letter guard keeps
+/// Latin-1 prose and PC art that uses `⌐ ¬ ²` as strokes out.
+fn is_amiga_art(bytes: &[u8]) -> bool {
+    const DOS: [u8; 32] = [
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB9, 0xBA, 0xBB, 0xBC, 0xBF, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5,
+        0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xF9,
+        0xFA, 0xFE,
+    ];
+    let is_amiga = |b: u8| matches!(b, 0xA0..=0xAF | 0xB5..=0xB8 | 0xBD | 0xBE | 0xD7 | 0xD8);
+    let is_letter = |b: u8| b >= 0xC0 && b != 0xD7 && b != 0xF7;
+    let (mut amiga, mut dos, mut letters) = (0usize, 0usize, 0usize);
+    for &b in bytes {
+        amiga += usize::from(is_amiga(b));
+        dos += usize::from(DOS.contains(&b));
+        letters += usize::from(is_letter(b));
+    }
+    amiga > 0 && amiga > dos && amiga >= letters
+}
+
+/// CP437 or ISO-8859-1 for a file already known to be art: an Amiga SAUCE font means
+/// ISO-8859-1, escape codes mean CP437 (DOS ANSI), otherwise the byte mix decides.
+fn art_encoding(bytes: &[u8]) -> TextEncoding {
+    if sauce(bytes).is_some_and(|s| s.amiga_font) {
+        TextEncoding::Latin1
+    } else if contains_ansi_codes(bytes) || !is_amiga_art(bytes) {
+        TextEncoding::Cp437
+    } else {
+        TextEncoding::Latin1
+    }
 }
 
 fn has_art_extension(path: &str) -> bool {
@@ -586,10 +666,12 @@ fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
 /// 2. UTF-16 without a BOM (see `sniff_utf16`)
 /// 3. `.nfo`/`.diz` that is modern text (see `is_modern_info_text`): UTF-8
 /// 4. Extension `.ans`/`.asc`/`.nfo`/`.diz` or a character-art SAUCE record (DataType 1):
-///    CP437, even with NUL bytes
+///    art even with NUL bytes, CP437 or ISO-8859-1 by `art_encoding`
 /// 5. A NUL byte in the first 8 KB: binary
-/// 6. Escape codes, or invalid UTF-8 with a CP437 art run: CP437
-/// 7. Otherwise UTF-8
+/// 6. Escape codes: CP437
+/// 7. Invalid UTF-8 that looks like Amiga art (`is_amiga_art`): ISO-8859-1; with a CP437
+///    art run: CP437
+/// 8. Otherwise UTF-8
 pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
     match bytes {
         [0xFF, 0xFE, ..] => return Some(TextEncoding::Utf16Le),
@@ -603,28 +685,53 @@ pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
         return Some(TextEncoding::Utf8);
     }
     if has_art_extension(path) || sauce(bytes).is_some_and(|s| s.character) {
-        return Some(TextEncoding::Cp437);
+        return Some(art_encoding(bytes));
     }
     if bytes[..bytes.len().min(PREVIEW_SNIFF_BYTES)].contains(&0) {
         return None;
     }
-    if contains_ansi_codes(bytes)
-        || (std::str::from_utf8(bytes).is_err() && has_cp437_art_run(bytes))
-    {
+    if contains_ansi_codes(bytes) {
         return Some(TextEncoding::Cp437);
     }
+    if std::str::from_utf8(bytes).is_err() {
+        if is_amiga_art(bytes) {
+            return Some(TextEncoding::Latin1);
+        }
+        if has_cp437_art_run(bytes) {
+            return Some(TextEncoding::Cp437);
+        }
+    }
     Some(TextEncoding::Utf8)
+}
+
+/// Canvas width: the SAUCE width, else `DEFAULT_ART_WIDTH`.
+fn art_style(bytes: &[u8]) -> ArtStyle {
+    ArtStyle {
+        width: sauce(bytes)
+            .and_then(|s| s.width)
+            .unwrap_or(DEFAULT_ART_WIDTH),
+    }
+}
+
+/// ISO-8859-1 byte as a character. Control bytes other than tab, LF, CR, the EOF byte
+/// before a SAUCE record and ESC become spaces, so C1 bytes never reach the terminal.
+fn latin1_screen_char(b: u8) -> char {
+    match b {
+        b'\t' | b'\n' | b'\r' | 0x1A | 0x1B => b as char,
+        0x00..=0x1F | 0x7F..=0x9F => ' ',
+        _ => b as char,
+    }
 }
 
 /// Decodes a file's bytes for the preview according to `detect_encoding`.
 ///
 /// Binary files yield their extracted strings. Invalid UTF-8 is decoded lossily
-/// and flagged binary. `art_width` is set only for CP437 art.
+/// and flagged binary. `art` is set only for art.
 pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
     let text_only = |text: String| DecodedText {
         text,
         is_binary: false,
-        art_width: None,
+        art: None,
     };
     let utf16 = |units: &[u8], le: bool| {
         let units: Vec<u16> = units
@@ -643,14 +750,14 @@ pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
         None => DecodedText {
             text: extract_text_from_binary(bytes),
             is_binary: true,
-            art_width: None,
+            art: None,
         },
         Some(TextEncoding::Utf8) => match std::str::from_utf8(bytes) {
             Ok(s) => text_only(s.strip_prefix('\u{feff}').unwrap_or(s).to_string()),
             Err(_) => DecodedText {
                 text: String::from_utf8_lossy(bytes).into_owned(),
                 is_binary: true,
-                art_width: None,
+                art: None,
             },
         },
         Some(enc @ (TextEncoding::Utf16Le | TextEncoding::Utf16Be)) => {
@@ -666,11 +773,12 @@ pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
                 .map(cp437_screen_char)
                 .collect(),
             is_binary: false,
-            art_width: Some(
-                sauce(bytes)
-                    .and_then(|s| s.width)
-                    .unwrap_or(DEFAULT_ART_WIDTH),
-            ),
+            art: Some(art_style(bytes)),
+        },
+        Some(TextEncoding::Latin1) => DecodedText {
+            text: bytes.iter().map(|&b| latin1_screen_char(b)).collect(),
+            is_binary: false,
+            art: Some(art_style(bytes)),
         },
     }
 }
@@ -996,6 +1104,58 @@ mod tests {
     }
 
     #[test]
+    fn test_blink_draws_blinking_text() {
+        use ratatui::style::Modifier;
+        let style = first_style("\x1b[5;41mX");
+        assert!(style.add_modifier.contains(Modifier::SLOW_BLINK));
+        assert_eq!(style.bg, Some(cga_color(1)));
+        assert!(
+            first_style("\x1b[6mX")
+                .add_modifier
+                .contains(Modifier::SLOW_BLINK)
+        );
+        assert!(
+            !first_style("\x1b[5;25mX")
+                .add_modifier
+                .contains(Modifier::SLOW_BLINK)
+        );
+    }
+
+    #[test]
+    fn test_private_and_intermediate_codes_are_skipped() {
+        assert_eq!(line_texts("\x1b[?7hAB"), ["AB"]);
+        assert_eq!(line_texts("\x1b[=3hX"), ["X"]);
+        assert_eq!(line_texts("\x1b[0 qX"), ["X"]);
+    }
+
+    #[test]
+    fn test_cursor_position() {
+        assert_eq!(line_texts("abc\x1b[2;3HX"), ["abc", "  X"]);
+        assert_eq!(line_texts("abc\x1b[HX"), ["Xbc"]);
+        assert_eq!(line_texts("\x1b[2;1fY"), ["", "Y"]);
+        assert_eq!(line_texts_w("\x1b[1;200HX", 10), ["         X"]);
+    }
+
+    #[test]
+    fn test_erase_in_line() {
+        assert_eq!(line_texts("abcdef\x1b[3D\x1b[KX"), ["abcX"]);
+        assert_eq!(line_texts("abcdef\x1b[3D\x1b[1KX"), ["   Xef"]);
+        assert_eq!(line_texts("abcdef\x1b[2KX"), ["      X"]);
+    }
+
+    #[test]
+    fn test_tab_moves_to_next_stop() {
+        assert_eq!(line_texts("a\tb"), ["a       b"]);
+        assert_eq!(line_texts_w("12345678\tX", 10), ["12345678 X"]);
+    }
+
+    #[test]
+    fn test_other_escape_sequences_are_skipped() {
+        assert_eq!(line_texts("A\x1b(BB"), ["AB"]);
+        assert_eq!(line_texts("A\x1bcB"), ["AB"]);
+    }
+
+    #[test]
     fn test_canvas_width_from_caller() {
         let line = "x".repeat(100);
         assert_eq!(line_texts_w(&line, 132), [line.as_str()]);
@@ -1305,6 +1465,17 @@ mod tests {
     // ========================================
 
     fn with_sauce(body: &[u8], data_type: u8, file_type: u8, width: u16) -> Vec<u8> {
+        with_sauce_full(body, data_type, file_type, width, 0, "")
+    }
+
+    fn with_sauce_full(
+        body: &[u8],
+        data_type: u8,
+        file_type: u8,
+        width: u16,
+        flags: u8,
+        font: &str,
+    ) -> Vec<u8> {
         let mut v = body.to_vec();
         v.push(0x1A);
         let mut rec = vec![b' '; 128];
@@ -1312,8 +1483,104 @@ mod tests {
         rec[94] = data_type;
         rec[95] = file_type;
         rec[96..98].copy_from_slice(&width.to_le_bytes());
+        rec[105] = flags;
+        rec[106..128].fill(0);
+        rec[106..106 + font.len()].copy_from_slice(font.as_bytes());
         v.extend(rec);
         v
+    }
+
+    // ========================================
+    // AMIGA (LATIN-1) ART AND ICE COLORS
+    // ========================================
+
+    #[test]
+    fn test_amiga_asc_is_latin1() {
+        // · ¥ ¯ dominate: Amiga ASCII
+        let bytes = b"$$\xb7\xb7\xa5\xa5\xa5\xaf\xaf $$";
+        assert_eq!(
+            detect_encoding("logo.asc", bytes),
+            Some(TextEncoding::Latin1)
+        );
+    }
+
+    #[test]
+    fn test_dos_asc_stays_cp437() {
+        assert_eq!(
+            detect_encoding("logo.asc", &[0xDB, 0xDB, 0xB1, 0xB0, b' ']),
+            Some(TextEncoding::Cp437)
+        );
+    }
+
+    #[test]
+    fn test_pc_strokes_with_letters_stay_cp437() {
+        // ⌐ ¬ ² strokes in PC art: 0xA9/0xAA count as Amiga bytes, 0xFD as a letter
+        let mut bytes = Vec::new();
+        for _ in 0..10 {
+            bytes.extend_from_slice(b"$\xa9\xaa\xfd\xfd\xfd ");
+        }
+        assert_eq!(detect_encoding("ko.asc", &bytes), Some(TextEncoding::Cp437));
+    }
+
+    #[test]
+    fn test_escape_codes_keep_cp437_despite_amiga_bytes() {
+        let bytes = b"\x1b[31m\xb7\xb7\xb7\xaf";
+        assert_eq!(detect_encoding("a.asc", bytes), Some(TextEncoding::Cp437));
+        assert_eq!(detect_encoding("a.txt", bytes), Some(TextEncoding::Cp437));
+    }
+
+    #[test]
+    fn test_amiga_sauce_font_is_latin1() {
+        let bytes = with_sauce_full(b"\x1b[31m\xdb\xdb", 1, 1, 80, 0, "Amiga Topaz 2+");
+        assert_eq!(detect_encoding("a.ans", &bytes), Some(TextEncoding::Latin1));
+        let pot = with_sauce_full(b"x", 1, 0, 80, 0, "P0T-NOoDLE");
+        assert_eq!(detect_encoding("a.ans", &pot), Some(TextEncoding::Latin1));
+    }
+
+    #[test]
+    fn test_amiga_txt_is_latin1() {
+        let bytes = b"  \xb7\xb7\xb7 \xaf\xaf\xd6 kayozz";
+        assert_eq!(
+            detect_encoding("art.txt", bytes),
+            Some(TextEncoding::Latin1)
+        );
+    }
+
+    #[test]
+    fn test_latin1_prose_is_not_amiga_art() {
+        let french: Vec<u8> = "Le café était fermé, voilà © 2020, très élégant"
+            .chars()
+            .map(|c| c as u32 as u8)
+            .collect();
+        assert_eq!(
+            detect_encoding("notes.txt", &french),
+            Some(TextEncoding::Utf8)
+        );
+        let german: Vec<u8> = "Größe Straße Übung © Äpfel"
+            .chars()
+            .map(|c| c as u32 as u8)
+            .collect();
+        assert_eq!(
+            detect_encoding("notes.txt", &german),
+            Some(TextEncoding::Utf8)
+        );
+    }
+
+    #[test]
+    fn test_decode_latin1_art() {
+        let d = decode_preview_bytes("a.asc", b"\xb7\xa5\xaf\x01\x9bx");
+        assert_eq!(d.text, "·¥¯  x");
+        assert!(!d.is_binary);
+        assert_eq!(d.art, Some(ArtStyle { width: 80 }));
+    }
+
+    #[test]
+    fn test_sauce_ice_flag_does_not_change_art() {
+        let bytes = with_sauce_full(b"\x1b[5;41mX", 1, 1, 80, 1, "IBM VGA");
+        assert_eq!(
+            decode_preview_bytes("a.ans", &bytes).art,
+            Some(ArtStyle { width: 80 })
+        );
     }
 
     #[test]
@@ -1322,7 +1589,8 @@ mod tests {
             sauce(&with_sauce(b"art", 1, 1, 132)),
             Some(Sauce {
                 width: Some(132),
-                character: true
+                character: true,
+                amiga_font: false
             })
         );
     }
@@ -1339,28 +1607,32 @@ mod tests {
             sauce(&with_sauce(b"x", 5, 1, 132)),
             Some(Sauce {
                 width: None,
-                character: false
+                character: false,
+                amiga_font: false
             })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 3, 132)),
             Some(Sauce {
                 width: None,
-                character: true
+                character: true,
+                amiga_font: false
             })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 1, 0)),
             Some(Sauce {
                 width: None,
-                character: true
+                character: true,
+                amiga_font: false
             })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 1, 1001)),
             Some(Sauce {
                 width: None,
-                character: true
+                character: true,
+                amiga_font: false
             })
         );
     }
@@ -1441,7 +1713,7 @@ mod tests {
     fn test_kodi_nfo_xml_is_text() {
         let xml = "<movie><plot>It\u{2019}s caf\u{e9}</plot></movie>".as_bytes();
         assert_eq!(detect_encoding("movie.nfo", xml), Some(TextEncoding::Utf8));
-        assert_eq!(decode_preview_bytes("movie.nfo", xml).art_width, None);
+        assert_eq!(decode_preview_bytes("movie.nfo", xml).art, None);
     }
 
     #[test]
@@ -1516,7 +1788,7 @@ mod tests {
             DecodedText {
                 text: "hello".into(),
                 is_binary: false,
-                art_width: None
+                art: None
             }
         );
     }
@@ -1538,7 +1810,7 @@ mod tests {
             DecodedText {
                 text: "héllo\r\n".into(),
                 is_binary: false,
-                art_width: None
+                art: None
             }
         );
     }
@@ -1581,25 +1853,25 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_cp437_art_width() {
+    fn test_decode_cp437_art_style() {
         let d = decode_preview_bytes("a.nfo", &[0xDB, b'A']);
         assert_eq!(
             d,
             DecodedText {
                 text: "█A".into(),
                 is_binary: false,
-                art_width: Some(80)
+                art: Some(ArtStyle { width: 80 })
             }
         );
         let wide = decode_preview_bytes("a.ans", &with_sauce(b"x", 1, 1, 132));
-        assert_eq!(wide.art_width, Some(132));
+        assert_eq!(wide.art.map(|a| a.width), Some(132));
     }
 
     #[test]
     fn test_decode_binary_extracts_strings() {
         let d = decode_preview_bytes("a.bin", b"\0\0Hello binary world\0\0");
         assert!(d.is_binary);
-        assert_eq!(d.art_width, None);
+        assert_eq!(d.art, None);
         assert!(d.text.contains("Hello binary world"));
     }
 }

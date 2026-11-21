@@ -700,10 +700,9 @@ fn render_preview_column(
             Err(msg) => format!("Error: {}", msg),
         };
 
-        let is_ansi_art = state.art_width.is_some() && state.file_content.is_ok();
-        let canvas_width: u16 = state
-            .art_width
-            .unwrap_or(crate::logic::file::DEFAULT_ART_WIDTH);
+        let art = state.art.filter(|_| state.file_content.is_ok());
+        let is_ansi_art = art.is_some();
+        let canvas_width: u16 = art.map_or(crate::logic::file::DEFAULT_ART_WIDTH, |a| a.width);
 
         // Art gets a box as wide as its canvas
         use ratatui::layout::{Constraint, Direction, Layout};
@@ -738,7 +737,6 @@ fn render_preview_column(
         } else if has_rendered_view && !state.raw_view {
             crate::logic::markdown::render(&content_str, inner_width)
         } else {
-            // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
             crate::logic::file::parse_ansi_to_text(&content_str, canvas_width)
         };
 
@@ -950,6 +948,10 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
+    fn art_style(width: u16) -> crate::logic::file::ArtStyle {
+        crate::logic::file::ArtStyle { width }
+    }
+
     fn popup(path: &str, content: &str, raw_view: bool) -> FileInfoPopupState {
         FileInfoPopupState {
             folder_id: "f".to_string(),
@@ -965,7 +967,7 @@ mod tests {
             exists_on_disk: true,
             is_binary: false,
             is_image: false,
-            art_width: None,
+            art: None,
             scroll_offset: 0,
             raw_view,
         }
@@ -1265,7 +1267,7 @@ mod tests {
     fn test_ansi_art_defaults_to_light_grey_on_black() {
         use crate::logic::file::{ANSI_ART_BG, ANSI_ART_FG};
         let mut state = popup("art.ans", "plain\x1b[31mred", false);
-        state.art_width = Some(80);
+        state.art = Some(art_style(80));
         let text_cell = render_cell_style(&mut state, 2, 1);
         assert_eq!(text_cell.fg, Some(ANSI_ART_FG));
         assert_eq!(text_cell.bg, Some(ANSI_ART_BG));
@@ -1276,7 +1278,7 @@ mod tests {
     #[test]
     fn test_ansi_art_border_keeps_terminal_background() {
         let mut state = popup("art.ans", "plain", false);
-        state.art_width = Some(80);
+        state.art = Some(art_style(80));
         for (x, y) in [(0, 0), (0, 2), (39, 2), (20, 5), (3, 0)] {
             let cell = render_cell_style(&mut state, x, y);
             assert_eq!(cell.bg, Some(Color::Reset), "cell ({}, {})", x, y);
@@ -1286,13 +1288,13 @@ mod tests {
     #[test]
     fn test_ansi_art_keeps_its_own_colors() {
         let mut state = popup("art.ans", "\x1b[31mred", false);
-        state.art_width = Some(80);
+        state.art = Some(art_style(80));
         let cell = render_cell_style(&mut state, 2, 1);
         assert_eq!(cell.fg, Some(crate::logic::file::cga_color(1)));
     }
 
     #[test]
-    fn test_art_width_decides_art_rendering() {
+    fn test_art_style_decides_art_rendering() {
         use crate::logic::file::ANSI_ART_BG;
         let mut named_ans = popup("art.ans", "plain", false);
         assert_ne!(
@@ -1300,7 +1302,7 @@ mod tests {
             Some(ANSI_ART_BG)
         );
         let mut nfo_text = popup("notes.txt", "plain", false);
-        nfo_text.art_width = Some(80);
+        nfo_text.art = Some(art_style(80));
         assert_eq!(render_cell_style(&mut nfo_text, 2, 1).bg, Some(ANSI_ART_BG));
     }
 
@@ -1309,7 +1311,7 @@ mod tests {
         use crate::logic::file::ANSI_ART_BG;
         let mut state = popup("art.ans", "", false);
         state.file_content = Err("File not found on disk".to_string());
-        state.art_width = Some(80);
+        state.art = Some(art_style(80));
         assert_ne!(render_cell_style(&mut state, 2, 1).bg, Some(ANSI_ART_BG));
     }
 
@@ -1364,7 +1366,7 @@ mod tests {
         let line1 = format!("A{}", "a".repeat(60));
         let line2 = format!("B{}", "b".repeat(60));
         let mut state = popup("art.nfo", &format!("{}\n{}", line1, line2), false);
-        state.art_width = Some(80);
+        state.art = Some(art_style(80));
         let rows = render_rows(&mut state, 40, 8); // inner width 36
         assert!(
             rows[1].starts_with(&format!("│ A{}", "a".repeat(35))),
@@ -1381,7 +1383,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let mut state = popup("art.nfo", &text, false);
-        state.art_width = Some(100);
+        state.art = Some(art_style(100));
         let rows = render_rows(&mut state, 40, 8); // 6 visible rows, 3 art rows
         assert!(
             !rows[1..].iter().any(|r| r.contains('↓')),
@@ -1393,7 +1395,7 @@ mod tests {
     #[test]
     fn test_art_box_uses_canvas_width() {
         let mut state = popup("wide.ans", "x", false);
-        state.art_width = Some(132);
+        state.art = Some(art_style(132));
         let rows = render_rows(&mut state, 200, 6);
         let top: Vec<char> = rows[0].chars().collect();
         let left = top.iter().position(|c| *c == '┌').unwrap();

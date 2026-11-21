@@ -48,7 +48,7 @@ impl App {
                     exists_on_disk: false,
                     is_binary: false,
                     is_image: false,
-                    art_width: None,
+                    art: None,
                     scroll_offset: 0,
                     raw_view: false,
                 });
@@ -72,7 +72,7 @@ impl App {
             exists_on_disk: false,
             is_binary: false,
             is_image,
-            art_width: None,
+            art: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -81,7 +81,7 @@ impl App {
         let file_details = self.client.get_file_info(&folder_id, &file_path).await.ok();
 
         // 2. If image, spawn background loading; otherwise read as text
-        let mut art_width: Option<u16> = None;
+        let mut art: Option<logic::file::ArtStyle> = None;
         let (file_content, exists_on_disk, is_binary, _image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
@@ -166,7 +166,7 @@ impl App {
         } else {
             // Read as text
             let read = Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
-            art_width = read.art_width;
+            art = read.art;
             (read.content, read.exists, read.is_binary, None)
         };
 
@@ -207,7 +207,7 @@ impl App {
             // The image pane has nothing to draw for a missing file and would show
             // "Loading image..." forever; the text pane shows why it is missing
             is_image: is_image && exists_on_disk,
-            art_width: art_width.filter(|_| file_content_ok),
+            art: art.filter(|_| file_content_ok),
             scroll_offset: 0,
             raw_view: false,
         });
@@ -400,7 +400,7 @@ impl App {
             content: Err(message),
             exists,
             is_binary: false,
-            art_width: None,
+            art: None,
         };
 
         // Translate container path to host path
@@ -426,7 +426,7 @@ impl App {
                 content: Ok("[Directory]".to_string()),
                 exists: true,
                 is_binary: false,
-                art_width: None,
+                art: None,
             };
         }
 
@@ -447,7 +447,7 @@ impl App {
                     content: Ok(decoded.text),
                     exists: true,
                     is_binary: decoded.is_binary,
-                    art_width: decoded.art_width,
+                    art: decoded.art,
                 }
             }
             Err(e) => failed(format!("Failed to read file: {}", e), true),
@@ -460,7 +460,7 @@ struct TextRead {
     content: Result<String, String>,
     exists: bool,
     is_binary: bool,
-    art_width: Option<u16>,
+    art: Option<logic::file::ArtStyle>,
 }
 
 /// Decode the image at `path`, rotated and flipped as its EXIF orientation says. Camera

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Open from the preview**: `o` in the file preview opens the previewed file, and the preview reloads when you return from the editor
 - **NFO and DIZ art**: `.nfo` and `.diz` files, and other CP437 art with no escape codes, preview as ANSI art (UTF-8 or XML `.nfo` files preview as text)
 - **DOS symbols in art**: ANSI art shows the DOS symbols for control bytes (☺ ☻ ♥ ↑ ▲ and the rest), which artists use for shading
+- **Amiga ASCII**: Amiga art (ISO-8859-1, with `·` `¯` `¥` and the like) previews with its own characters instead of DOS box pieces, in `.asc`, `.txt` and other files
+- **Blinking art**: ANSI art that uses blink blinks, in terminals that support it
 - **UTF-16 text**: UTF-16 text files preview as text
 
 ### 🔧 Improvements
@@ -43,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ANSI art previews show color 37 as light grey and 97 as white; they were swapped, as were backgrounds 47 and 107. Codes 39 and 49 switch back to the default colors
 - Text and ANSI art previews keep blank lines, so art lines up as drawn. Blank lines at the end are dropped
 - ANSI art that moves the cursor up, down or back draws in the right place, instead of adding extra lines between rows
+- ANSI art with codes like `ESC[?7h` no longer prints `7h`; cursor positioning, erase in line and tabs draw in the right place
 - ANSI art keeps a color across line breaks until the file changes it, instead of resetting at each new line
 - `clipboard_command` and `open_command` accept arguments, for example `xclip -selection clipboard`
 - The shipped `config.yaml.example` lists `terminal_title`, says where the file goes, and no longer suggests `vim` as an `open_command`

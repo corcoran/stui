@@ -119,7 +119,7 @@ pub struct FileInfoPopupState {
     pub exists_on_disk: bool,
     pub is_binary: bool,
     pub is_image: bool,
-    pub art_width: Option<u16>,
+    pub art: Option<crate::logic::file::ArtStyle>,
     pub scroll_offset: u16,
     pub raw_view: bool,
     // image_state moved to Runtime - ImagePreviewState is not Clone
