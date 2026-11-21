@@ -388,16 +388,17 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
   - **Markdown files**: Rendered (headings, lists, code blocks, links, tables); `r` toggles the raw source
   - **Stepping**: `Shift+↑/↓` (or `K`/`J` in vim mode) previews the previous/next file, skipping directories
+  - **Open**: `o` opens the previewed file like `o` in the file list; the preview reloads after an editor returns
   - **ANSI art files**: Auto-detects ANSI codes, CP437 encoding, 80-column wrapping, SGR colors
   - **Image files**: Terminal rendering (Kitty/iTerm2/Sixel/Halfblocks), non-blocking load
   - **Binary files**: Extracted text or metadata
 - `c`: **Context-aware action**:
   - **Folder view** (focus_level == 0): Change folder type (Send Only, Send & Receive, Receive Only) with selection menu
-  - **Breadcrumb view** (focus_level > 0): Copy file/directory path to clipboard (uses mapped host paths)
+  - **Breadcrumb view** (focus_level > 0): Copy file/directory path (mapped host path) with `clipboard_command`, or through the terminal with OSC 52 when it is unset
 - `e`: **Folder group** (folder view, Syncthing 2.1+): menu of existing groups, `No group` and `New group…` (one-line name input; a case-insensitive match reuses the existing spelling). Saves with PATCH `/rest/config/folders/<id>` `{"group": …}`. Syncthing without groups (no `group` field in folder configs) gets a warning toast naming its version instead
 - `i`: Toggle ignore state (add/remove from `.stignore`) via `PUT /rest/db/ignores`
 - `I`: Ignore AND delete locally (immediate action, no confirmation)
-- `o`: Open file/directory with configured command (e.g., `xdg-open`, `code`, `vim`)
+- `o`: Open a file with `open_command` (started in the background) or with the editor inside stui's window (`editor`, else `$VISUAL`, else `$EDITOR`; with none, `o` warns). `logic::open::open_with`: over SSH or without a desktop session text files and directories go to the editor and binary files are blocked with a warning; on the desktop, text files go to the editor when `open_text_in_editor` is set. `o` in the preview opens the previewed file the same way, and `run_app` reloads the preview after an editor returns. In folder view, `o` always opens the Syncthing web UI with `open_command`
 - `d`: Delete file/directory from disk (with confirmation prompt)
 - `r`: **Rescan folder** - Shows confirmation dialog with options:
   - `y`: Normal rescan - Trigger Syncthing scan, wait for sequence change to invalidate cache
@@ -444,7 +445,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, image preview settings, `terminal_title`
+YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, `editor`, `open_text_in_editor`, image preview settings, `terminal_title`. Command settings take arguments (`logic::command::parse_command`, shell quoting, no shell). `config.yaml.example` ships in every release; the README's config block must match it (a test checks)
 
 CLI flags: `--debug`, `--vim`, `--config <path>`
 
@@ -545,6 +546,9 @@ Deadlines: a per-path change expires 30 s after its folder's rescan returns. A r
 `logic::display::level_item_display` draws every item: the pending change first, then Syncthing's state. A directory shows Syncing while a `Restoring` or `Reverting` change is below it.
 
 Cache: reads skip pending paths. Confirmed states and ItemFinished Synced are written through.
+
+### Terminal Requests
+Only `run_app` owns the terminal, so handlers push `model.ui.terminal_requests` (`TerminalRequest::Copy` for OSC 52, `RunInTerminal` for `o` in terminal mode) and `run_terminal_requests` carries them out before the next draw. `RunInTerminal` leaves the alternate screen and raw mode, waits for the program with `block_in_place` (keys are read inline in the loop, so nothing competes for input; background services keep running), then restores the screen whatever the outcome and reports through `handlers::terminal::handle_run_result`. `o` never opens a path that is not on disk, so an editor cannot create a file inside a synced folder.
 
 ### Undelete
 Syncthing has no per-file revert, so `u` ignores the file's exact path, rescans it (Syncthing forgets the local deletion), puts the original ignore list back and rescans again (Syncthing downloads it). Rescans block while a folder syncs, so batches run in the background, one per folder at a time (`App::undelete_jobs`); presses during a batch join the next one. The temporary patterns are recorded in the cache table `pending_undelete_ignores` before they are added and removed after, and `App::remove_leftover_undelete_patterns` clears any left over at startup. Each restored file is a `Restoring` pending change (see Pending Local Changes) until `ItemFinished`, which marks it Synced and drops its local change.

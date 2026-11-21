@@ -11,7 +11,6 @@ fn build_hotkey_spans(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
-    has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
     can_undelete: bool,
@@ -112,13 +111,11 @@ fn build_hotkey_spans(
             Span::raw(":File Info  "),
         ]);
 
-        // Open - only show if open_command is configured
-        if has_open_command {
-            hotkey_spans.extend(vec![
-                Span::styled("o", Style::default().fg(Color::Yellow)),
-                Span::raw(":Open  "),
-            ]);
-        }
+        // Shown even unconfigured: pressing it explains what to set
+        hotkey_spans.extend(vec![
+            Span::styled("o", Style::default().fg(Color::Yellow)),
+            Span::raw(":Open  "),
+        ]);
 
         hotkey_spans.extend(vec![
             Span::styled("i", Style::default().fg(Color::Yellow)),
@@ -158,7 +155,6 @@ pub fn build_legend_paragraph(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
-    has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
     can_undelete: bool,
@@ -167,7 +163,6 @@ pub fn build_legend_paragraph(
         vim_mode,
         focus_level,
         can_restore,
-        has_open_command,
         search_mode,
         has_search_query,
         can_undelete,
@@ -188,7 +183,6 @@ pub fn render_legend(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
-    has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
     can_undelete: bool,
@@ -197,7 +191,6 @@ pub fn render_legend(
         vim_mode,
         focus_level,
         can_restore,
-        has_open_command,
         search_mode,
         has_search_query,
         can_undelete,
@@ -212,7 +205,6 @@ pub fn calculate_legend_height(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
-    has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
     can_undelete: bool,
@@ -223,7 +215,6 @@ pub fn calculate_legend_height(
         vim_mode,
         focus_level,
         can_restore,
-        has_open_command,
         search_mode,
         has_search_query,
         can_undelete,
@@ -268,7 +259,6 @@ mod tests {
                 true,
                 focus_level,
                 false,
-                true,
                 false,
                 false,
                 can_undelete,
@@ -288,7 +278,6 @@ mod tests {
             true,
             focus_level,
             false,
-            true,
             search_mode,
             has_search_query,
             false,
@@ -318,7 +307,6 @@ mod tests {
             false, // vim_mode
             0,     // focus_level (folder view)
             false, // can_restore
-            true,  // has_open_command
             false, // search_mode
             false, // has_search_query
             false, // can_undelete
@@ -339,7 +327,6 @@ mod tests {
             false, // vim_mode
             1,     // focus_level (breadcrumb view)
             false, // can_restore
-            true,  // has_open_command
             false, // search_mode
             false, // has_search_query
             false, // can_undelete
@@ -360,32 +347,20 @@ mod tests {
     }
 
     #[test]
-    fn test_legend_hides_open_in_breadcrumb_view_without_command() {
-        // In breadcrumb view without open_command, legend should NOT show 'o' key
+    fn test_legend_shows_open_in_breadcrumb_view_without_command() {
+        // Shown even unconfigured: pressing it explains what to set
         let spans = build_hotkey_spans(
             false, // vim_mode
             1,     // focus_level (breadcrumb view)
             false, // can_restore
-            false, // has_open_command (no command configured)
             false, // search_mode
             false, // has_search_query
             false, // can_undelete
         );
 
         let text = spans_to_text(&spans);
-
-        // Should still have other keys like 'c' for copy, 'i' for ignore, etc.
-        assert!(text.contains("c"), "Legend should still contain other keys");
-
-        // But should NOT contain "o:Open" since open_command is not configured
-        // Note: We need to be careful here - 'o' might appear in other text like "Info"
-        // So we check for the pattern "o:" which is how hotkeys are displayed
         let has_o_key = text.split_whitespace().any(|word| word.starts_with("o:"));
-        assert!(
-            !has_o_key,
-            "Legend in breadcrumb view without open_command should not show 'o' key, got: {}",
-            text
-        );
+        assert!(has_o_key, "Legend should contain 'o:Open', got: {}", text);
     }
 
     #[test]
@@ -396,7 +371,6 @@ mod tests {
             false, // vim_mode
             0,     // focus_level (folder view)
             false, // can_restore
-            false, // has_open_command (no command configured)
             false, // search_mode
             false, // has_search_query
             false, // can_undelete
@@ -415,11 +389,11 @@ mod tests {
         // Test that 'o' key behavior changes based on focus_level
 
         // Folder view (focus_level == 0)
-        let folder_spans = build_hotkey_spans(false, 0, false, true, false, false, false);
+        let folder_spans = build_hotkey_spans(false, 0, false, false, false, false);
         let folder_text = spans_to_text(&folder_spans);
 
         // Breadcrumb view (focus_level > 0)
-        let breadcrumb_spans = build_hotkey_spans(false, 1, false, true, false, false, false);
+        let breadcrumb_spans = build_hotkey_spans(false, 1, false, false, false, false);
         let breadcrumb_text = spans_to_text(&breadcrumb_spans);
 
         // Verify they're different

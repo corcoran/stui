@@ -10,6 +10,19 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 impl App {
+    /// Re-reads the previewed file, keeping the scroll position and raw view
+    pub(crate) async fn reload_preview(&mut self) {
+        let Some(popup) = self.model.ui.file_info_popup.clone() else {
+            return;
+        };
+        self.fetch_file_info_and_content(popup.folder_id, popup.file_path, popup.browse_item)
+            .await;
+        if let Some(reloaded) = self.model.ui.file_info_popup.as_mut() {
+            reloaded.scroll_offset = popup.scroll_offset;
+            reloaded.raw_view = popup.raw_view;
+        }
+    }
+
     pub(crate) async fn fetch_file_info_and_content(
         &mut self,
         folder_id: String,

@@ -134,6 +134,15 @@ pub struct App {
     path_map: HashMap<String, String>,
     open_command: Option<String>,
     clipboard_command: Option<String>,
+    /// SSH and desktop-session facts read at startup, for where `o` opens files
+    open_env: logic::open::OpenEnv,
+    /// Text files open in the editor on the desktop too
+    open_text_in_editor: bool,
+    /// Editor `o` runs inside stui's window, before argument splitting; None when no
+    /// `editor`, $VISUAL or $EDITOR is set
+    editor_command: Option<String>,
+    /// SIGINT/SIGQUIT forwarded by `app::signals::forward_quit_signals`
+    signal_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     base_url: String,
 
     last_status_update: Instant,
@@ -439,6 +448,22 @@ impl App {
             model.ui.show_setup_help = true;
         }
 
+        let open_env = logic::open::open_env(
+            |name| std::env::var(name).ok(),
+            !cfg!(windows) && !cfg!(target_os = "macos"),
+        );
+        let editor_command = logic::open::editor_command(
+            config.editor.as_deref(),
+            std::env::var("VISUAL").ok().as_deref(),
+            std::env::var("EDITOR").ok().as_deref(),
+        );
+
+        let (signal_tx, signal_rx) = tokio::sync::mpsc::unbounded_channel();
+        #[cfg(unix)]
+        app::signals::forward_quit_signals(signal_tx);
+        #[cfg(not(unix))]
+        drop(signal_tx);
+
         let mut app = App {
             model,
             client,
@@ -454,6 +479,10 @@ impl App {
             path_map: config.path_map,
             open_command: config.open_command,
             clipboard_command: config.clipboard_command,
+            open_env,
+            open_text_in_editor: config.open_text_in_editor,
+            editor_command,
+            signal_rx,
             base_url: config.base_url,
             last_status_update: Instant::now(),
             last_system_status_update: Instant::now(),
@@ -881,10 +910,15 @@ async fn main() -> Result<()> {
 }
 
 /// Carries out the terminal work handlers queued since the last frame
+/// Returns whether a program ran in the terminal
 fn run_terminal_requests<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-) -> Result<()> {
+) -> Result<bool>
+where
+    B::Error: Send + Sync + 'static,
+{
+    let mut ran_program = false;
     for request in std::mem::take(&mut app.model.ui.terminal_requests) {
         match request {
             model::TerminalRequest::Copy(text) => {
@@ -892,12 +926,31 @@ fn run_terminal_requests<B: ratatui::backend::Backend + std::io::Write>(
                 backend.write_all(logic::clipboard::osc52_sequence(&text).as_bytes())?;
                 std::io::Write::flush(backend)?;
             }
-            model::TerminalRequest::RunInTerminal { program, .. } => {
-                log_debug(&format!("RunInTerminal not handled yet: {}", program));
+            model::TerminalRequest::RunInTerminal { program, args } => {
+                disable_raw_mode()?;
+                execute!(
+                    terminal.backend_mut(),
+                    LeaveAlternateScreen,
+                    crossterm::cursor::Show
+                )?;
+                let result = tokio::task::block_in_place(|| {
+                    std::process::Command::new(&program).args(&args).status()
+                });
+                // Restored whatever the program did, including failing to start
+                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                enable_raw_mode()?;
+                terminal.clear()?;
+                log_debug(&format!(
+                    "RunInTerminal: {} {:?} -> {:?}",
+                    program, args, result
+                ));
+                app.discard_signals();
+                handlers::terminal::handle_run_result(app, &program, result);
+                ran_program = true;
             }
         }
     }
-    Ok(())
+    Ok(ran_program)
 }
 
 async fn run_app<B: ratatui::backend::Backend + std::io::Write>(
@@ -910,7 +963,13 @@ where
     let mut last_stats_update = Instant::now();
 
     loop {
-        run_terminal_requests(terminal, app)?;
+        if run_terminal_requests(terminal, app)? {
+            // The program may have edited the previewed file
+            app.reload_preview().await;
+        }
+        if app.quit_requested_by_signal() {
+            app.model.ui.should_quit = true;
+        }
 
         // Clear terminal to remove sixel graphics if needed (brief flash but necessary)
         if app.model.ui.sixel_cleanup_frames > 0 {

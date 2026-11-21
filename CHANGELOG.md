@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Local deletions**: In a Receive Only folder, a file deleted on this device shows ❌ (a trash can in Nerd Font mode) and "Deleted locally". It no longer looks like a pending download. Its preview says how to restore it
 - **Undelete one file**: In a Receive Only folder, press `u` on a file deleted on this device to download it again from your other devices. `R` still reverts the whole folder. Undeletes run in the background, so you can press `u` on several files in a row
 - **Terminal title**: The terminal or tab title follows where you are (`stui · Projects/website`, or the file while previewing) and goes back to the previous title on exit. Set `terminal_title: false` to leave the title alone
+- **Copy over SSH**: With no `clipboard_command`, `c` copies through your terminal (OSC 52), so it works locally and over SSH with no setup
+- **Open files over SSH**: Over SSH or without a desktop session, `o` opens text files and directories in your editor inside stui's window. The editor is `editor`, else `$VISUAL`, else `$EDITOR`. Quit the editor to return to stui. Binary files only open on a desktop. To edit text files inside stui on the desktop too, set `open_text_in_editor: true`
+- **Open from the preview**: `o` in the file preview opens the previewed file, and the preview reloads when you return from the editor
 
 ### 🔧 Improvements
 
@@ -31,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Previewing an image that is not on disk says why, instead of staying on "Loading image..."
 - Sorting by sync state (`s`) follows the icons: a file being restored by a revert sorts with syncing files, and a file deleted locally sorts with local changes
 - A config without `path_map` loads instead of failing with "missing field `path_map`"
+- `clipboard_command` and `open_command` accept arguments, for example `xclip -selection clipboard`
 - The shipped `config.yaml.example` lists `terminal_title`, says where the file goes, and no longer suggests `vim` as an `open_command`
 
 ### 🧪 Testing

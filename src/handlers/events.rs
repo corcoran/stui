@@ -5263,4 +5263,379 @@ mod tests {
             )]
         );
     }
+
+    // ========================================
+    // OPEN IN TERMINAL
+    // ========================================
+
+    /// SSH-session app viewing `name` inside a temp dir that holds it
+    fn ssh_session_app(tag: &str, name: &str) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stui-term-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), "x").unwrap();
+        let mut app = create_test_app();
+        app.open_env.ssh = true;
+        app.editor_command = Some("less -R".to_string());
+        view_folder_root(&mut app, "docs", vec![file_item(name)]);
+        app.model.navigation.breadcrumb_trail[0].translated_base_path = dir.display().to_string();
+        (app, dir)
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_queues_editor_with_path() {
+        let (mut app, dir) = ssh_session_app("queue", "a.txt");
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::RunInTerminal {
+                program: "less".to_string(),
+                args: vec!["-R".to_string(), dir.join("a.txt").display().to_string()],
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_path_with_spaces_is_one_argument() {
+        let (mut app, dir) = ssh_session_app("spaces", "my notes.txt");
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        let Some(crate::model::TerminalRequest::RunInTerminal { args, .. }) =
+            app.model.ui.terminal_requests.first()
+        else {
+            panic!("nothing queued: {:?}", app.model.ui.terminal_requests);
+        };
+        assert_eq!(
+            args.last(),
+            Some(&dir.join("my notes.txt").display().to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_skips_missing_file() {
+        let (mut app, dir) = ssh_session_app("missing", "a.txt");
+        std::fs::remove_file(dir.join("a.txt")).unwrap();
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_without_editor_warns() {
+        let (mut app, dir) = ssh_session_app("noeditor", "a.txt");
+        app.editor_command = None;
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Set $EDITOR or editor in your config to open files in stui".to_string(),
+                crate::model::ToastKind::Warning
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_web_ui_over_ssh_still_uses_open_command() {
+        let dir = command_stub("webui");
+        let mut app = create_test_app();
+        app.open_env.ssh = true;
+        app.open_command = Some(dir.join("stub").display().to_string());
+        app.model.navigation.focus_level = 0;
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert_eq!(
+            toast_of(&app),
+            (
+                format!("Opening Syncthing: {}", app.base_url),
+                crate::model::ToastKind::Info
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[test]
+    fn test_run_success_no_toast() {
+        let mut app = create_test_app();
+        crate::handlers::terminal::handle_run_result(&mut app, "less", Ok(exit_status(0)));
+        assert!(app.model.ui.toast.is_none());
+    }
+
+    #[test]
+    fn test_run_nonzero_exit_toast() {
+        let mut app = create_test_app();
+        crate::handlers::terminal::handle_run_result(&mut app, "less", Ok(exit_status(1)));
+        assert_eq!(
+            toast_of(&app),
+            (
+                "less exited with status 1".to_string(),
+                crate::model::ToastKind::Error
+            )
+        );
+    }
+
+    #[test]
+    fn test_run_spawn_error_toast() {
+        let mut app = create_test_app();
+        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory");
+        crate::handlers::terminal::handle_run_result(&mut app, "hx", Err(error));
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Couldn't run 'hx': No such file or directory".to_string(),
+                crate::model::ToastKind::Error
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_legend_shows_open_over_ssh_without_open_command() {
+        let (mut app, dir) = ssh_session_app("legend", "a.txt");
+        assert!(app.open_command.is_none());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let screen: String = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        assert!(screen.contains("o:Open"), "{}", screen);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_clipboard_command_that_stays_running_does_not_block() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("stui-cmd-slow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("stub");
+        std::fs::write(&stub, "#!/bin/sh\ncat > /dev/null\nsleep 10\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let started = std::time::Instant::now();
+        let outcome =
+            crate::app::file_ops::run_clipboard_command(&stub.display().to_string(), "text");
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+        assert_eq!(
+            outcome,
+            crate::app::file_ops::CopyOutcome::Copied("text".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Desktop app with `open_text_in_editor` on, an editor, and an `open_command` stub,
+    /// viewing `name` (written with `content`) in the stub's temp dir
+    fn text_in_editor_app(tag: &str, name: &str, content: &[u8]) -> (App, std::path::PathBuf) {
+        let dir = command_stub(tag);
+        std::fs::write(dir.join(name), content).unwrap();
+        let mut app = create_test_app();
+        app.open_text_in_editor = true;
+        app.editor_command = Some("nvim".to_string());
+        app.open_command = Some(dir.join("stub").display().to_string());
+        view_folder_root(&mut app, "docs", vec![file_item(name)]);
+        app.model.navigation.breadcrumb_trail[0].translated_base_path = dir.display().to_string();
+        (app, dir)
+    }
+
+    #[tokio::test]
+    async fn test_open_text_in_editor_on_desktop_runs_editor_for_text() {
+        let (mut app, dir) = text_in_editor_app("textedit", "notes.txt", b"hello\n");
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::RunInTerminal {
+                program: "nvim".to_string(),
+                args: vec![dir.join("notes.txt").display().to_string()],
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_text_in_editor_on_desktop_sends_binary_to_open_command() {
+        let (mut app, dir) = text_in_editor_app("binopen", "photo.jpg", b"\xff\xd8\x00\x10");
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert_eq!(
+            toast_of(&app),
+            (
+                format!("Opened: {}", dir.join("photo.jpg").display()),
+                crate::model::ToastKind::Success
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_desktop_without_open_text_in_editor_sends_text_to_open_command() {
+        let (mut app, dir) = text_in_editor_app("textdesk", "notes.txt", b"hello\n");
+        app.open_text_in_editor = false;
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert_eq!(
+            toast_of(&app),
+            (
+                format!("Opened: {}", dir.join("notes.txt").display()),
+                crate::model::ToastKind::Success
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_blocks_binary_files() {
+        let (mut app, dir) = ssh_session_app("sshbin", "photo.jpg");
+        std::fs::write(dir.join("photo.jpg"), b"\xff\xd8\x00\x10").unwrap();
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Binary files only open on a desktop".to_string(),
+                crate::model::ToastKind::Warning
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_over_ssh_opens_directories_in_editor() {
+        let (mut app, dir) = ssh_session_app("sshdir", "placeholder");
+        std::fs::create_dir(dir.join("notes")).unwrap();
+        app.model.navigation.breadcrumb_trail[0].items = vec![dir_item("notes")];
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::RunInTerminal {
+                program: "less".to_string(),
+                args: vec!["-R".to_string(), dir.join("notes").display().to_string()],
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ========================================
+    // OPEN FROM PREVIEW
+    // ========================================
+
+    /// App previewing `name` (written with `content`) in folder "docs", whose path is a
+    /// fresh temp dir
+    fn previewing_app(tag: &str, name: &str, content: &[u8]) -> (App, std::path::PathBuf) {
+        let dir = command_stub(tag);
+        std::fs::write(dir.join(name), content).unwrap();
+        let mut app = create_test_app();
+        let folder: crate::api::Folder = serde_json::from_value(serde_json::json!({
+            "id": "docs", "label": "Docs", "path": dir.display().to_string(),
+            "paused": false, "type": "sendreceive"
+        }))
+        .unwrap();
+        app.model.set_folders(vec![folder]);
+        view_folder_root(&mut app, "docs", vec![file_item(name)]);
+        app.model.ui.file_info_popup = Some(crate::model::FileInfoPopupState {
+            folder_id: "docs".to_string(),
+            file_path: name.to_string(),
+            browse_item: file_item(name),
+            file_details: None,
+            file_content: Ok(String::from_utf8_lossy(content).to_string()),
+            exists_on_disk: true,
+            is_binary: false,
+            is_image: false,
+            scroll_offset: 0,
+            raw_view: false,
+        });
+        (app, dir)
+    }
+
+    #[tokio::test]
+    async fn test_o_in_preview_opens_previewed_file_in_editor() {
+        let (mut app, dir) = previewing_app("prevedit", "notes.txt", b"hello\n");
+        app.open_env.ssh = true;
+        app.editor_command = Some("nvim".to_string());
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::RunInTerminal {
+                program: "nvim".to_string(),
+                args: vec![dir.join("notes.txt").display().to_string()],
+            }]
+        );
+        assert!(app.model.ui.file_info_popup.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_o_in_preview_on_desktop_runs_open_command_and_keeps_preview() {
+        let (mut app, dir) = previewing_app("prevdesk", "photo.jpg", b"\xff\xd8\x00\x10");
+        app.open_command = Some(dir.join("stub").display().to_string());
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        assert!(app.model.ui.file_info_popup.is_some());
+        assert_eq!(
+            toast_of(&app),
+            (
+                format!("Opened: {}", dir.join("photo.jpg").display()),
+                crate::model::ToastKind::Success
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_o_in_preview_skips_missing_file() {
+        let (mut app, dir) = previewing_app("prevmiss", "notes.txt", b"hello\n");
+        std::fs::remove_file(dir.join("notes.txt")).unwrap();
+        app.open_env.ssh = true;
+        app.editor_command = Some("nvim".to_string());
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_preview_reloads_from_disk() {
+        let (mut app, dir) = previewing_app("prevreload", "notes.txt", b"before\n");
+        std::fs::write(dir.join("notes.txt"), b"after\n").unwrap();
+
+        app.reload_preview().await;
+
+        let popup = app.model.ui.file_info_popup.as_ref().unwrap();
+        assert_eq!(popup.file_content.as_deref(), Ok("after\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

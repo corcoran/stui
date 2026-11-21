@@ -815,6 +815,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     }
 
     // Handle file info popup
+    if app.model.ui.file_info_popup.is_some() && key.code == KeyCode::Char('o') {
+        let outcome = app.open_previewed_file();
+        toast_open_outcome(app, outcome, |path| format!("Opened: {}", path));
+        return Ok(());
+    }
     if let Some(popup_state) = &mut app.model.ui.file_info_popup {
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Left | KeyCode::Backspace => {
@@ -1143,12 +1148,20 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let _ = app.ignore_and_delete().await;
         }
         KeyCode::Char('o') if app.model.navigation.focus_level == 0 => {
-            match app.open_syncthing_web_ui() {
-                crate::app::file_ops::OpenOutcome::Opened(url) => app
+            use crate::app::file_ops::WebUiOutcome;
+            match app.open_web_ui() {
+                WebUiOutcome::Opened(url) => app
                     .model
                     .ui
                     .show_info(format!("Opening Syncthing: {}", url)),
-                outcome => toast_open_outcome(app, outcome, |url| url.to_string()),
+                WebUiOutcome::Failed { command, .. } => app
+                    .model
+                    .ui
+                    .show_error(format!("Failed to open with '{}'", command)),
+                WebUiOutcome::Invalid(message) => app.model.ui.show_error(message),
+                WebUiOutcome::NotConfigured => {
+                    app.model.ui.show_warning("open_command not configured")
+                }
             }
         }
         KeyCode::Char('o') if app.model.navigation.focus_level > 0 => {
@@ -1466,6 +1479,14 @@ fn toast_open_outcome(
             .show_error(format!("Failed to open with '{}'", command)),
         OpenOutcome::Invalid(message) => app.model.ui.show_error(message),
         OpenOutcome::NotConfigured => app.model.ui.show_warning("open_command not configured"),
-        OpenOutcome::NothingToOpen => {}
+        OpenOutcome::BinaryNeedsDesktop => app
+            .model
+            .ui
+            .show_warning("Binary files only open on a desktop"),
+        OpenOutcome::NoEditor => app
+            .model
+            .ui
+            .show_warning("Set $EDITOR or editor in your config to open files in stui"),
+        OpenOutcome::NothingToOpen | OpenOutcome::QueuedInTerminal => {}
     }
 }

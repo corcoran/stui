@@ -29,7 +29,6 @@ pub fn calculate_layout(
     vim_mode: bool,
     focus_level: usize,
     can_restore: bool,
-    has_open_command: bool,
     status_height: u16,
     search_visible: bool,
     can_undelete: bool,
@@ -41,7 +40,6 @@ pub fn calculate_layout(
         vim_mode,
         focus_level,
         can_restore,
-        has_open_command,
         search_visible, // search_mode (approximation for layout)
         search_visible, // has_search_query (approximation for layout)
         can_undelete,

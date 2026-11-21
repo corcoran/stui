@@ -50,6 +50,8 @@ pub(crate) fn create_test_app_at(
         image_preview_enabled: false,
         image_protocol: "auto".to_string(),
         terminal_title: false,
+        editor: None,
+        open_text_in_editor: false,
     };
 
     let client = SyncthingClient::new(config.base_url.clone(), config.api_key.clone());
@@ -76,6 +78,14 @@ pub(crate) fn create_test_app_at(
         path_map: config.path_map,
         open_command: config.open_command,
         clipboard_command: config.clipboard_command,
+        open_env: crate::logic::open::OpenEnv {
+            ssh: false,
+            desktop_session: true,
+            display_server_os: true,
+        },
+        open_text_in_editor: false,
+        editor_command: None,
+        signal_rx: tokio::sync::mpsc::unbounded_channel().1,
         base_url: config.base_url,
         last_status_update: std::time::Instant::now(),
         last_system_status_update: std::time::Instant::now(),

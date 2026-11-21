@@ -12,6 +12,19 @@ pub fn parse_command(command: &str) -> Result<Option<(String, Vec<String>)>, Str
     Ok(Some((program, words)))
 }
 
+/// `parse_command`, except that a command naming an existing program (per `is_program`)
+/// is used whole
+pub fn parse_command_with(
+    command: &str,
+    is_program: impl Fn(&str) -> bool,
+) -> Result<Option<(String, Vec<String>)>, String> {
+    let trimmed = command.trim();
+    if !trimmed.is_empty() && is_program(trimmed) {
+        return Ok(Some((trimmed.to_string(), Vec::new())));
+    }
+    parse_command(command)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +62,18 @@ mod tests {
     #[test]
     fn test_parse_empty() {
         assert_eq!(parse_command("  "), Ok(None));
+    }
+
+    #[test]
+    fn test_parse_existing_program_path_is_used_whole() {
+        let is_program = |p: &str| p == r"C:\Program Files\Notepad++\notepad++.exe";
+        assert_eq!(
+            parse_command_with(r"C:\Program Files\Notepad++\notepad++.exe", is_program),
+            Ok(Some((
+                r"C:\Program Files\Notepad++\notepad++.exe".to_string(),
+                vec![]
+            )))
+        );
     }
 
     #[test]

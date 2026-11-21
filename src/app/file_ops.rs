@@ -264,19 +264,56 @@ impl App {
     }
 
     pub(crate) fn open_selected_item(&mut self) -> OpenOutcome {
+        match self.selected_host_path() {
+            Some(host_path) => self.open_host_path(host_path),
+            None => OpenOutcome::NothingToOpen,
+        }
+    }
+
+    /// Opens the file shown in the preview popup
+    pub(crate) fn open_previewed_file(&mut self) -> OpenOutcome {
+        match self.previewed_host_path() {
+            Some(host_path) => self.open_host_path(host_path),
+            None => OpenOutcome::NothingToOpen,
+        }
+    }
+
+    /// Host path of the previewed file: its folder's path plus the file, mapped through
+    /// `path_map` like preview reads
+    fn previewed_host_path(&self) -> Option<String> {
+        let popup = self.model.ui.file_info_popup.as_ref()?;
+        let folder = self.model.syncthing.get_folder(&popup.folder_id)?;
+        let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), popup.file_path);
+        Some(
+            self.path_map
+                .iter()
+                .find_map(|(container, host)| {
+                    container_path
+                        .strip_prefix(container.as_str())
+                        .map(|rest| format!("{}{}", host, rest))
+                })
+                .unwrap_or(container_path),
+        )
+    }
+
+    fn open_host_path(&mut self, host_path: String) -> OpenOutcome {
+        // Also keeps an editor from creating a missing file inside the synced folder
+        if !std::path::Path::new(&host_path).exists() {
+            log_debug(&format!("open: Path does not exist: {}", host_path));
+            return OpenOutcome::NothingToOpen;
+        }
+        match logic::open::open_with(
+            &self.open_env,
+            self.open_text_in_editor,
+            file_kind(&host_path),
+        ) {
+            logic::open::OpenWith::Editor => return self.queue_in_editor(host_path),
+            logic::open::OpenWith::Blocked => return OpenOutcome::BinaryNeedsDesktop,
+            logic::open::OpenWith::Desktop => {}
+        }
         let Some(open_cmd) = self.open_command.clone() else {
             return OpenOutcome::NotConfigured;
         };
-        let Some(host_path) = self.selected_host_path() else {
-            return OpenOutcome::NothingToOpen;
-        };
-        if !std::path::Path::new(&host_path).exists() {
-            log_debug(&format!(
-                "open_selected_item: Path does not exist: {}",
-                host_path
-            ));
-            return OpenOutcome::NothingToOpen;
-        }
         match spawn_detached(&open_cmd, "open_command", &host_path) {
             Ok(()) => {
                 log_debug(&format!("open_command: spawned {} {}", open_cmd, host_path));
@@ -286,14 +323,39 @@ impl App {
         }
     }
 
-    pub(crate) fn open_syncthing_web_ui(&mut self) -> OpenOutcome {
-        let Some(open_cmd) = self.open_command.clone() else {
-            return OpenOutcome::NotConfigured;
+    /// Queues the editor with `host_path` as its last argument
+    fn queue_in_editor(&mut self, host_path: String) -> OpenOutcome {
+        let Some(command) = self.editor_command.clone() else {
+            return OpenOutcome::NoEditor;
         };
+        let (program, mut args) =
+            match logic::command::parse_command_with(&command, is_program_file) {
+                Ok(Some(parsed)) => parsed,
+                Ok(None) => {
+                    return OpenOutcome::Invalid("Invalid editor: empty command".to_string());
+                }
+                Err(e) => {
+                    return OpenOutcome::Invalid(format!("Invalid editor: {}", e));
+                }
+            };
+        args.push(host_path);
+        self.model
+            .ui
+            .terminal_requests
+            .push(TerminalRequest::RunInTerminal { program, args });
+        OpenOutcome::QueuedInTerminal
+    }
+
+    pub(crate) fn open_web_ui(&mut self) -> WebUiOutcome {
         let url = self.base_url.clone();
+        let Some(open_cmd) = self.open_command.clone() else {
+            return WebUiOutcome::NotConfigured;
+        };
         match spawn_detached(&open_cmd, "open_command", &url) {
-            Ok(()) => OpenOutcome::Opened(url),
-            Err(outcome) => outcome,
+            Ok(()) => WebUiOutcome::Opened(url),
+            Err(OpenOutcome::Failed { command, error }) => WebUiOutcome::Failed { command, error },
+            Err(OpenOutcome::Invalid(message)) => WebUiOutcome::Invalid(message),
+            Err(_) => WebUiOutcome::NotConfigured,
         }
     }
 
@@ -376,12 +438,35 @@ pub(crate) enum OpenOutcome {
     Invalid(String),
     NotConfigured,
     NothingToOpen,
+    /// Queued for the main loop to run inside the terminal
+    QueuedInTerminal,
+    /// The editor is needed, but no `editor`, $VISUAL or $EDITOR is set
+    NoEditor,
+    /// A binary file, and no desktop to open it on
+    BinaryNeedsDesktop,
 }
 
-/// Runs a configured clipboard command with `text` on stdin and waits for it to exit
+/// Result of `o` in the folder list; the keyboard handler turns it into a toast
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WebUiOutcome {
+    Opened(String),
+    Failed {
+        command: String,
+        error: String,
+    },
+    /// Full message: `Invalid <setting>: <error>`
+    Invalid(String),
+    NotConfigured,
+}
+
+/// How long `c` waits for a clipboard command to report success or failure
+const CLIPBOARD_COMMAND_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs a configured clipboard command with `text` on stdin and waits up to
+/// `CLIPBOARD_COMMAND_WAIT` for it to exit
 pub(crate) fn run_clipboard_command(command: &str, text: &str) -> CopyOutcome {
     use std::io::Write;
-    let (program, args) = match logic::command::parse_command(command) {
+    let (program, args) = match logic::command::parse_command_with(command, is_program_file) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             return CopyOutcome::Invalid("Invalid clipboard_command: empty command".to_string());
@@ -407,16 +492,56 @@ pub(crate) fn run_clipboard_command(command: &str, text: &str) -> CopyOutcome {
     {
         return failed(e.to_string());
     }
-    match child.wait() {
-        Ok(status) if status.success() => CopyOutcome::Copied(text.to_string()),
-        Ok(status) => failed(format!("exited with {}", status)),
-        Err(e) => failed(e.to_string()),
+    // Most tools exit or fork once the text is set; one still running after the wait has
+    // its text and keeps running in the background, so stui doesn't freeze on it
+    let deadline = std::time::Instant::now() + CLIPBOARD_COMMAND_WAIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return CopyOutcome::Copied(text.to_string()),
+            Ok(Some(status)) => return failed(format!("exited with {}", status)),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => return CopyOutcome::Copied(text.to_string()),
+            Err(e) => return failed(e.to_string()),
+        }
     }
+}
+
+/// Kind of the file at `path`: a directory, text (a regular file that is not an image and
+/// has no NUL byte in its first 8 KB, the check preview uses), or binary
+fn file_kind(path: &str) -> logic::open::FileKind {
+    use logic::open::FileKind;
+    use std::io::Read;
+    if std::path::Path::new(path).is_dir() {
+        return FileKind::Directory;
+    }
+    if logic::file::is_image_file(path) {
+        return FileKind::Binary;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return FileKind::Binary;
+    };
+    let mut head = Vec::with_capacity(8192);
+    if file.take(8192).read_to_end(&mut head).is_err() {
+        return FileKind::Binary;
+    }
+    if logic::file::is_binary_content(&head) {
+        FileKind::Binary
+    } else {
+        FileKind::Text
+    }
+}
+
+/// Whether a configured command string names an existing file, so it is used whole
+/// (Windows paths keep their backslashes)
+fn is_program_file(command: &str) -> bool {
+    std::path::Path::new(command).is_file()
 }
 
 /// Starts a configured opener with `target` as its last argument, without waiting
 fn spawn_detached(command: &str, setting: &str, target: &str) -> Result<(), OpenOutcome> {
-    let (program, args) = match logic::command::parse_command(command) {
+    let (program, args) = match logic::command::parse_command_with(command, is_program_file) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => return Err(OpenOutcome::NotConfigured),
         Err(e) => return Err(OpenOutcome::Invalid(format!("Invalid {}: {}", setting, e))),

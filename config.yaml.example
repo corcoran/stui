@@ -11,13 +11,28 @@ base_url: "http://127.0.0.1:8384"
 # Icon display mode: "nerdfont" or "emoji"
 icon_mode: "nerdfont"
 
-# Command that opens a file or directory in a desktop app (no default)
+# Copying with `c`. If it is not set, stui copies through your terminal (OSC 52).
+# This works locally and over SSH in most modern terminals. To use a clipboard tool
+# instead, set a command that reads text on stdin.
+# Wayland: "wl-copy", X11: "xclip -selection clipboard", macOS: "pbcopy", Windows: "clip.exe"
+# clipboard_command: "wl-copy"
+
+# Opening files with `o` on the desktop: a command that opens a file in a desktop app.
+# stui starts it in the background (no default).
 # Linux: "xdg-open", macOS: "open", Windows: "explorer"
+# On window managers like niri, sway or Hyprland, xdg-open runs terminal apps such as
+# nvim inside the terminal it was called from, which stui can't provide. Use "gio open"
+# there, which opens them in a new terminal window.
 open_command: "xdg-open"
 
-# Command that receives text on stdin and copies it to the clipboard (no default)
-# Wayland: "wl-copy", X11: "xclip" or "xsel", macOS: "pbcopy", Windows: "clip.exe"
-clipboard_command: "wl-copy"
+# Editor that opens files inside stui's window. Quit it to return to stui.
+# Over SSH or without a desktop session, stui uses it for text files and directories.
+# Binary files only open on a desktop. With open_text_in_editor: true, stui also uses it
+# for text files on the desktop. Default: $VISUAL, then $EDITOR.
+# editor: "nvim"
+
+# Open text files in the editor on the desktop too (default: false)
+open_text_in_editor: false
 
 # Maps paths inside the Syncthing container to paths on this machine (default: none).
 # Needed when Syncthing runs in Docker, so delete, open, copy and preview find the files.

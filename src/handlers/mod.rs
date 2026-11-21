@@ -11,6 +11,7 @@
 pub mod api;
 pub mod events;
 pub mod keyboard;
+pub mod terminal;
 pub mod undelete;
 
 // Re-export for convenience

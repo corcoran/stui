@@ -23,6 +23,12 @@ pub struct Config {
     /// Show the current folder, path or previewed file in the terminal title
     #[serde(default = "default_terminal_title")]
     pub terminal_title: bool,
+    /// Editor `o` runs inside stui's window; None falls back to $VISUAL, then $EDITOR
+    #[serde(default)]
+    pub editor: Option<String>,
+    /// Text files open in the editor on the desktop too, not only over SSH
+    #[serde(default)]
+    pub open_text_in_editor: bool,
 }
 
 fn default_icon_mode() -> String {
@@ -80,5 +86,23 @@ mod tests {
             include_str!("../README.md").contains(example),
             "README's config block differs from config.yaml.example"
         );
+    }
+
+    #[test]
+    fn test_editor_settings_default_off() {
+        let config: Config = serde_yaml::from_str(MINIMAL).unwrap();
+        assert_eq!(config.editor, None);
+        assert!(!config.open_text_in_editor);
+    }
+
+    #[test]
+    fn test_editor_settings_parse() {
+        let yaml = format!(
+            "{}editor: \"nvim -R\"\nopen_text_in_editor: true\n",
+            MINIMAL
+        );
+        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(config.editor.as_deref(), Some("nvim -R"));
+        assert!(config.open_text_in_editor);
     }
 }

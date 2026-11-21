@@ -581,9 +581,9 @@ fn render_metadata_column(
                 .border_style(Style::default().fg(Color::Cyan))
                 .title("Metadata")
                 .title_bottom(if vim_mode {
-                    "J/K: next/prev file"
+                    "J/K: next/prev · o: open"
                 } else {
-                    "Shift+↑↓: next/prev file"
+                    "Shift+↑↓: next/prev · o: open"
                 }),
         )
         .style(Style::default().fg(Color::White))
@@ -1057,20 +1057,20 @@ mod tests {
     fn test_file_info_names_shift_arrows_without_vim_mode() {
         let mut text = popup("notes.txt", "text", false);
         let rows = render_popup_rows(&mut text, false, 120, 30);
-        assert!(shows(&rows, "Shift+↑↓: next/prev file"), "{:?}", rows);
+        assert!(shows(&rows, "Shift+↑↓: next/prev · o: open"), "{:?}", rows);
         assert!(!shows(&rows, "J/K"));
 
         let mut image = popup("cat.jpg", "", false);
         image.is_image = true;
         let rows = render_popup_rows(&mut image, false, 120, 30);
-        assert!(shows(&rows, "Shift+↑↓: next/prev file"), "{:?}", rows);
+        assert!(shows(&rows, "Shift+↑↓: next/prev · o: open"), "{:?}", rows);
     }
 
     #[test]
     fn test_file_info_names_jk_in_vim_mode() {
         let mut text = popup("notes.txt", "text", false);
         let rows = render_popup_rows(&mut text, true, 120, 30);
-        assert!(shows(&rows, "J/K: next/prev file"), "{:?}", rows);
+        assert!(shows(&rows, "J/K: next/prev · o: open"), "{:?}", rows);
     }
 
     // ========================================
@@ -1239,5 +1239,43 @@ mod tests {
             "{:#?}",
             rows
         );
+    }
+
+    #[test]
+    fn test_preview_hint_mentions_open() {
+        let mut state = popup("notes.txt", "text", false);
+        let icons = IconRenderer::new(
+            crate::ui::icons::IconMode::Emoji,
+            crate::ui::icons::IconTheme::default(),
+        );
+        for vim_mode in [false, true] {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            let mut images = std::collections::HashMap::new();
+            terminal
+                .draw(|f| {
+                    render_file_info(
+                        f,
+                        &mut state,
+                        &[],
+                        None,
+                        &icons,
+                        None,
+                        &mut images,
+                        vim_mode,
+                    )
+                })
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let screen: String = (0..buf.area.height)
+                .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+                .map(|(x, y)| buf[(x, y)].symbol().to_string())
+                .collect();
+            assert!(
+                screen.contains("o: open"),
+                "vim_mode {}: {}",
+                vim_mode,
+                screen
+            );
+        }
     }
 }
