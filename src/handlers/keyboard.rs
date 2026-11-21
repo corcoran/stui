@@ -78,38 +78,30 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 // Copy config path to clipboard
-                if let Some(clipboard_cmd) = &app.clipboard_command {
-                    let path = app.model.ui.config_path.clone();
-                    // Execute clipboard command via stdin
-                    use std::io::Write;
-                    use std::process::{Command, Stdio};
-
-                    let result = Command::new("sh")
-                        .arg("-c")
-                        .arg(clipboard_cmd)
-                        .stdin(Stdio::piped())
-                        .spawn()
-                        .and_then(|mut child| {
-                            if let Some(mut stdin) = child.stdin.take() {
-                                stdin.write_all(path.as_bytes())?;
-                            }
-                            child.wait()
-                        });
-
-                    match result {
-                        Ok(_) => {
-                            app.model
-                                .ui
-                                .show_success("Config path copied to clipboard".to_string());
-                        }
-                        Err(e) => {
-                            app.model.ui.show_error(format!("Failed to copy: {}", e));
-                        }
-                    }
-                } else {
-                    app.model
+                let outcome = match app.clipboard_command.clone() {
+                    Some(command) => crate::app::file_ops::run_clipboard_command(
+                        &command,
+                        &app.model.ui.config_path,
+                    ),
+                    None => crate::app::file_ops::CopyOutcome::NotConfigured,
+                };
+                match outcome {
+                    crate::app::file_ops::CopyOutcome::Copied(_) => app
+                        .model
                         .ui
-                        .show_warning("No clipboard command configured".to_string());
+                        .show_success("Config path copied to clipboard".to_string()),
+                    crate::app::file_ops::CopyOutcome::Failed { error, .. } => app
+                        .model
+                        .ui
+                        .show_error(format!("Failed to copy: {}", error)),
+                    crate::app::file_ops::CopyOutcome::Invalid(message) => {
+                        app.model.ui.show_error(message)
+                    }
+                    crate::app::file_ops::CopyOutcome::NotConfigured
+                    | crate::app::file_ops::CopyOutcome::NothingToCopy => app
+                        .model
+                        .ui
+                        .show_warning("No clipboard command configured".to_string()),
                 }
                 return Ok(());
             }
@@ -1147,12 +1139,17 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let _ = app.ignore_and_delete().await;
         }
         KeyCode::Char('o') if app.model.navigation.focus_level == 0 => {
-            // Open Syncthing web UI in browser
-            let _ = app.open_syncthing_web_ui();
+            match app.open_syncthing_web_ui() {
+                crate::app::file_ops::OpenOutcome::Opened(url) => app
+                    .model
+                    .ui
+                    .show_info(format!("Opening Syncthing: {}", url)),
+                outcome => toast_open_outcome(app, outcome, |url| url.to_string()),
+            }
         }
         KeyCode::Char('o') if app.model.navigation.focus_level > 0 => {
-            // Open file/directory with configured command
-            let _ = app.open_selected_item();
+            let outcome = app.open_selected_item();
+            toast_open_outcome(app, outcome, |path| format!("Opened: {}", path));
         }
         KeyCode::Char('c') if app.model.navigation.focus_level == 0 => {
             // Change folder type (only in folder view)
@@ -1207,8 +1204,8 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Char('c') if app.model.navigation.focus_level > 0 => {
-            // Copy file/directory path (breadcrumbs only)
-            let _ = app.copy_to_clipboard();
+            let outcome = app.copy_to_clipboard();
+            toast_copy_outcome(app, outcome);
         }
         KeyCode::Char('f') if app.model.navigation.focus_level > 0 => {
             // Toggle out-of-sync filter (only in breadcrumb view)
@@ -1427,4 +1424,44 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Toast for the result of `c`
+fn toast_copy_outcome(app: &mut App, outcome: crate::app::file_ops::CopyOutcome) {
+    use crate::app::file_ops::CopyOutcome;
+    match outcome {
+        CopyOutcome::Copied(text) => app
+            .model
+            .ui
+            .show_success(format!("Copied to clipboard: {}", text)),
+        CopyOutcome::Failed { command, .. } => app
+            .model
+            .ui
+            .show_error(format!("Failed to copy with '{}'", command)),
+        CopyOutcome::Invalid(message) => app.model.ui.show_error(message),
+        CopyOutcome::NotConfigured => app
+            .model
+            .ui
+            .show_warning("clipboard_command not configured"),
+        CopyOutcome::NothingToCopy => {}
+    }
+}
+
+/// Toast for the result of `o`; `opened` words the success message
+fn toast_open_outcome(
+    app: &mut App,
+    outcome: crate::app::file_ops::OpenOutcome,
+    opened: impl Fn(&str) -> String,
+) {
+    use crate::app::file_ops::OpenOutcome;
+    match outcome {
+        OpenOutcome::Opened(target) => app.model.ui.show_success(opened(&target)),
+        OpenOutcome::Failed { command, .. } => app
+            .model
+            .ui
+            .show_error(format!("Failed to open with '{}'", command)),
+        OpenOutcome::Invalid(message) => app.model.ui.show_error(message),
+        OpenOutcome::NotConfigured => app.model.ui.show_warning("open_command not configured"),
+        OpenOutcome::NothingToOpen => {}
+    }
 }

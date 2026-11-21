@@ -5119,4 +5119,97 @@ mod tests {
             Some(crate::logic::display::ItemDisplay::State(SyncState::Synced))
         );
     }
+
+    // ========================================
+    // COMMANDS WITH ARGUMENTS
+    // ========================================
+
+    /// Temp dir holding an executable `stub` that writes its arguments, one per line,
+    /// then its stdin to `out`
+    fn command_stub(tag: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("stui-cmd-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("stub");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{out}'\ncat >> '{out}'\n",
+                out = dir.join("out").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    fn stub_output(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("out")).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn test_clipboard_command_with_arguments_receives_them() {
+        let dir = command_stub("copy");
+        let mut app = create_test_app();
+        app.clipboard_command = Some(format!(
+            "{} -selection clipboard",
+            dir.join("stub").display()
+        ));
+        view_folder_root(&mut app, "docs", vec![file_item("a.txt")]);
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert_eq!(stub_output(&dir), "-selection\nclipboard\n/data/docs/a.txt");
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Copied to clipboard: /data/docs/a.txt".to_string(),
+                crate::model::ToastKind::Success
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_setup_help_copy_uses_clipboard_command_arguments() {
+        let dir = command_stub("setup");
+        let mut app = create_test_app();
+        app.clipboard_command = Some(format!("{} --primary", dir.join("stub").display()));
+        app.model.ui.show_setup_help = true;
+        app.model.ui.config_path = "/home/u/.config/stui/config.yaml".to_string();
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert_eq!(
+            stub_output(&dir),
+            "--primary\n/home/u/.config/stui/config.yaml"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_open_command_with_arguments_receives_path_last() {
+        let dir = command_stub("open");
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let mut app = create_test_app();
+        app.open_command = Some(format!("{} --new-window", dir.join("stub").display()));
+        view_folder_root(&mut app, "docs", vec![file_item("a.txt")]);
+        app.model.navigation.breadcrumb_trail[0].translated_base_path = dir.display().to_string();
+
+        press(&mut app, crossterm::event::KeyCode::Char('o')).await;
+
+        // The opener runs detached; give it a moment to write
+        for _ in 0..50 {
+            if stub_output(&dir).contains("a.txt") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            stub_output(&dir),
+            format!("--new-window\n{}\n", dir.join("a.txt").display())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

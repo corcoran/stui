@@ -250,243 +250,168 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn open_selected_item(&mut self) -> Result<()> {
-        // Check if open_command is configured
-        let Some(ref open_cmd) = self.open_command else {
-            self.model.ui.show_warning("open_command not configured");
-            return Ok(());
-        };
-
-        // Only works when focused on a breadcrumb level (not folder list)
-        if self.model.navigation.focus_level == 0
-            || self.model.navigation.breadcrumb_trail.is_empty()
-        {
-            return Ok(());
-        }
-
-        let level_idx = self.model.navigation.focus_level - 1;
-        if level_idx >= self.model.navigation.breadcrumb_trail.len() {
-            return Ok(());
-        }
-
-        let level = &self.model.navigation.breadcrumb_trail[level_idx];
-
-        // Get selected item (respects filtered view if active)
-        let selected_idx = match level.selected_index {
-            Some(idx) => idx,
-            None => {
-                return Ok(());
-            }
-        };
-
-        let item = match level.display_items().get(selected_idx) {
-            Some(item) => item,
-            None => {
-                return Ok(());
-            }
-        };
-
-        // Build the full host path
-        // Note: translated_base_path already includes the full path to this directory level
-        let host_path = format!(
+    /// Host path of the item selected in the focused breadcrumb level
+    fn selected_host_path(&self) -> Option<String> {
+        let level_idx = self.model.navigation.focus_level.checked_sub(1)?;
+        let level = self.model.navigation.breadcrumb_trail.get(level_idx)?;
+        let item = level.display_items().get(level.selected_index?)?;
+        Some(format!(
             "{}/{}",
             level.translated_base_path.trim_end_matches('/'),
             item.name
-        );
+        ))
+    }
 
-        // Check if file/directory exists on disk before trying to open
+    pub(crate) fn open_selected_item(&mut self) -> OpenOutcome {
+        let Some(open_cmd) = self.open_command.clone() else {
+            return OpenOutcome::NotConfigured;
+        };
+        let Some(host_path) = self.selected_host_path() else {
+            return OpenOutcome::NothingToOpen;
+        };
         if !std::path::Path::new(&host_path).exists() {
             log_debug(&format!(
                 "open_selected_item: Path does not exist: {}",
                 host_path
             ));
-            return Ok(()); // Nothing to open
+            return OpenOutcome::NothingToOpen;
         }
-
-        // Execute command in background (spawn, don't wait for completion)
-        // This allows GUI apps and editors to open without blocking the TUI
-        let result = std::process::Command::new(open_cmd)
-            .arg(&host_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-
-        match result {
-            Ok(_child) => {
-                // Log in debug mode
-                if crate::DEBUG_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                    log_debug(&format!("open_command: spawned {} {}", open_cmd, host_path));
-                }
-                // Show toast notification with full path
-                let toast_msg = format!("Opened: {}", host_path);
-                self.model.ui.show_success(toast_msg);
+        match spawn_detached(&open_cmd, "open_command", &host_path) {
+            Ok(()) => {
+                log_debug(&format!("open_command: spawned {} {}", open_cmd, host_path));
+                OpenOutcome::Opened(host_path)
             }
-            Err(e) => {
-                log_debug(&format!(
-                    "Failed to execute open_command '{}': {}",
-                    open_cmd, e
-                ));
-                // Show error toast
-                let toast_msg = format!("Failed to open with '{}'", open_cmd);
-                self.model.ui.show_error(toast_msg);
-            }
+            Err(outcome) => outcome,
         }
-
-        Ok(())
     }
 
-    pub(crate) fn open_syncthing_web_ui(&mut self) -> Result<()> {
-        // Check if open_command is configured
-        let Some(ref open_cmd) = self.open_command else {
-            self.model
-                .ui
-                .show_warning("open_command not configured".to_string());
-            return Ok(());
+    pub(crate) fn open_syncthing_web_ui(&mut self) -> OpenOutcome {
+        let Some(open_cmd) = self.open_command.clone() else {
+            return OpenOutcome::NotConfigured;
         };
-
-        // Spawn command to open Syncthing web UI
-        let result = std::process::Command::new(open_cmd)
-            .arg(&self.base_url)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-
-        match result {
-            Ok(_child) => {
-                self.model
-                    .ui
-                    .show_info(format!("Opening Syncthing: {}", self.base_url));
-            }
-            Err(e) => {
-                self.model.ui.show_error(format!("Failed to open: {}", e));
-            }
+        let url = self.base_url.clone();
+        match spawn_detached(&open_cmd, "open_command", &url) {
+            Ok(()) => OpenOutcome::Opened(url),
+            Err(outcome) => outcome,
         }
-
-        Ok(())
     }
 
-    pub(crate) fn copy_to_clipboard(&mut self) -> Result<()> {
-        let text_to_copy = if self.model.navigation.focus_level == 0 {
-            // In folder list - copy folder ID
+    pub(crate) fn copy_to_clipboard(&mut self) -> CopyOutcome {
+        let text = if self.model.navigation.focus_level == 0 {
             self.model
                 .navigation
                 .folders_state_selection
-                .and_then(|selected| {
-                    self.model
-                        .syncthing
-                        .folders
-                        .get(selected)
-                        .map(|folder| folder.id.clone())
-                })
+                .and_then(|selected| self.model.syncthing.folders.get(selected))
+                .map(|folder| folder.id.clone())
         } else {
-            // In breadcrumbs - copy file/directory path (mapped host path)
-            if self.model.navigation.breadcrumb_trail.is_empty() {
-                return Ok(());
-            }
-
-            let level_idx = self.model.navigation.focus_level - 1;
-            if level_idx >= self.model.navigation.breadcrumb_trail.len() {
-                return Ok(());
-            }
-
-            let level = &self.model.navigation.breadcrumb_trail[level_idx];
-
-            // Get selected item (respects filtered view if active)
-            let selected_idx = match level.selected_index {
-                Some(idx) => idx,
-                None => return Ok(()),
-            };
-
-            let item = match level.display_items().get(selected_idx) {
-                Some(item) => item,
-                None => return Ok(()),
-            };
-
-            // Build the full host path
-            // Note: translated_base_path already includes the full path to this directory level
-            let host_path = format!(
-                "{}/{}",
-                level.translated_base_path.trim_end_matches('/'),
-                item.name
-            );
-
-            Some(host_path)
+            self.selected_host_path()
         };
-
-        // Copy to clipboard if we have text
-        if let Some(text) = text_to_copy {
-            // Always log clipboard operations (not just in debug mode) since they can fail silently
-            use std::io::Write;
-            let log_file = crate::utils::get_debug_log_path();
-
-            if let Some(ref clipboard_cmd) = self.clipboard_command {
-                // Use user-configured clipboard command (text sent via stdin)
-                // Spawn in background and write to stdin without waiting
-                let result = std::process::Command::new(clipboard_cmd)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                    .and_then(|mut child| {
-                        if let Some(mut stdin) = child.stdin.take() {
-                            stdin.write_all(text.as_bytes())?;
-                            // Close stdin to signal EOF
-                            drop(stdin);
-                        }
-                        Ok(())
-                    });
-
-                match result {
-                    Ok(_) => {
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(log_file)
-                            .and_then(|mut f| {
-                                writeln!(f, "Copied to clipboard via {}: {}", clipboard_cmd, text)
-                            });
-                        // Show toast notification with full path
-                        let toast_msg = format!("Copied to clipboard: {}", text);
-                        self.model.ui.show_success(toast_msg);
-                    }
-                    Err(e) => {
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(log_file)
-                            .and_then(|mut f| {
-                                writeln!(
-                                    f,
-                                    "ERROR: Failed to execute clipboard command '{}': {}",
-                                    clipboard_cmd, e
-                                )
-                            });
-                        // Show error toast
-                        let toast_msg = format!("Failed to copy with '{}'", clipboard_cmd);
-                        self.model.ui.show_error(toast_msg);
-                    }
-                }
-            } else {
-                // No clipboard command configured - log message
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(log_file)
-                    .and_then(|mut f| {
-                        writeln!(
-                            f,
-                            "No clipboard_command configured - set clipboard_command in config.yaml"
-                        )
-                    });
-                // Show error toast
-                self.model
-                    .ui
-                    .show_warning("clipboard_command not configured");
+        let Some(text) = text else {
+            return CopyOutcome::NothingToCopy;
+        };
+        let outcome = match &self.clipboard_command {
+            Some(command) => run_clipboard_command(command, &text),
+            None => CopyOutcome::NotConfigured,
+        };
+        // Always logged, not just in debug mode: clipboard failures are otherwise silent
+        let line = match &outcome {
+            CopyOutcome::Copied(text) => format!("Copied to clipboard: {}", text),
+            CopyOutcome::Failed { command, error } => {
+                format!("ERROR: clipboard command '{}' failed: {}", command, error)
             }
-        }
-
-        Ok(())
+            CopyOutcome::Invalid(message) => format!("ERROR: {}", message),
+            CopyOutcome::NotConfigured => "No clipboard_command configured".to_string(),
+            CopyOutcome::NothingToCopy => return outcome,
+        };
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(crate::utils::get_debug_log_path())
+            .and_then(|mut f| writeln!(f, "{}", line));
+        outcome
     }
+}
+
+/// Result of copying with `c`; the keyboard handler turns it into a toast
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CopyOutcome {
+    Copied(String),
+    Failed {
+        command: String,
+        error: String,
+    },
+    /// Full message: `Invalid <setting>: <error>`
+    Invalid(String),
+    NotConfigured,
+    NothingToCopy,
+}
+
+/// Result of opening with `o`; the keyboard handler turns it into a toast
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OpenOutcome {
+    Opened(String),
+    Failed {
+        command: String,
+        error: String,
+    },
+    /// Full message: `Invalid <setting>: <error>`
+    Invalid(String),
+    NotConfigured,
+    NothingToOpen,
+}
+
+/// Runs a configured clipboard command with `text` on stdin and waits for it to exit
+pub(crate) fn run_clipboard_command(command: &str, text: &str) -> CopyOutcome {
+    use std::io::Write;
+    let (program, args) = match logic::command::parse_command(command) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => return CopyOutcome::NotConfigured,
+        Err(e) => return CopyOutcome::Invalid(format!("Invalid clipboard_command: {}", e)),
+    };
+    let failed = |error: String| CopyOutcome::Failed {
+        command: command.to_string(),
+        error,
+    };
+    let mut child = match std::process::Command::new(&program)
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return failed(e.to_string()),
+    };
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(text.as_bytes())
+    {
+        return failed(e.to_string());
+    }
+    match child.wait() {
+        Ok(status) if status.success() => CopyOutcome::Copied(text.to_string()),
+        Ok(status) => failed(format!("exited with {}", status)),
+        Err(e) => failed(e.to_string()),
+    }
+}
+
+/// Starts a configured opener with `target` as its last argument, without waiting
+fn spawn_detached(command: &str, setting: &str, target: &str) -> Result<(), OpenOutcome> {
+    let (program, args) = match logic::command::parse_command(command) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => return Err(OpenOutcome::NotConfigured),
+        Err(e) => return Err(OpenOutcome::Invalid(format!("Invalid {}: {}", setting, e))),
+    };
+    std::process::Command::new(&program)
+        .args(&args)
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| OpenOutcome::Failed {
+            command: command.to_string(),
+            error: e.to_string(),
+        })
 }
