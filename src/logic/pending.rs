@@ -3,13 +3,7 @@
 use crate::api::SyncState;
 use crate::model::pending::{PendingChange, PendingFolderChange, PendingFolderKind, PendingKind};
 use crate::model::syncthing::NeedIndex;
-use std::time::{Duration, Instant};
-
-/// How long after its rescan returns a change may stay unconfirmed
-pub const PATH_DEADLINE: Duration = Duration::from_secs(30);
-/// How long a revert may stay unconfirmed
-#[allow(dead_code)]
-pub const REVERT_DEADLINE: Duration = Duration::from_secs(120);
+use std::time::Instant;
 
 /// Something Syncthing (or a failed request) told us. `requested_at` is when the request was
 /// sent: a reply sent before a change was recorded says nothing about it.
@@ -36,7 +30,6 @@ pub enum Observation {
         requested_at: Instant,
     },
     FolderPaused,
-    #[allow(dead_code)]
     ActionFailed,
 }
 
@@ -110,6 +103,13 @@ pub fn observe(change: &PendingChange, obs: &Observation, now: Instant) -> Verdi
         }
         (PendingKind::Restoring, O::ItemFinished { failed: true, .. }) => Verdict::Contradicted,
         (PendingKind::Restoring, O::FolderPaused) => Verdict::Contradicted,
+        (PendingKind::Reverting, O::ItemFinished { failed: false, .. }) => Verdict::Confirmed,
+        (PendingKind::Reverting, O::FileInfo { state, .. }) if *state == SyncState::Synced => {
+            Verdict::Confirmed
+        }
+        (PendingKind::Reverting, O::Listed { present: false, .. }) => Verdict::Confirmed,
+        (PendingKind::Reverting, O::ItemFinished { failed: true, .. }) => Verdict::Contradicted,
+        (PendingKind::Reverting, O::FolderPaused) => Verdict::Contradicted,
         _ => Verdict::Keep,
     }
 }
@@ -131,7 +131,7 @@ pub fn observe_folder(change: &PendingFolderChange, obs: &Observation, now: Inst
     }
 }
 
-/// Re-impose pending deletions and restorations on a freshly fetched `index`
+/// Re-impose pending deletions, restorations and reverts on a freshly fetched `index`
 pub fn reapply_to_index<'a>(
     index: &mut NeedIndex,
     changes: impl IntoIterator<Item = (&'a str, &'a PendingKind)>,
@@ -145,7 +145,7 @@ pub fn reapply_to_index<'a>(
                     .insert(path.to_string(), SyncState::RemoteOnly);
                 changed = true;
             }
-            PendingKind::Restoring => {
+            PendingKind::Restoring | PendingKind::Reverting => {
                 changed |= index.local_changed.remove(path).is_some();
             }
             _ => {}
@@ -200,10 +200,16 @@ mod tests {
     fn test_ignored_confirmed_by_ignored_file_info() {
         for exists in [true, false] {
             assert_eq!(
-                verdict(PendingKind::Ignored { exists }, |r| Observation::FileInfo {
-                    state: SyncState::Ignored,
-                    requested_at: r
-                }),
+                verdict(
+                    PendingKind::Ignored {
+                        exists,
+                        deleting: false
+                    },
+                    |r| Observation::FileInfo {
+                        state: SyncState::Ignored,
+                        requested_at: r
+                    }
+                ),
                 Verdict::Confirmed
             );
         }
@@ -291,12 +297,18 @@ mod tests {
     #[test]
     fn test_fresh_unrelated_reply_keeps_change() {
         assert_eq!(
-            verdict(PendingKind::Ignored { exists: true }, |r| {
-                Observation::FileInfo {
-                    state: SyncState::Synced,
-                    requested_at: r,
+            verdict(
+                PendingKind::Ignored {
+                    exists: true,
+                    deleting: false
+                },
+                |r| {
+                    Observation::FileInfo {
+                        state: SyncState::Synced,
+                        requested_at: r,
+                    }
                 }
-            }),
+            ),
             Verdict::Keep
         );
         assert_eq!(
@@ -352,7 +364,10 @@ mod tests {
         let stale = t0 - Duration::from_millis(1);
         let cases: Vec<(PendingKind, Observation)> = vec![
             (
-                PendingKind::Ignored { exists: true },
+                PendingKind::Ignored {
+                    exists: true,
+                    deleting: false,
+                },
                 Observation::FileInfo {
                     state: SyncState::Ignored,
                     requested_at: stale,
@@ -453,8 +468,14 @@ mod tests {
         for kind in [
             PendingKind::DeletedLocally,
             PendingKind::Removed,
-            PendingKind::Ignored { exists: true },
-            PendingKind::Ignored { exists: false },
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+            PendingKind::Ignored {
+                exists: false,
+                deleting: false,
+            },
             PendingKind::Unignored,
             PendingKind::Restoring,
         ] {
@@ -628,5 +649,133 @@ mod tests {
         let other = PendingKind::Unignored;
         reapply_to_index(&mut index, [("a", &other)]);
         assert!(index.descendants.contains_key("stale"));
+    }
+
+    // ========================================
+    // REVERTING PATH
+    // ========================================
+
+    #[test]
+    fn test_reverting_confirmed_by_item_finished_ok_for_any_deletion() {
+        for deleted in [false, true] {
+            assert_eq!(
+                judge(
+                    PendingKind::Reverting,
+                    Observation::ItemFinished {
+                        failed: false,
+                        deleted
+                    }
+                ),
+                Verdict::Confirmed,
+                "deleted={deleted}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reverting_confirmed_by_synced_file_info_and_absent_listing() {
+        assert_eq!(
+            verdict(PendingKind::Reverting, |r| Observation::FileInfo {
+                state: SyncState::Synced,
+                requested_at: r
+            }),
+            Verdict::Confirmed
+        );
+        assert_eq!(
+            verdict(PendingKind::Reverting, |r| Observation::Listed {
+                present: false,
+                requested_at: r
+            }),
+            Verdict::Confirmed
+        );
+    }
+
+    #[test]
+    fn test_reverting_contradicted_by_failed_item_and_pause() {
+        for deleted in [false, true] {
+            assert_eq!(
+                judge(
+                    PendingKind::Reverting,
+                    Observation::ItemFinished {
+                        failed: true,
+                        deleted
+                    }
+                ),
+                Verdict::Contradicted
+            );
+        }
+        assert_eq!(
+            judge(PendingKind::Reverting, Observation::FolderPaused),
+            Verdict::Contradicted
+        );
+    }
+
+    #[test]
+    fn test_reverting_kept_by_unrelated_and_stale_replies() {
+        assert_eq!(
+            verdict(PendingKind::Reverting, |r| Observation::FileInfo {
+                state: SyncState::LocalOnly,
+                requested_at: r
+            }),
+            Verdict::Keep
+        );
+        assert_eq!(
+            verdict(PendingKind::Reverting, |r| Observation::Listed {
+                present: true,
+                requested_at: r
+            }),
+            Verdict::Keep
+        );
+        assert_eq!(
+            verdict(PendingKind::Reverting, |r| Observation::LocalChanged {
+                deleted: false,
+                requested_at: r
+            }),
+            Verdict::Keep
+        );
+        let t0 = Instant::now() + Duration::from_secs(10);
+        let stale = Observation::FileInfo {
+            state: SyncState::Synced,
+            requested_at: t0 - Duration::from_millis(1),
+        };
+        assert_eq!(
+            observe(&change(PendingKind::Reverting, t0), &stale, t0),
+            Verdict::Keep
+        );
+    }
+
+    #[test]
+    fn test_reverting_expires_and_fails_like_other_kinds() {
+        let t0 = Instant::now();
+        let mut c = change(PendingKind::Reverting, t0);
+        c.deadline = Some(t0 + Duration::from_secs(1));
+        let obs = Observation::FileInfo {
+            state: SyncState::LocalOnly,
+            requested_at: t0,
+        };
+        assert_eq!(
+            observe(&c, &obs, t0 + Duration::from_secs(2)),
+            Verdict::Contradicted
+        );
+        assert_eq!(
+            judge(PendingKind::Reverting, Observation::ActionFailed),
+            Verdict::Contradicted
+        );
+    }
+
+    #[test]
+    fn test_reapply_forgets_reverting_local_change() {
+        let mut index = NeedIndex::default();
+        index
+            .local_changed
+            .insert("dir/new".to_string(), SyncState::LocalOnly);
+        crate::logic::sync_states::rebuild_descendants(&mut index);
+        assert!(index.descendants.contains_key("dir"));
+
+        let reverting = PendingKind::Reverting;
+        reapply_to_index(&mut index, [("dir/new", &reverting)]);
+
+        assert!(!index.local_changed.contains_key("dir/new"));
+        assert!(!index.descendants.contains_key("dir"));
     }
 }

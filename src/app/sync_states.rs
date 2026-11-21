@@ -10,7 +10,7 @@ use crate::api::FolderStatus;
 use crate::logic::pending::Observation;
 use crate::model::syncthing::{NeedFetch, SyncthingModel};
 use crate::{App, SyncState, log_debug, logic, services};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// Everything the need-index derivation needs to know about `folder_id`.
@@ -99,7 +99,12 @@ impl App {
         let wanted = logic::sync_states::need_index_wanted(folder_open, &status.state);
         let fetch = plan.fetch && wanted;
         if plan.clear_syncing {
-            let restoring = syncthing.restoring_in(folder_id);
+            let restoring: HashSet<String> = self
+                .model
+                .pending
+                .restoring_in(folder_id)
+                .map(str::to_string)
+                .collect();
             syncthing.path_events.remove(folder_id);
             if restoring.is_empty() {
                 syncthing.syncing_files.remove(folder_id);

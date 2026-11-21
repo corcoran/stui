@@ -177,6 +177,26 @@ pub(crate) fn displayed_states(app: &App) -> HashMap<String, SyncState> {
     .into_owned()
 }
 
+/// How the breadcrumb panel shows each item of the first level, pending changes included
+pub(crate) fn displayed_items(
+    app: &App,
+) -> HashMap<String, Option<crate::logic::display::ItemDisplay>> {
+    let level = &app.model.navigation.breadcrumb_trail[0];
+    level
+        .items
+        .iter()
+        .map(|item| {
+            let shown = crate::logic::display::level_item_display(
+                &app.model.syncthing,
+                level,
+                item,
+                &app.model.pending,
+            );
+            (item.name.clone(), shown)
+        })
+        .collect()
+}
+
 pub(crate) fn folder_status(state: &str) -> crate::api::FolderStatus {
     let mut json = serde_json::json!({});
     for key in [

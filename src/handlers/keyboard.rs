@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
 use crate::App;
+use crate::model::pending::PendingKind;
 use crate::model::{self, ConfirmAction};
 
 /// Check if folder history modal should load more files
@@ -54,6 +55,13 @@ async fn apply_folder_group(
 /// The Ignored icon stays until FileInfo returns, so this is the immediate feedback.
 fn unignore_toast(item_name: &str) -> String {
     format!("Unignored {}, rescanning...", item_name)
+}
+
+fn unignore_blocked_toast(path: &std::path::Path) -> String {
+    format!(
+        "Cannot un-ignore: deletion in progress for {}",
+        path.display()
+    )
 }
 
 pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
@@ -158,12 +166,28 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.model.ui.confirm_action = None;
 
                 match action {
-                    ConfirmAction::Revert { folder_id, .. } => {
-                        // Revert receive-only folder
-                        let _ = app.client.revert_folder(&folder_id).await;
+                    ConfirmAction::Revert {
+                        folder_id,
+                        changed_files,
+                    } => {
+                        if let Err(error) =
+                            app.revert_folder_changes(&folder_id, &changed_files).await
+                        {
+                            let label = app
+                                .model
+                                .syncthing
+                                .get_folder(&folder_id)
+                                .and_then(|f| f.label.clone())
+                                .unwrap_or_else(|| folder_id.clone());
+                            app.model
+                                .ui
+                                .show_error(format!("Failed to revert {}: {}", label, error));
+                        }
                         app.refresh_folder_statuses_nonblocking();
                     }
-                    ConfirmAction::Delete { path, is_dir, .. } => {
+                    ConfirmAction::Delete {
+                        path, is_dir, name, ..
+                    } => {
                         // Delete file or directory
                         let delete_result = if is_dir {
                             std::fs::remove_dir_all(&path)
@@ -171,7 +195,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             std::fs::remove_file(&path)
                         };
 
-                        if delete_result.is_ok() {
+                        if let Err(error) = &delete_result {
+                            app.model
+                                .ui
+                                .show_error(format!("Failed to delete {}: {}", name, error));
+                        } else {
                             let mut deleted: Option<(String, String)> = None;
                             // Get current folder info for cache invalidation
                             if app.model.navigation.focus_level > 0
@@ -226,14 +254,12 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                     if receive_only {
                                         // The file stays on the other devices, so the row stays,
                                         // shown as deleted locally
-                                        crate::logic::sync_states::record_local_deletion(
-                                            app.model
-                                                .syncthing
-                                                .need_index
-                                                .entry(folder_id.clone())
-                                                .or_default(),
+                                        app.record_pending(
+                                            &folder_id,
                                             &file_path,
+                                            PendingKind::DeletedLocally,
                                         );
+                                        app.refresh_derived_states(&folder_id);
                                     } else if let Some(level) =
                                         app.model.navigation.breadcrumb_trail.get_mut(level_idx)
                                     {
@@ -259,6 +285,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                             Some(idx)
                                         };
                                         level.selected_index = new_selection;
+                                        app.record_pending(
+                                            &folder_id,
+                                            &file_path,
+                                            PendingKind::Removed,
+                                        );
                                     }
 
                                     // Invalidate browse cache for this directory
@@ -281,7 +312,6 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                 }
                             }
                         }
-                        // TODO: Show error message if deletion fails
                     }
                     ConfirmAction::IgnoreDelete { .. } => {
                         // Not implemented yet - this variant is never set
@@ -584,6 +614,27 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     let item_name = pattern_state.item_name.clone();
                     app.model.ui.pattern_selection = None;
 
+                    let item_path = (app.model.navigation.focus_level > 0
+                        && app.model.navigation.focus_level
+                            <= app.model.navigation.breadcrumb_trail.len())
+                    .then(|| {
+                        crate::logic::sync_states::breadcrumb_item_path(
+                            app.model.navigation.breadcrumb_trail
+                                [app.model.navigation.focus_level - 1]
+                                .prefix
+                                .as_deref(),
+                            &item_name,
+                        )
+                    });
+                    if let Some(path) = &item_path
+                        && app.model.pending.blocks_unignore(&folder_id, path)
+                    {
+                        app.model
+                            .ui
+                            .show_warning(unignore_blocked_toast(std::path::Path::new(path)));
+                        return Ok(());
+                    }
+
                     // Get all patterns and remove the selected one
                     let all_patterns = app.client.get_ignore_patterns(&folder_id).await?;
                     let updated_patterns: Vec<String> = all_patterns
@@ -595,21 +646,12 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         .set_ignore_patterns(&folder_id, updated_patterns)
                         .await?;
 
-                    if app.model.navigation.focus_level > 0
-                        && app.model.navigation.focus_level
-                            <= app.model.navigation.breadcrumb_trail.len()
-                    {
-                        let level_idx = app.model.navigation.focus_level - 1;
-                        let file_path = crate::logic::sync_states::breadcrumb_item_path(
-                            app.model.navigation.breadcrumb_trail[level_idx]
-                                .prefix
-                                .as_deref(),
-                            &item_name,
-                        );
+                    if let Some(file_path) = item_path {
                         let scope = crate::logic::ignore::scan_scope_for_pattern(
                             &pattern_to_remove,
                             &file_path,
                         );
+                        app.record_pending(&folder_id, &file_path, PendingKind::Unignored);
                         app.finish_unignore(&folder_id, file_path, scope);
                         app.model.ui.show_success(unignore_toast(&item_name));
                     }
@@ -1090,10 +1132,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.model.ui.show_success(unignore_toast(&item_name));
                 }
                 Ok(crate::app::ignore::IgnoreToggle::BlockedByPendingDelete(path)) => {
-                    app.model.ui.show_warning(format!(
-                        "Cannot un-ignore: deletion in progress for {}",
-                        path.display()
-                    ));
+                    app.model.ui.show_warning(unignore_blocked_toast(&path));
                 }
                 _ => {}
             }

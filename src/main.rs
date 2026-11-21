@@ -7,10 +7,9 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     io::{self, Write},
-    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -165,61 +164,6 @@ pub struct App {
 }
 
 impl App {
-    /// Check if a path or any of its parent directories are pending deletion
-    /// Returns Some(pending_path) if blocked, None if allowed
-    fn is_path_or_parent_pending(&self, folder_id: &str, path: &PathBuf) -> Option<PathBuf> {
-        if let Some(pending_info) = self.model.performance.pending_ignore_deletes.get(folder_id) {
-            logic::path::is_path_or_parent_in_set(&pending_info.paths, path)
-        } else {
-            None
-        }
-    }
-
-    /// Add a path to pending deletions for a folder
-    fn add_pending_delete(&mut self, folder_id: String, path: PathBuf) {
-        let pending_info = self
-            .model
-            .performance
-            .pending_ignore_deletes
-            .entry(folder_id)
-            .or_insert_with(|| model::PendingDeleteInfo {
-                paths: HashSet::new(),
-                initiated_at: Instant::now(),
-                rescan_triggered: false,
-            });
-
-        pending_info.paths.insert(path);
-        log_debug(&format!("Added pending delete: {:?}", pending_info.paths));
-    }
-
-    /// Remove a path from pending deletions after verification
-    fn remove_pending_delete(&mut self, folder_id: &str, path: &PathBuf) {
-        if let Some(pending_info) = self
-            .model
-            .performance
-            .pending_ignore_deletes
-            .get_mut(folder_id)
-        {
-            pending_info.paths.remove(path);
-            log_debug(&format!(
-                "Removed pending delete: {:?}, remaining: {:?}",
-                path, pending_info.paths
-            ));
-
-            // Clean up empty folder entry
-            if pending_info.paths.is_empty() {
-                self.model
-                    .performance
-                    .pending_ignore_deletes
-                    .remove(folder_id);
-                log_debug(&format!(
-                    "Cleared pending deletes for folder: {}",
-                    folder_id
-                ));
-            }
-        }
-    }
-
     /// Invalidate all folder-related caches when folder content changes
     ///
     /// This is called by both File and Directory cache invalidation events
@@ -241,73 +185,6 @@ impl App {
             .send(services::api::ApiRequest::GetFolderStatus {
                 folder_id: folder_id.to_string(),
                 requested_at: std::time::Instant::now(),
-            });
-    }
-
-    /// Clean up stale pending deletes (older than 60 seconds)
-    fn cleanup_stale_pending_deletes(&mut self) {
-        let now = Instant::now();
-
-        self.model
-            .performance
-            .pending_ignore_deletes
-            .retain(|folder_id, info| {
-                if logic::performance::should_cleanup_stale_pending(info.initiated_at, now) {
-                    log_debug(&format!(
-                        "Cleaning up stale pending deletes for folder: {}",
-                        folder_id
-                    ));
-                    false // Remove this entry
-                } else {
-                    true // Keep this entry
-                }
-            });
-    }
-
-    /// Verify and cleanup completed pending deletes
-    /// Removes paths that:
-    /// 1. Have rescan_triggered = true
-    /// 2. Are older than 5 seconds (buffer for Syncthing to process)
-    /// 3. Files are verified gone from disk
-    fn verify_and_cleanup_pending_deletes(&mut self) {
-        let now = Instant::now();
-
-        for info in self.model.performance.pending_ignore_deletes.values_mut() {
-            // Only check if ready for verification
-            if !logic::performance::should_verify_pending(
-                info.initiated_at,
-                now,
-                info.rescan_triggered,
-            ) {
-                continue;
-            }
-
-            // Check each path and remove if verified gone
-            info.paths.retain(|path| {
-                if path.exists() {
-                    log_debug(&format!("Pending delete still exists: {:?}", path));
-                    true // Keep in pending set
-                } else {
-                    log_debug(&format!("Pending delete verified gone: {:?}", path));
-                    false // Remove from pending set
-                }
-            });
-        }
-
-        // Clean up folders with no pending paths
-        self.model
-            .performance
-            .pending_ignore_deletes
-            .retain(|folder_id, info| {
-                if info.paths.is_empty() {
-                    log_debug(&format!(
-                        "All pending deletes completed for folder: {}",
-                        folder_id
-                    ));
-                    false
-                } else {
-                    true
-                }
             });
     }
 
@@ -823,11 +700,12 @@ impl App {
         let mut sync_states = HashMap::new();
 
         for item in items {
-            let file_path = if let Some(prefix) = prefix {
-                format!("{}{}", prefix, item.name)
-            } else {
-                item.name.clone()
-            };
+            let file_path = logic::sync_states::breadcrumb_item_path(prefix, &item.name);
+
+            // A pending change's display outranks whatever the cache last stored
+            if self.model.pending.get(folder_id, &file_path).is_some() {
+                continue;
+            }
 
             // Load from cache without validation (will be validated on next fetch if needed)
             if let Ok(Some(state)) = self.cache.get_sync_state_unvalidated(folder_id, &file_path) {
@@ -1240,12 +1118,6 @@ where
         let idle_time = app.model.performance.last_user_action.elapsed();
         if idle_time >= std::time::Duration::from_millis(300) {
             app.expire_pending(Instant::now());
-
-            // Cleanup stale pending deletes (60s timeout fallback)
-            app.cleanup_stale_pending_deletes();
-
-            // Check and remove completed pending deletes
-            app.verify_and_cleanup_pending_deletes();
 
             // Flush pending writes before idle operations
             app.flush_pending_db_writes();

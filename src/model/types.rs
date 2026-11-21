@@ -3,11 +3,10 @@
 //! These types are used across multiple sub-models and represent
 //! fundamental domain concepts.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::time::{Instant, SystemTime};
+use std::collections::HashMap;
+use std::time::SystemTime;
 
-use crate::api::{BrowseItem, FileDetails, SyncState};
+use crate::api::{BrowseItem, FileDetails, LocalChangedFile, SyncState};
 
 /// Vim command state for tracking double-key commands like 'gg'
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,14 +107,6 @@ impl BreadcrumbLevel {
     }
 }
 
-/// Information about a pending ignore+delete operation
-#[derive(Debug, Clone, PartialEq)]
-pub struct PendingDeleteInfo {
-    pub paths: HashSet<PathBuf>,
-    pub initiated_at: Instant,
-    pub rescan_triggered: bool,
-}
-
 /// File information popup state
 /// Note: image_state removed - stays in Runtime (not cloneable)
 #[derive(Clone, Debug)]
@@ -141,7 +132,7 @@ pub struct FileInfoPopupState {
 pub enum ConfirmAction {
     Revert {
         folder_id: String,
-        changed_files: Vec<String>,
+        changed_files: Vec<LocalChangedFile>,
     },
     Delete {
         path: String,
@@ -241,7 +232,16 @@ mod tests {
     fn test_confirm_action_revert() {
         let action = ConfirmAction::Revert {
             folder_id: "test-folder".to_string(),
-            changed_files: vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            changed_files: vec![
+                LocalChangedFile {
+                    name: "file1.txt".to_string(),
+                    deleted: false,
+                },
+                LocalChangedFile {
+                    name: "file2.txt".to_string(),
+                    deleted: true,
+                },
+            ],
         };
 
         match action {
@@ -328,11 +328,17 @@ mod tests {
     fn test_confirm_action_equality() {
         let action1 = ConfirmAction::Revert {
             folder_id: "folder".to_string(),
-            changed_files: vec!["file.txt".to_string()],
+            changed_files: vec![LocalChangedFile {
+                name: "file.txt".to_string(),
+                deleted: false,
+            }],
         };
         let action2 = ConfirmAction::Revert {
             folder_id: "folder".to_string(),
-            changed_files: vec!["file.txt".to_string()],
+            changed_files: vec![LocalChangedFile {
+                name: "file.txt".to_string(),
+                deleted: false,
+            }],
         };
         let action3 = ConfirmAction::Delete {
             path: "/path".to_string(),

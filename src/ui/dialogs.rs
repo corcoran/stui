@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use super::icons::IconRenderer;
+use crate::api::LocalChangedFile;
 use crate::model::FileInfoPopupState;
 use crate::utils;
 use crate::{ImagePreviewState, api::Device};
@@ -25,11 +26,11 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 /// Render the revert confirmation dialog (for restoring deleted files in receive-only folders)
-pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[String]) {
+pub fn render_revert_confirmation(f: &mut Frame, changed_files: &[LocalChangedFile]) {
     let file_list = changed_files
         .iter()
         .take(5)
-        .map(|file| format!("  - {}", file))
+        .map(|file| format!("  - {}", file.name))
         .collect::<Vec<_>>()
         .join("\n");
 

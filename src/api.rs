@@ -497,7 +497,9 @@ impl SyncthingClient {
             .header("X-API-Key", &self.api_key)
             .send()
             .await
-            .context("Failed to revert folder")?;
+            .context("Failed to revert folder")?
+            .error_for_status()
+            .context("Syncthing refused to revert the folder")?;
 
         Ok(())
     }

@@ -171,7 +171,7 @@ impl App {
             // Receive-only folder with local changes - fetch the list of changed files
             let changed_files = self
                 .client
-                .get_local_changed_files(&folder_id)
+                .get_local_changed_entries(&folder_id)
                 .await
                 .unwrap_or_else(|_| Vec::new());
 

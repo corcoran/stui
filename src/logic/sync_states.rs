@@ -381,15 +381,6 @@ pub fn forget_local_change(index: &mut NeedIndex, path: &str) {
     }
 }
 
-/// Record `path` as deleted on this device, before /rest/db/localchanged reports it
-pub fn record_local_deletion(index: &mut NeedIndex, path: &str) {
-    index.local_changed.insert(
-        path.trim_end_matches('/').to_string(),
-        SyncState::RemoteOnly,
-    );
-    rebuild_descendants(index);
-}
-
 /// Whether `path` was deleted on this device in a Receive Only folder: /rest/db/localchanged
 /// lists it as deleted. Such a file's sync state is RemoteOnly. A file Syncthing is downloading
 /// or has queued is not: while it restores a file, Syncthing lists it both as a local deletion
@@ -714,7 +705,11 @@ mod tests {
     use super::*;
 
     fn event(at: Instant, kind: PathEventKind) -> PathEvent {
-        PathEvent { at, kind }
+        PathEvent {
+            at,
+            kind,
+            succeeded: false,
+        }
     }
 
     fn events(entries: &[(&str, PathEvent)]) -> HashMap<String, PathEvent> {

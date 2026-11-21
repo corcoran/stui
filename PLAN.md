@@ -7,7 +7,6 @@
 ### Feature Enhancements
 
 **High Priority:**
-- Pending local changes: one model for "the user did X, show the result until Syncthing confirms it". Today each action has its own patch (`restoring` set, `record_local_deletion`, `ItemFinished` marking Synced, ignore-toggle state kept, pause flag set locally, group edits applied locally), and Syncthing replies built before an action still overwrite its result. Record pending changes per path, draw them over Syncthing's data, clear them on confirmation, failure or timeout, and drop replies requested before the action for that path. Reverting a whole Receive Only folder (`R`) shows heavy icon churn that this would remove
 - Syncthing log viewer
 
 **Medium Priority:**
@@ -21,6 +20,8 @@
 
 ### Known Bugs
 
+- The out-of-sync walk writes its cache rows with `INSERT OR REPLACE` (`src/cache.rs`, near line 881). These rows can overwrite file states that other code wrote
+- A folder paused outside stui (web GUI or REST) goes unnoticed for 10 s or more. The folder list's paused flag refreshes only after stui's own actions
 - While a folder is syncing, `overlay_syncing_states` clones each breadcrumb level's state map every frame. Fine at normal sizes, costly for directories with tens of thousands of entries. Computing per visible row with `item_sync_state` would avoid it
 
 ---

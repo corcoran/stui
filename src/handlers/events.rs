@@ -176,6 +176,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 &folder_id,
                 &file_path,
                 crate::model::syncthing::PathEventKind::Started,
+                false,
             );
             app.model
                 .syncthing
@@ -200,19 +201,15 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 &folder_id,
                 &file_path,
                 crate::model::syncthing::PathEventKind::Finished,
+                !failed && !deleted,
             );
             app.observe_path(
                 &folder_id,
                 file_path.trim_end_matches('/'),
                 crate::logic::pending::Observation::ItemFinished { failed, deleted },
             );
-            for sets in [
-                &mut app.model.syncthing.syncing_files,
-                &mut app.model.syncthing.restoring,
-            ] {
-                if let Some(set) = sets.get_mut(&folder_id) {
-                    set.remove(file_path.trim_end_matches('/'));
-                }
+            if let Some(set) = app.model.syncthing.syncing_files.get_mut(&folder_id) {
+                set.remove(file_path.trim_end_matches('/'));
             }
 
             // A downloaded item leaves the need list; a failed one stays
@@ -249,6 +246,12 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                             .insert(name.to_string(), crate::api::SyncState::Synced);
                     }
                 }
+                app.pending_sync_state_writes.push((
+                    folder_id.clone(),
+                    path.to_string(),
+                    crate::api::SyncState::Synced,
+                    0,
+                ));
             }
         }
         CacheInvalidation::Activity {
@@ -762,7 +765,7 @@ mod tests {
         assert!(
             app.pending_sync_state_writes
                 .iter()
-                .all(|(folder, path, ..)| !(folder == "f" && path == "a"))
+                .all(|(_, _, state, _)| *state == SyncState::Synced)
         );
     }
 
@@ -788,7 +791,10 @@ mod tests {
                 .get("a"),
             Some(&SyncState::RemoteOnly)
         );
-        assert_eq!(app.pending_sync_state_writes.len(), 1);
+        assert_eq!(
+            app.pending_sync_state_writes.last().map(|w| w.2),
+            Some(SyncState::RemoteOnly)
+        );
     }
 
     #[test]
@@ -1878,27 +1884,6 @@ mod tests {
         (format!("http://{}", addr), log)
     }
 
-    /// Query string of the first scan request seen, e.g. `folder=media&sub=a.mkv`
-    async fn next_scan_query(log: &RequestLog) -> String {
-        tokio::time::timeout(std::time::Duration::from_millis(2500), async {
-            loop {
-                let found = log
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|l| l.starts_with("POST /rest/db/scan?"))
-                    .cloned();
-                if let Some(line) = found {
-                    let query = line.split_once('?').unwrap().1;
-                    return query.trim_end_matches(" HTTP/1.1").to_string();
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("a scan request should reach the server")
-    }
-
     async fn app_viewing_item(
         ignore_patterns: &[&str],
         state: SyncState,
@@ -1982,21 +1967,49 @@ mod tests {
             .unwrap();
     }
 
-    async fn expect_file_info_request(
+    /// Answer the queued rescan of `media` and expect a FileInfo request for `path` after it
+    fn expect_file_info_after_rescan(
+        app: &mut App,
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::services::api::ApiRequest>,
         path: &str,
     ) {
-        let found = tokio::time::timeout(std::time::Duration::from_millis(1500), async {
-            while let Some(req) = rx.recv().await {
-                if let crate::services::api::ApiRequest::GetFileInfo { file_path, .. } = req {
-                    return file_path;
+        let mut file_info_before_scan = false;
+        let mut rescanned = false;
+        while let Ok(req) = rx.try_recv() {
+            match req {
+                crate::services::api::ApiRequest::RescanFolder { folder_id, .. }
+                    if folder_id == "media" =>
+                {
+                    rescanned = true;
                 }
+                crate::services::api::ApiRequest::GetFileInfo { .. } => {
+                    file_info_before_scan = true;
+                }
+                _ => {}
             }
-            String::new()
-        })
-        .await
-        .expect("FileInfo should be requested right after the rescan");
-        assert_eq!(found, path);
+        }
+        assert!(rescanned, "the rescan goes through the API queue");
+        assert!(
+            !file_info_before_scan,
+            "no FileInfo before the rescan returns"
+        );
+
+        handle_api_response(
+            app,
+            ApiResponse::RescanResult {
+                folder_id: "media".to_string(),
+                success: true,
+                error: None,
+            },
+        );
+
+        let requested: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|req| match req {
+                crate::services::api::ApiRequest::GetFileInfo { file_path, .. } => Some(file_path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(requested, vec![path.to_string()]);
     }
 
     fn assert_unignore_feedback(app: &App) {
@@ -2013,18 +2026,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unignore_key_keeps_state_shows_toast_and_requests_file_info() {
+    async fn test_unignore_key_keeps_state_shows_toast_and_requests_file_info_after_rescan() {
         let (mut app, mut rx) = app_viewing_ignored_item(&["/a.mkv"]).await;
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
 
         assert!(app.model.ui.pattern_selection.is_none());
         assert_unignore_feedback(&app);
-        expect_file_info_request(&mut rx, "a.mkv").await;
+        expect_file_info_after_rescan(&mut app, &mut rx, "a.mkv");
     }
 
     #[tokio::test]
-    async fn test_unignore_via_pattern_menu_keeps_state_shows_toast_and_requests_file_info() {
+    async fn test_unignore_via_pattern_menu_keeps_state_shows_toast_and_requests_file_info_after_rescan()
+     {
         let (mut app, mut rx) = app_viewing_ignored_item(&["/a.mkv", "/*.mkv"]).await;
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
@@ -2037,7 +2051,7 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Enter).await;
 
         assert_unignore_feedback(&app);
-        expect_file_info_request(&mut rx, "a.mkv").await;
+        expect_file_info_after_rescan(&mut app, &mut rx, "a.mkv");
     }
 
     #[tokio::test]
@@ -2053,6 +2067,291 @@ mod tests {
         assert_eq!(
             file_info_requests_with_priority(&mut rx),
             vec![("a.mkv".to_string(), crate::services::api::Priority::Medium)]
+        );
+    }
+
+    // ========================================
+    // PENDING IGNORE CHANGES
+    // ========================================
+
+    fn displayed_media(app: &App, name: &str) -> Option<crate::logic::display::ItemDisplay> {
+        let level = &app.model.navigation.breadcrumb_trail[0];
+        let item = level
+            .items
+            .iter()
+            .find(|i| i.name == name)
+            .expect("item listed");
+        crate::logic::display::level_item_display(
+            &app.model.syncthing,
+            level,
+            item,
+            &app.model.pending,
+        )
+    }
+
+    fn pending_kind(app: &App, path: &str) -> Option<crate::model::pending::PendingKind> {
+        app.model
+            .pending
+            .get("media", path)
+            .map(|change| change.kind.clone())
+    }
+
+    #[tokio::test]
+    async fn test_ignore_then_stale_file_info_keeps_ignored() {
+        use crate::logic::display::ItemDisplay;
+        let (mut app, _rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+        let sent = std::time::Instant::now() - Duration::from_millis(1);
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        handle_api_response(
+            &mut app,
+            file_info_result_at("media", "a.mkv", SyncState::Synced, sent),
+        );
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: false
+            })
+        );
+        assert_eq!(
+            app.model.navigation.breadcrumb_trail[0].file_sync_states["a.mkv"],
+            SyncState::Ignored
+        );
+        assert_eq!(
+            displayed_media(&app, "a.mkv"),
+            Some(ItemDisplay::Ignored { exists: false })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ignore_records_whether_the_file_exists_on_disk() {
+        let dir = TempDir::with_file("a.mkv");
+        let (mut app, _rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, dir.path_str()).await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Ignored {
+                exists: true,
+                deleting: false
+            })
+        );
+        assert_eq!(
+            app.cache
+                .get_sync_state_unvalidated("media", "a.mkv")
+                .unwrap(),
+            None,
+            "the pending change guards the base state; the cache isn't written"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ignore_and_delete_then_stale_listing_keeps_ignored() {
+        use crate::logic::display::ItemDisplay;
+        let dir = TempDir::with_file("a.mkv");
+        let (mut app, _rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, dir.path_str()).await;
+        app.cache
+            .save_sync_state("media", "a.mkv", SyncState::Synced, 0)
+            .unwrap();
+        let sent = std::time::Instant::now() - Duration::from_millis(1);
+
+        press(&mut app, crossterm::event::KeyCode::Char('I')).await;
+        handle_api_response(
+            &mut app,
+            ApiResponse::BrowseResult {
+                folder_id: "media".to_string(),
+                prefix: None,
+                items: Ok(vec![file_item("a.mkv")]),
+                requested_at: sent,
+            },
+        );
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true
+            })
+        );
+        assert_eq!(
+            displayed_media(&app, "a.mkv"),
+            Some(ItemDisplay::Ignored { exists: false })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plain_ignore_of_missing_file_does_not_block_unignore() {
+        let (mut app, _rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert!(app.model.pending.get("media", "a.mkv").is_some());
+        assert!(!app.model.pending.blocks_unignore("media", "a.mkv"));
+        assert_eq!(app.model.pending.ignore_delete_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ignore_and_delete_of_missing_file_records_ignored() {
+        let (mut app, _rx, _log) =
+            app_viewing_item(&[], SyncState::Synced, None, "/nonexistent/media").await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('I')).await;
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unignore_pre_scan_reply_after_post_scan_reply_keeps_unignored_state() {
+        let (mut app, _rx, _log) =
+            app_viewing_item(&["/a.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
+        let pre_scan = std::time::Instant::now() - Duration::from_millis(1);
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Unignored)
+        );
+        handle_api_response(
+            &mut app,
+            file_info_result("media", "a.mkv", SyncState::Synced),
+        );
+        assert_eq!(pending_kind(&app, "a.mkv"), None);
+        handle_api_response(
+            &mut app,
+            file_info_result_at("media", "a.mkv", SyncState::Ignored, pre_scan),
+        );
+
+        assert_eq!(
+            app.model.navigation.breadcrumb_trail[0].file_sync_states["a.mkv"],
+            SyncState::Synced
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unignore_menu_records_unignored() {
+        let (mut app, _rx, _log) = app_viewing_item(
+            &["/a.mkv", "/*.mkv"],
+            SyncState::Ignored,
+            None,
+            "/nonexistent/media",
+        )
+        .await;
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Unignored)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unignore_menu_blocked_while_ignore_delete_pending() {
+        let (mut app, _rx, log) = app_viewing_item(
+            &["/a.mkv", "/*.mkv"],
+            SyncState::Ignored,
+            None,
+            "/nonexistent/media",
+        )
+        .await;
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        assert!(app.model.ui.pattern_selection.is_some());
+        let before = ignore_bodies(&log).len();
+        app.record_pending(
+            "media",
+            "a.mkv",
+            crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Enter).await;
+
+        assert_eq!(ignore_bodies(&log).len(), before, "no patterns are written");
+        let toast = app.model.ui.toast.clone().expect("toast shown");
+        assert_eq!(
+            toast.message,
+            "Cannot un-ignore: deletion in progress for a.mkv"
+        );
+        assert_eq!(toast.kind, crate::model::ToastKind::Warning);
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ignore_then_unignore_replaces_pending_change() {
+        let (mut app, _rx, _log) =
+            app_viewing_item(&["/a.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
+        app.record_pending(
+            "media",
+            "a.mkv",
+            crate::model::pending::PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+
+        assert_eq!(
+            pending_kind(&app, "a.mkv"),
+            Some(crate::model::pending::PendingKind::Unignored)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unignore_not_applied_by_syncthing_expires() {
+        let (mut app, mut rx, _log) =
+            app_viewing_item(&["/a.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
+        app.model.navigation.breadcrumb_trail[0]
+            .ignored_exists
+            .insert("a.mkv".to_string(), true);
+
+        press(&mut app, crossterm::event::KeyCode::Char('i')).await;
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
+        handle_api_response(
+            &mut app,
+            ApiResponse::RescanResult {
+                folder_id: "media".to_string(),
+                success: true,
+                error: None,
+            },
+        );
+        handle_api_response(
+            &mut app,
+            file_info_result("media", "a.mkv", SyncState::Ignored),
+        );
+        assert_eq!(displayed_media(&app, "a.mkv"), None);
+
+        app.expire_pending(std::time::Instant::now() + crate::model::pending::PATH_DEADLINE);
+
+        assert_eq!(pending_kind(&app, "a.mkv"), None);
+        assert_eq!(
+            displayed_media(&app, "a.mkv"),
+            Some(crate::logic::display::ItemDisplay::Ignored { exists: true })
         );
     }
 
@@ -2093,27 +2392,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_unignore_key_scans_only_the_item() {
-        let (mut app, _rx, log) =
+        let (mut app, mut rx, _log) =
             app_viewing_item(&["/a.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
 
-        assert_eq!(next_scan_query(&log).await, "folder=media&sub=a.mkv");
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
     }
 
     #[tokio::test]
     async fn test_unignore_with_glob_pattern_scans_everything() {
-        let (mut app, _rx, log) =
+        let (mut app, mut rx, _log) =
             app_viewing_item(&["/*.mkv"], SyncState::Ignored, None, "/nonexistent/media").await;
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
 
-        assert_eq!(next_scan_query(&log).await, "folder=media");
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), Vec::<String>::new())]
+        );
     }
 
     #[tokio::test]
     async fn test_pattern_menu_literal_pattern_scans_only_the_item() {
-        let (mut app, _rx, log) = app_viewing_item(
+        let (mut app, mut rx, _log) = app_viewing_item(
             &["/a.mkv", "/*.mkv"],
             SyncState::Ignored,
             None,
@@ -2124,12 +2429,15 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
         press(&mut app, crossterm::event::KeyCode::Enter).await;
 
-        assert_eq!(next_scan_query(&log).await, "folder=media&sub=a.mkv");
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), vec!["a.mkv".to_string()])]
+        );
     }
 
     #[tokio::test]
     async fn test_pattern_menu_glob_pattern_scans_everything() {
-        let (mut app, _rx, log) = app_viewing_item(
+        let (mut app, mut rx, _log) = app_viewing_item(
             &["/a.mkv", "/*.mkv"],
             SyncState::Ignored,
             None,
@@ -2141,7 +2449,10 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Down).await;
         press(&mut app, crossterm::event::KeyCode::Enter).await;
 
-        assert_eq!(next_scan_query(&log).await, "folder=media");
+        assert_eq!(
+            queued_rescans(&mut rx),
+            vec![("media".to_string(), Vec::<String>::new())]
+        );
     }
 
     #[tokio::test]
@@ -3438,9 +3749,13 @@ mod tests {
     #[tokio::test]
     async fn test_toggle_ignore_blocked_by_pending_delete_returns_path_without_toast() {
         let (mut app, _rx) = app_viewing_ignored_item(&["/a.mkv"]).await;
-        app.add_pending_delete(
-            "media".to_string(),
-            std::path::PathBuf::from("/data/media/a.mkv"),
+        app.record_pending(
+            "media",
+            "a.mkv",
+            crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
         );
 
         let result = app.toggle_ignore().await.unwrap();
@@ -3448,7 +3763,7 @@ mod tests {
         assert_eq!(
             result,
             crate::app::ignore::IgnoreToggle::BlockedByPendingDelete(std::path::PathBuf::from(
-                "/data/media/a.mkv"
+                "a.mkv"
             ))
         );
         assert!(app.model.ui.toast.is_none());
@@ -3457,14 +3772,21 @@ mod tests {
     #[tokio::test]
     async fn test_i_on_item_pending_delete_shows_blocked_toast() {
         let (mut app, _rx) = app_viewing_ignored_item(&["/a.mkv"]).await;
-        app.add_pending_delete("media".to_string(), std::path::PathBuf::from("/data/media"));
+        app.record_pending(
+            "media",
+            "a.mkv",
+            crate::model::pending::PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+        );
 
         press(&mut app, crossterm::event::KeyCode::Char('i')).await;
 
         let toast = app.model.ui.toast.clone().expect("toast shown");
         assert_eq!(
             toast.message,
-            "Cannot un-ignore: deletion in progress for /data/media"
+            "Cannot un-ignore: deletion in progress for a.mkv"
         );
         assert_eq!(toast.kind, crate::model::ToastKind::Warning);
     }
@@ -4392,6 +4714,125 @@ mod tests {
         );
     }
 
+    fn confirm_delete(app: &mut App, path: &std::path::Path, name: &str, is_dir: bool) {
+        app.model.ui.confirm_action = Some(crate::model::ConfirmAction::Delete {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            is_dir,
+        });
+    }
+
+    fn temp_file(tag: &str, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stui-del-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name);
+        std::fs::write(&file, "x").unwrap();
+        (dir, file)
+    }
+
+    #[tokio::test]
+    async fn test_receive_only_delete_survives_status_with_zero_local_changes() {
+        let mut app = app_viewing_locally_deleted();
+        let (dir, file) = temp_file("zero", "printer.txt");
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(0);
+        confirm_delete(&mut app, &file, "printer.txt", false);
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        crate::handlers::api::handle_api_response(&mut app, status_result("documents", "idle"));
+
+        assert!(
+            deleted_here(&app, "manuals/printer.txt"),
+            "a zero receive-only status must not drop the pending deletion"
+        );
+        assert!(
+            app.model
+                .pending
+                .get("documents", "manuals/printer.txt")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_receive_only_directory_delete_rolls_up_to_parent() {
+        let mut app = app_viewing_locally_deleted();
+        let mut child = app.model.navigation.breadcrumb_trail[0].clone();
+        child.selected_index = Some(0);
+        let mut root = child.clone();
+        root.prefix = None;
+        root.items = vec![dir_item("manuals")];
+        root.file_sync_states =
+            std::collections::HashMap::from([("manuals".to_string(), SyncState::Synced)]);
+        root.selected_index = Some(0);
+        app.model.navigation.breadcrumb_trail = vec![root, child];
+        app.model.navigation.focus_level = 2;
+        let (dir, file) = temp_file("rollup", "printer.txt");
+        confirm_delete(&mut app, &file, "printer.txt", false);
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let root = &app.model.navigation.breadcrumb_trail[0];
+        let display = crate::logic::display::level_item_display(
+            &app.model.syncthing,
+            root,
+            &root.items[0],
+            &app.model.pending,
+        );
+        assert_ne!(
+            display,
+            Some(crate::logic::display::ItemDisplay::State(SyncState::Synced))
+        );
+        assert!(display.is_some(), "parent shows a local-change state");
+    }
+
+    #[tokio::test]
+    async fn test_normal_delete_row_stays_gone_on_stale_listing() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a"), file_item("b")]);
+        let (dir, file) = temp_file("stale", "a");
+        confirm_delete(&mut app, &file, "a", false);
+        let sent = std::time::Instant::now() - Duration::from_millis(1);
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::handlers::api::handle_api_response(
+            &mut app,
+            crate::services::api::ApiResponse::BrowseResult {
+                folder_id: "media".to_string(),
+                prefix: None,
+                items: Ok(vec![file_item("a"), file_item("b")]),
+                requested_at: sent,
+            },
+        );
+
+        let names: Vec<&str> = app.model.navigation.breadcrumb_trail[0]
+            .items
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["b"]);
+    }
+
+    #[tokio::test]
+    async fn test_failed_delete_shows_error_toast() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a")]);
+        let missing = std::env::temp_dir().join(format!("stui-missing-{}", std::process::id()));
+        confirm_delete(&mut app, &missing, "a", false);
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        let toast = app.model.ui.toast.as_ref().expect("toast");
+        assert_eq!(toast.kind, crate::model::ToastKind::Error);
+        assert!(
+            toast.message.starts_with("Failed to delete a: "),
+            "{}",
+            toast.message
+        );
+        assert_eq!(app.model.navigation.breadcrumb_trail[0].items.len(), 1);
+    }
+
     // ========================================
     // FINISHED DOWNLOADS
     // ========================================
@@ -4541,6 +4982,89 @@ mod tests {
         assert_eq!(
             displayed_states(&app).get("router-setup.txt"),
             Some(&SyncState::Synced)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_undelete_records_restoring_pending_change() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+
+        let change = app
+            .model
+            .pending
+            .get("documents", "manuals/router-setup.txt");
+        assert_eq!(
+            change.map(|c| c.kind.clone()),
+            Some(crate::model::pending::PendingKind::Restoring)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pause_during_restore_clears_syncing_icon() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+        assert!(
+            app.model
+                .pending
+                .get("documents", "manuals/router-setup.txt")
+                .is_some()
+        );
+
+        handle_api_response(&mut app, status_result("documents", "paused"));
+
+        assert!(
+            app.model
+                .pending
+                .get("documents", "manuals/router-setup.txt")
+                .is_none()
+        );
+        assert_ne!(
+            displayed_states(&app).get("router-setup.txt"),
+            Some(&SyncState::Syncing)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_local_changed_after_item_finished_does_not_show_deleted() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+        let before_undelete = std::time::Instant::now();
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+        assert!(
+            app.model
+                .pending
+                .get("documents", "manuals/router-setup.txt")
+                .is_some()
+        );
+        handle_cache_invalidation(
+            &mut app,
+            item_finished("documents", "manuals/router-setup.txt"),
+        );
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("documents".to_string(), 1);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::LocalChangedIndex {
+                folder_id: "documents".to_string(),
+                sequence: 1,
+                files: Ok(vec![crate::api::LocalChangedFile {
+                    name: "manuals/router-setup.txt".to_string(),
+                    deleted: true,
+                }]),
+                requested_at: before_undelete,
+            },
+        );
+
+        assert_eq!(
+            displayed_items(&app)["router-setup.txt"],
+            Some(crate::logic::display::ItemDisplay::State(SyncState::Synced))
         );
     }
 }

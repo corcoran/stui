@@ -63,13 +63,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         (None, None, None, None)
     };
 
-    let pending_operations_count: usize = app
-        .model
-        .performance
-        .pending_ignore_deletes
-        .values()
-        .map(|info| info.paths.len())
-        .sum();
+    let pending_operations_count: usize = app.model.pending.ignore_delete_count();
 
     // Calculate dynamic status bar height
     let out_of_sync_filter_active = app.model.ui.out_of_sync_filter.is_some();

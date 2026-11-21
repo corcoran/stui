@@ -533,8 +533,21 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
 ### Derived States
 `model.syncthing.need_index` holds each folder's queued/rest need entries, receive-only local changes and ignore patterns, refetched on sequence changes and syncing transitions. `logic::sync_states::derived_state` fills states the cache and FileInfo haven't supplied: listed paths and their ancestors get the listed state (a directory's aggregate beats its own Synced FileInfo), and anything else is Synced only when the folder is idle, the index is complete for the current sequence and no ignore pattern could match.
 
+### Pending Local Changes
+`model.pending` (`model::pending`) records what the user did until Syncthing confirms it. Per path, `PendingKind` is `DeletedLocally`, `Removed`, `Ignored { exists, deleting }`, `Unignored`, `Restoring` or `Reverting` (a folder revert's non-deleted files); `PendingFolderKind::Reverting` covers the folder itself. `deleting` is true only for `I` (ignore and delete); it blocks unignore and counts in the status bar.
+
+`logic::pending` judges every reply: it confirms a change when Syncthing's data shows the result, and keeps it otherwise. Requests for listings, file info, folder status and local changes carry `requested_at`. Older status and listing replies are dropped (`status_applied_at`, `browse_applied_at`). A FileInfo reply is dropped when it is older than an ItemFinished event for the path (`path_events`) or than the reply that confirmed the pending change (`file_info_confirmed_at`).
+
+Deadlines: a per-path change expires 30 s after its folder's rescan returns. A revert's `Reverting` paths and its folder change expire 2 min after the revert request returns. `Restoring` has none. Expiry drops the change silently and logs it. It refetches the file when an open level lists it, and relists the level for `Removed`. When a rescan returns, the file of each `Ignored` or `Unignored` change in that folder is refetched. `app::pending` applies these rules.
+
+`Unignored` shows the item as loading until Syncthing confirms it is no longer ignored.
+
+`logic::display::level_item_display` draws every item: the pending change first, then Syncthing's state. A directory shows Syncing while a `Restoring` or `Reverting` change is below it.
+
+Cache: reads skip pending paths. Confirmed states and ItemFinished Synced are written through.
+
 ### Undelete
-Syncthing has no per-file revert, so `u` ignores the file's exact path, rescans it (Syncthing forgets the local deletion), puts the original ignore list back and rescans again (Syncthing downloads it). Rescans block while a folder syncs, so batches run in the background, one per folder at a time (`App::undelete_jobs`); presses during a batch join the next one. The temporary patterns are recorded in the cache table `pending_undelete_ignores` before they are added and removed after, and `App::remove_leftover_undelete_patterns` clears any left over at startup. `model.syncthing.restoring` keeps restored files in `syncing_files` (which need responses rebuild) until `ItemFinished`, which also marks the file Synced and drops its local change.
+Syncthing has no per-file revert, so `u` ignores the file's exact path, rescans it (Syncthing forgets the local deletion), puts the original ignore list back and rescans again (Syncthing downloads it). Rescans block while a folder syncs, so batches run in the background, one per folder at a time (`App::undelete_jobs`); presses during a batch join the next one. The temporary patterns are recorded in the cache table `pending_undelete_ignores` before they are added and removed after, and `App::remove_leftover_undelete_patterns` clears any left over at startup. Each restored file is a `Restoring` pending change (see Pending Local Changes) until `ItemFinished`, which marks it Synced and drops its local change.
 
 ## Current State
 

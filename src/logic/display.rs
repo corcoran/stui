@@ -42,10 +42,12 @@ pub struct ItemInput<'a> {
 pub fn item_display(input: &ItemInput) -> Option<ItemDisplay> {
     match input.pending {
         Some(PendingKind::DeletedLocally) => return Some(ItemDisplay::LocallyDeleted),
-        Some(PendingKind::Ignored { exists }) => {
+        Some(PendingKind::Ignored { exists, .. }) => {
             return Some(ItemDisplay::Ignored { exists: *exists });
         }
-        Some(PendingKind::Restoring) => return Some(ItemDisplay::State(SyncState::Syncing)),
+        Some(PendingKind::Restoring | PendingKind::Reverting) => {
+            return Some(ItemDisplay::State(SyncState::Syncing));
+        }
         Some(PendingKind::Removed) => return None,
         Some(PendingKind::Unignored) if input.base == Some(SyncState::Ignored) => return None,
         Some(PendingKind::Unignored) | None => {}
@@ -78,7 +80,14 @@ pub fn level_item_display(
         syncing: syncthing.syncing_files.get(&level.folder_id),
         index: syncthing.need_index.get(&level.folder_id),
         ignored_exists: level.ignored_exists.get(&item.name).copied(),
-        pending: pending.get(&level.folder_id, &path).map(|c| &c.kind),
+        pending: pending
+            .get(&level.folder_id, &path)
+            .map(|c| &c.kind)
+            .or_else(|| {
+                let is_dir = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
+                (is_dir && pending.transfer_below(&level.folder_id, &path))
+                    .then_some(&PendingKind::Reverting)
+            }),
     })
 }
 
@@ -182,15 +191,31 @@ mod tests {
             Some(ItemDisplay::LocallyDeleted)
         );
         assert_eq!(
-            shown(Some(Synced), PendingKind::Ignored { exists: false }),
+            shown(
+                Some(Synced),
+                PendingKind::Ignored {
+                    exists: false,
+                    deleting: false
+                }
+            ),
             Some(ItemDisplay::Ignored { exists: false })
         );
         assert_eq!(
-            shown(None, PendingKind::Ignored { exists: true }),
+            shown(
+                None,
+                PendingKind::Ignored {
+                    exists: true,
+                    deleting: false
+                }
+            ),
             Some(ItemDisplay::Ignored { exists: true })
         );
         assert_eq!(
             shown(Some(RemoteOnly), PendingKind::Restoring),
+            Some(ItemDisplay::State(Syncing))
+        );
+        assert_eq!(
+            shown(Some(LocalOnly), PendingKind::Reverting),
             Some(ItemDisplay::State(Syncing))
         );
         assert_eq!(shown(Some(Ignored), PendingKind::Unignored), None);
@@ -224,7 +249,10 @@ mod tests {
         pending.record(
             "f",
             "sub/a.txt",
-            PendingKind::Ignored { exists: true },
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
             std::time::Instant::now(),
         );
 

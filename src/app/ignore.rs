@@ -5,12 +5,11 @@
 //! - Ignore and delete (immediate action)
 
 use crate::logic::ignore::{ScanScope, scan_scope_for_pattern};
-use crate::{App, SyncState, log_debug, logic, model, services};
+use crate::logic::pending::Observation;
+use crate::model::pending::PendingKind;
+use crate::{App, SyncState, log_debug, logic, model};
 use anyhow::Result;
 use std::path::PathBuf;
-use std::time::Duration;
-
-const UNIGNORE_FOLLOW_UP_DELAY: Duration = Duration::from_secs(2);
 
 /// What `toggle_ignore` did, so the key handler can give feedback.
 #[derive(Debug, PartialEq, Eq)]
@@ -95,18 +94,14 @@ impl App {
     /// Undelete `path` in `folder_id`: its local deletion is dropped from the index at once,
     /// and it joins the folder's next batch if one is already running.
     pub(crate) fn queue_undelete(&mut self, folder_id: &str, path: String) {
-        if let Some(index) = self.model.syncthing.need_index.get_mut(folder_id) {
-            logic::sync_states::forget_local_change(index, &path);
-        }
+        self.record_pending(folder_id, &path, PendingKind::Restoring);
         // Shown syncing until Syncthing reports the download finished
-        for set in [
-            &mut self.model.syncthing.syncing_files,
-            &mut self.model.syncthing.restoring,
-        ] {
-            set.entry(folder_id.to_string())
-                .or_default()
-                .insert(path.clone());
-        }
+        self.model
+            .syncthing
+            .syncing_files
+            .entry(folder_id.to_string())
+            .or_default()
+            .insert(path.clone());
         let job = self.undelete_jobs.entry(folder_id.to_string()).or_default();
         if job.running {
             if !job.pending.contains(&path) {
@@ -134,20 +129,12 @@ impl App {
 
     /// Show a failed batch's files as deleted locally again instead of syncing
     pub(crate) fn mark_undelete_failed(&mut self, done: &UndeleteDone) {
-        let syncthing = &mut self.model.syncthing;
-        for sets in [&mut syncthing.syncing_files, &mut syncthing.restoring] {
-            if let Some(set) = sets.get_mut(&done.folder_id) {
-                for path in &done.paths {
-                    set.remove(path);
-                }
-            }
-        }
-        let index = syncthing
-            .need_index
-            .entry(done.folder_id.clone())
-            .or_default();
         for path in &done.paths {
-            logic::sync_states::record_local_deletion(index, path);
+            if let Some(set) = self.model.syncthing.syncing_files.get_mut(&done.folder_id) {
+                set.remove(path);
+            }
+            self.observe_path(&done.folder_id, path, Observation::ActionFailed);
+            self.record_pending(&done.folder_id, path, PendingKind::DeletedLocally);
         }
     }
 
@@ -241,23 +228,18 @@ impl App {
         let patterns = self.client.get_ignore_patterns(&folder_id).await?;
 
         if sync_state == SyncState::Ignored {
-            // File is ignored - check if un-ignore is allowed (not pending deletion)
-            // Build host path to check against pending deletes
-            let level = &self.model.navigation.breadcrumb_trail[level_idx];
-            let host_path = format!(
-                "{}/{}",
-                level.translated_base_path.trim_end_matches('/'),
-                item.name
-            );
-            let path_buf = PathBuf::from(&host_path);
-
-            // Check if this path or any parent is pending deletion
-            if let Some(pending_path) = self.is_path_or_parent_pending(&folder_id, &path_buf) {
+            if self
+                .model
+                .pending
+                .blocks_unignore(&folder_id, &relative_path)
+            {
                 log_debug(&format!(
-                    "Blocked un-ignore: path {:?} is pending deletion",
-                    pending_path
+                    "Blocked un-ignore: {} is pending deletion",
+                    relative_path
                 ));
-                return Ok(IgnoreToggle::BlockedByPendingDelete(pending_path));
+                return Ok(IgnoreToggle::BlockedByPendingDelete(PathBuf::from(
+                    &relative_path,
+                )));
             }
 
             // File is ignored - find matching patterns and remove them
@@ -286,6 +268,7 @@ impl App {
                 } else {
                     item_name.clone()
                 };
+                self.record_pending(&folder_id, &file_path_for_api, PendingKind::Unignored);
                 self.finish_unignore(&folder_id, file_path_for_api, scope);
                 return Ok(IgnoreToggle::Unignored(item_name));
             } else {
@@ -315,6 +298,7 @@ impl App {
                 .await?;
 
             // Immediately mark as ignored in UI
+            let mut exists = false;
             if let Some(level) = self.model.navigation.breadcrumb_trail.get_mut(level_idx) {
                 level
                     .file_sync_states
@@ -327,14 +311,17 @@ impl App {
                     level.translated_base_path.trim_end_matches('/'),
                     item_name
                 );
-                let exists = std::path::Path::new(&host_path).exists();
+                exists = std::path::Path::new(&host_path).exists();
                 level.ignored_exists.insert(item_name.clone(), exists);
-
-                // Update cache immediately so browse refresh doesn't overwrite with stale data
-                let _ =
-                    self.cache
-                        .save_sync_state(&folder_id, &relative_path, SyncState::Ignored, 0);
             }
+            self.record_pending(
+                &folder_id,
+                &relative_path,
+                PendingKind::Ignored {
+                    exists,
+                    deleting: false,
+                },
+            );
 
             self.rescan_paths(
                 &folder_id,
@@ -347,41 +334,14 @@ impl App {
         Ok(IgnoreToggle::Ignored)
     }
 
-    /// Rescan after an unignore and refresh the item's state.
-    ///
-    /// Saving ignore patterns makes Syncthing schedule a full scan of the folder itself, and
-    /// this folder's scans run one at a time. The scoped scan here queues behind that one, so
-    /// its completion marks the point where FileInfo reflects the change.
-    ///
-    /// The item keeps its Ignored state and icon until a FileInfo response replaces them.
-    /// `POST /rest/db/scan` returns once the scan has finished, so the first FileInfo
-    /// reflects the new ignore patterns. The second one catches flags the puller updates
-    /// after the scan (an unignored file that only exists remotely).
+    /// Rescan after an unignore. The item shows as loading until a FileInfo reply says it is
+    /// no longer ignored; the RescanResult handler requests that FileInfo once the scan returns.
     pub(crate) fn finish_unignore(&self, folder_id: &str, file_path: String, scope: ScanScope) {
         log_debug(&format!(
             "DEBUG [finish_unignore]: folder={} path={}",
             folder_id, file_path
         ));
-
-        let client = self.client.clone();
-        let folder_id = folder_id.to_string();
-        let api_tx = self.api_tx.clone();
-
-        tokio::spawn(async move {
-            // Give Syncthing a moment to apply the new .stignore before scanning
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            let _ = client.rescan_paths(&folder_id, scope.subs()).await;
-
-            let request = || services::api::ApiRequest::GetFileInfo {
-                folder_id: folder_id.clone(),
-                file_path: file_path.clone(),
-                priority: services::api::Priority::High,
-                requested_at: std::time::Instant::now(),
-            };
-            let _ = api_tx.send(request());
-            tokio::time::sleep(UNIGNORE_FOLLOW_UP_DELAY).await;
-            let _ = api_tx.send(request());
-        });
+        self.rescan_paths(folder_id, scope.subs().to_vec());
     }
 
     pub(crate) async fn ignore_and_delete(&mut self) -> Result<()> {
@@ -429,7 +389,7 @@ impl App {
 
         // Check if file exists on disk
         if !std::path::Path::new(&host_path).exists() {
-            // File doesn't exist, just add to ignore (no need to track pending)
+            // File doesn't exist, just add to ignore
             let patterns = self.client.get_ignore_patterns(&folder_id).await?;
             let new_pattern = format!("/{}", relative_path);
 
@@ -449,6 +409,14 @@ impl App {
                     // Update ignored_exists (file is now ignored)
                     self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
                 }
+                self.record_pending(
+                    &folder_id,
+                    &relative_path,
+                    PendingKind::Ignored {
+                        exists: false,
+                        deleting: true,
+                    },
+                );
 
                 self.rescan_paths(
                     &folder_id,
@@ -472,10 +440,15 @@ impl App {
                 .await?;
         }
 
-        // Register this path as pending deletion BEFORE we delete
-        // This prevents un-ignore until Syncthing processes the change
-        let path_buf = PathBuf::from(&host_path);
-        self.add_pending_delete(folder_id.clone(), path_buf.clone());
+        // Recorded before the delete so un-ignore is blocked until Syncthing confirms
+        self.record_pending(
+            &folder_id,
+            &relative_path,
+            PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+        );
 
         // Now delete the file
         let is_dir = std::path::Path::new(&host_path).is_dir();
@@ -493,7 +466,6 @@ impl App {
                         "Warning: File still exists after deletion: {}",
                         host_path
                     ));
-                    // Keep in pending set for safety
                 } else {
                     log_debug(&format!("Successfully deleted file: {}", host_path));
                 }
@@ -507,16 +479,6 @@ impl App {
                     self.update_ignored_exists_for_file(level_idx, &item_name, SyncState::Ignored);
                 }
 
-                // Mark that rescan has been triggered for this folder
-                if let Some(pending_info) = self
-                    .model
-                    .performance
-                    .pending_ignore_deletes
-                    .get_mut(&folder_id)
-                {
-                    pending_info.rescan_triggered = true;
-                }
-
                 self.rescan_paths(
                     &folder_id,
                     scan_scope_for_pattern(&format!("/{}", relative_path), &relative_path)
@@ -525,9 +487,8 @@ impl App {
                 );
             }
             Err(e) => {
-                // Deletion failed - remove from pending immediately
                 log_debug(&format!("Failed to delete file: {} - {}", host_path, e));
-                self.remove_pending_delete(&folder_id, &path_buf);
+                self.model.pending.remove(&folder_id, &relative_path);
                 return Err(e.into());
             }
         }

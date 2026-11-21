@@ -6,8 +6,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use super::types::PendingDeleteInfo;
-
 /// Performance tracking and operational state
 #[derive(Clone, Debug)]
 pub struct PerformanceModel {
@@ -50,9 +48,6 @@ pub struct PerformanceModel {
     // ============================================
     // OPERATIONS
     // ============================================
-    /// Pending ignore+delete operations (blocks un-ignore)
-    pub pending_ignore_deletes: HashMap<String, PendingDeleteInfo>,
-
     /// Last time user interacted with UI
     pub last_user_action: Instant,
 
@@ -73,7 +68,6 @@ impl PerformanceModel {
             last_known_receive_only_counts: HashMap::new(),
             last_load_time_ms: None,
             cache_hit: None,
-            pending_ignore_deletes: HashMap::new(),
             last_user_action: Instant::now(),
             last_search_filter_update: Instant::now(),
         }
@@ -105,7 +99,6 @@ mod tests {
         let model = PerformanceModel::new();
         assert!(model.prefetch_enabled);
         assert!(model.loading_browse.is_empty());
-        assert!(model.pending_ignore_deletes.is_empty());
     }
 
     #[test]

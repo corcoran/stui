@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deleting a file in a Receive Only folder keeps it in the list as deleted locally, instead of removing the row and briefly showing ✅
 - A file shows ✅ as soon as its download finishes, instead of after the next directory refresh
 - Preview error messages wrap at word boundaries instead of mid-word
+- Icons no longer flip back to an older state after you delete, ignore, unignore, undelete or revert
+- `R` updates the whole folder at once instead of file by file
+- A failed delete or revert shows an error
 
 ---
 

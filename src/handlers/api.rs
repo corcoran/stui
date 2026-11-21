@@ -426,21 +426,42 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             ));
 
             let path = file_path.trim_end_matches('/');
-            if app.model.pending.get(&folder_id, path).is_some()
-                && app.observe_path(
+            let confirmed_key = (folder_id.clone(), path.to_string());
+            if app
+                .model
+                .syncthing
+                .file_info_confirmed_at
+                .get(&confirmed_key)
+                .is_some_and(|confirmed| requested_at < *confirmed)
+            {
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult]: dropping reply older than the one that confirmed a change folder={} path={}",
+                    folder_id, file_path
+                ));
+                return;
+            }
+            if app.model.pending.get(&folder_id, path).is_some() {
+                let verdict = app.observe_path(
                     &folder_id,
                     path,
                     Observation::FileInfo {
                         state,
                         requested_at,
                     },
-                ) == Verdict::Keep
-            {
-                crate::log_debug(&format!(
-                    "DEBUG [FileInfoResult]: pending change kept, not applying folder={} path={} state={:?}",
-                    folder_id, file_path, state
-                ));
-                return;
+                );
+                if verdict == Verdict::Keep {
+                    crate::log_debug(&format!(
+                        "DEBUG [FileInfoResult]: pending change kept, not applying folder={} path={} state={:?}",
+                        folder_id, file_path, state
+                    ));
+                    return;
+                }
+                if verdict == Verdict::Confirmed {
+                    app.model
+                        .syncthing
+                        .file_info_confirmed_at
+                        .insert(confirmed_key, requested_at);
+                }
             }
 
             // Cached even when the folder is no longer on screen, so it isn't fetched again
@@ -703,9 +724,32 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             success,
             error,
         } => {
-            app.model
+            let now = std::time::Instant::now();
+            app.model.pending.start_deadlines(&folder_id, now);
+            let ignore_changes: Vec<String> = app
+                .model
                 .pending
-                .start_deadlines(&folder_id, std::time::Instant::now());
+                .in_folder(&folder_id)
+                .filter(|(_, change)| {
+                    matches!(
+                        change.kind,
+                        PendingKind::Ignored { .. } | PendingKind::Unignored
+                    ) && change.started <= now
+                })
+                .map(|(path, _)| path.to_string())
+                .collect();
+            for path in ignore_changes {
+                app.model
+                    .performance
+                    .loading_sync_states
+                    .insert(format!("{}:{}", folder_id, path));
+                let _ = app.api_tx.send(ApiRequest::GetFileInfo {
+                    folder_id: folder_id.clone(),
+                    file_path: path,
+                    priority: Priority::High,
+                    requested_at: now,
+                });
+            }
             if success {
                 crate::log_debug(&format!(
                     "DEBUG [RescanResult]: Successfully rescanned folder={}, requesting immediate status update",
@@ -973,7 +1017,12 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         syncing.len()
                     ));
                     let mut syncing = syncing;
-                    syncing.extend(app.model.syncthing.restoring_in(&folder_id));
+                    syncing.extend(
+                        app.model
+                            .pending
+                            .restoring_in(&folder_id)
+                            .map(str::to_string),
+                    );
                     app.model
                         .syncthing
                         .syncing_files
@@ -1050,6 +1099,17 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         .entry(folder_id.clone())
                         .or_default();
                     crate::logic::sync_states::set_index_local_changed(index, &files, sequence);
+                    // A download that finished after the request already undid its local change
+                    if let Some(events) = app.model.syncthing.path_events.get(&folder_id) {
+                        for (path, event) in events {
+                            if event.kind == crate::model::syncthing::PathEventKind::Finished
+                                && event.succeeded
+                                && event.at > requested_at
+                            {
+                                crate::logic::sync_states::forget_local_change(index, path);
+                            }
+                        }
+                    }
                     let pending: Vec<String> = app
                         .model
                         .pending
@@ -1168,8 +1228,8 @@ mod tests {
     use super::*;
     use crate::handlers::events::handle_cache_invalidation;
     use crate::logic::display::ItemDisplay;
-    use crate::logic::pending::PATH_DEADLINE;
     use crate::model::pending::PendingFolderKind;
+    use crate::model::pending::{PATH_DEADLINE, REVERT_DEADLINE};
     use crate::test_support::{
         create_test_app, create_test_app_with_api_rx, file_details, file_item, folder_status,
         item_finished, status_result, view_folder_root,
@@ -1351,7 +1411,14 @@ mod tests {
         let mut app = create_test_app();
         view_folder_root(&mut app, "f", vec![file_item("a")]);
         let sent = before_now();
-        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
 
         handle_api_response(&mut app, file_info("a", SyncState::Synced, sent));
 
@@ -1371,7 +1438,14 @@ mod tests {
     fn test_pending_ignored_survives_fresh_unconfirming_file_info() {
         let mut app = create_test_app();
         view_folder_root(&mut app, "f", vec![file_item("a")]);
-        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
 
         handle_api_response(&mut app, file_info("a", SyncState::Synced, Instant::now()));
 
@@ -1387,7 +1461,14 @@ mod tests {
     fn test_pending_ignored_confirmed_by_fresh_file_info_clears_change() {
         let mut app = create_test_app();
         view_folder_root(&mut app, "f", vec![file_item("a")]);
-        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
 
         handle_api_response(&mut app, file_info("a", SyncState::Ignored, Instant::now()));
 
@@ -1490,7 +1571,14 @@ mod tests {
         app.cache
             .save_sync_state("f", "a", SyncState::Synced, 1)
             .unwrap();
-        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
 
         handle_api_response(&mut app, listing("f", &["a"], Instant::now()));
 
@@ -1504,7 +1592,14 @@ mod tests {
     fn test_rescan_result_starts_deadline_and_expiry_requests_file_info() {
         let (mut app, mut rx) = create_test_app_with_api_rx();
         view_folder_root(&mut app, "f", vec![file_item("a")]);
-        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
 
         handle_api_response(
             &mut app,
@@ -1535,6 +1630,79 @@ mod tests {
     }
 
     #[test]
+    fn test_rescan_result_refetches_pending_ignore_paths() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
+        app.record_pending("f", "b", PendingKind::Unignored);
+        app.record_pending("f", "c", PendingKind::Removed);
+        app.record_pending("g", "d", PendingKind::Unignored);
+        while rx.try_recv().is_ok() {}
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::RescanResult {
+                folder_id: "f".to_string(),
+                success: true,
+                error: None,
+            },
+        );
+
+        let mut fetched: Vec<(String, String)> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|r| match r {
+                ApiRequest::GetFileInfo {
+                    folder_id,
+                    file_path,
+                    priority: Priority::High,
+                    ..
+                } => Some((folder_id, file_path)),
+                _ => None,
+            })
+            .collect();
+        fetched.sort();
+        assert_eq!(
+            fetched,
+            vec![
+                ("f".to_string(), "a".to_string()),
+                ("f".to_string(), "b".to_string())
+            ]
+        );
+        let loading = &app.model.performance.loading_sync_states;
+        assert!(loading.contains("f:a") && loading.contains("f:b"));
+        assert!(!loading.contains("f:c") && !loading.contains("g:d"));
+    }
+
+    #[test]
+    fn test_expired_removed_change_relists_its_level() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(&mut app, "f", vec![file_item("b")]);
+        app.model.navigation.breadcrumb_trail[0].prefix = Some("dir/".to_string());
+        app.record_pending("f", "dir/a", PendingKind::Removed);
+        app.model.pending.start_deadlines("f", Instant::now());
+        while rx.try_recv().is_ok() {}
+
+        app.expire_pending(Instant::now() + PATH_DEADLINE);
+
+        let queued: Vec<ApiRequest> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            queued.iter().any(|r| matches!(
+                r,
+                ApiRequest::BrowseFolder { folder_id, prefix, priority: Priority::High, .. }
+                    if folder_id == "f" && prefix.as_deref() == Some("dir/")
+            )),
+            "{:?}",
+            queued
+        );
+        assert!(app.model.performance.loading_browse.contains("f:dir/"));
+    }
+
+    #[test]
     fn test_failed_rescan_also_starts_deadline() {
         let mut app = create_test_app();
         app.record_pending("f", "a", PendingKind::Removed);
@@ -1549,6 +1717,38 @@ mod tests {
         );
 
         assert!(app.model.pending.get("f", "a").unwrap().deadline.is_some());
+    }
+
+    #[test]
+    fn test_expiry_refetches_only_open_level_paths() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Unignored);
+        app.record_pending("f", "sub/b", PendingKind::Unignored);
+        app.record_pending("g", "c", PendingKind::Unignored);
+        let now = Instant::now();
+        app.model.pending.start_deadlines("f", now);
+        app.model.pending.start_deadlines("g", now);
+        while rx.try_recv().is_ok() {}
+
+        app.expire_pending(now + PATH_DEADLINE);
+
+        assert_eq!(app.model.pending.in_folder("f").count(), 0);
+        assert_eq!(app.model.pending.in_folder("g").count(), 0);
+        let fetched: Vec<(String, String)> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|r| match r {
+                ApiRequest::GetFileInfo {
+                    folder_id,
+                    file_path,
+                    ..
+                } => Some((folder_id, file_path)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fetched, vec![("f".to_string(), "a".to_string())]);
+        let loading = &app.model.performance.loading_sync_states;
+        assert!(loading.contains("f:a"));
+        assert!(!loading.contains("f:sub/b") && !loading.contains("g:c"));
     }
 
     #[test]
@@ -1643,5 +1843,386 @@ mod tests {
             displayed(&app, "a"),
             Some(ItemDisplay::State(SyncState::Synced))
         );
+    }
+
+    // ========================================
+    // REVERT
+    // ========================================
+
+    /// Answers every request with an empty 200 until the test ends
+    async fn spawn_ok_stub() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    fn changed(name: &str, deleted: bool) -> crate::api::LocalChangedFile {
+        crate::api::LocalChangedFile {
+            name: name.to_string(),
+            deleted,
+        }
+    }
+
+    fn reverting_changes() -> Vec<crate::api::LocalChangedFile> {
+        vec![
+            changed("gone", true),
+            changed("edited", false),
+            changed("new", false),
+        ]
+    }
+
+    fn revert_app(url: &str) -> App {
+        let (mut app, _rx) = crate::test_support::create_test_app_at(url);
+        view_folder_root(
+            &mut app,
+            "f",
+            vec![file_item("gone"), file_item("edited"), file_item("new")],
+        );
+        let mut index = crate::model::syncthing::NeedIndex::default();
+        crate::logic::sync_states::set_index_local_changed(&mut index, &reverting_changes(), 5);
+        app.model
+            .syncthing
+            .need_index
+            .insert("f".to_string(), index);
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("f".to_string(), 5);
+        app
+    }
+
+    fn all_syncing(app: &App) -> bool {
+        ["gone", "edited", "new"]
+            .iter()
+            .all(|n| displayed(app, n) == Some(ItemDisplay::State(SyncState::Syncing)))
+    }
+
+    #[tokio::test]
+    async fn test_revert_marks_local_changes_pending() {
+        let url = spawn_ok_stub().await;
+        let mut app = revert_app(&url);
+
+        let before = Instant::now();
+        app.revert_folder_changes("f", &reverting_changes())
+            .await
+            .unwrap();
+        let after = Instant::now();
+
+        let kind = |p: &str| app.model.pending.get("f", p).map(|c| c.kind.clone());
+        assert_eq!(kind("gone"), Some(PendingKind::Restoring));
+        assert_eq!(kind("edited"), Some(PendingKind::Reverting));
+        assert_eq!(kind("new"), Some(PendingKind::Reverting));
+        let folder = app.model.pending.folder("f").unwrap();
+        assert_eq!(folder.kind, PendingFolderKind::Reverting);
+        let deadline = folder.deadline.expect("deadline set after the request");
+        assert!(deadline >= before + REVERT_DEADLINE);
+        assert!(deadline <= after + REVERT_DEADLINE);
+        assert!(all_syncing(&app));
+        assert!(app.model.syncthing.need_index["f"].local_changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_revert_stale_replies_do_not_flip_icons() {
+        let url = spawn_ok_stub().await;
+        let mut app = revert_app(&url);
+        let sent = before_now();
+        app.revert_folder_changes("f", &reverting_changes())
+            .await
+            .unwrap();
+
+        handle_api_response(&mut app, file_info("gone", SyncState::RemoteOnly, sent));
+        handle_api_response(&mut app, file_info("edited", SyncState::Synced, sent));
+        handle_api_response(&mut app, file_info("new", SyncState::Synced, sent));
+        handle_api_response(
+            &mut app,
+            ApiResponse::LocalChangedIndex {
+                folder_id: "f".to_string(),
+                sequence: 5,
+                requested_at: sent,
+                files: Ok(reverting_changes()),
+            },
+        );
+
+        assert!(all_syncing(&app));
+        assert_eq!(app.model.pending.in_folder("f").count(), 3);
+        assert!(app.model.syncthing.need_index["f"].local_changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_revert_confirmed_by_zero_local_changes_status() {
+        let url = spawn_ok_stub().await;
+        let mut app = revert_app(&url);
+        let sent = before_now();
+        app.revert_folder_changes("f", &reverting_changes())
+            .await
+            .unwrap();
+
+        handle_api_response(
+            &mut app,
+            crate::test_support::status_result_at("f", "idle", sent),
+        );
+        assert!(app.model.pending.folder("f").is_some());
+
+        handle_api_response(&mut app, status_result("f", "idle"));
+        assert!(app.model.pending.folder("f").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_revert_path_changes_expire_with_the_folder() {
+        let url = spawn_ok_stub().await;
+        let (mut app, _rx) = crate::test_support::create_test_app_at(&url);
+        view_folder_root(
+            &mut app,
+            "f",
+            vec![crate::test_support::dir_item("d"), file_item("edited")],
+        );
+        let changes = vec![changed("d/x", false), changed("edited", false)];
+        let mut index = crate::model::syncthing::NeedIndex::default();
+        crate::logic::sync_states::set_index_local_changed(&mut index, &changes, 5);
+        app.model
+            .syncthing
+            .need_index
+            .insert("f".to_string(), index);
+        app.revert_folder_changes("f", &changes).await.unwrap();
+        assert_eq!(
+            displayed(&app, "d"),
+            Some(ItemDisplay::State(SyncState::Syncing))
+        );
+
+        app.expire_pending(Instant::now() + REVERT_DEADLINE);
+
+        assert!(app.model.pending.folder("f").is_none());
+        assert!(
+            !app.model
+                .pending
+                .in_folder("f")
+                .any(|(_, c)| c.kind == PendingKind::Reverting)
+        );
+        assert_ne!(
+            displayed(&app, "d"),
+            Some(ItemDisplay::State(SyncState::Syncing))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_revert_failure_drops_changes() {
+        let mut app = revert_app("http://127.0.0.1:9");
+        app.refresh_derived_states("f");
+        let before: Vec<_> = ["gone", "edited", "new"]
+            .iter()
+            .map(|n| displayed(&app, n))
+            .collect();
+        assert_eq!(before[0], Some(ItemDisplay::LocallyDeleted));
+
+        let result = app.revert_folder_changes("f", &reverting_changes()).await;
+
+        assert!(result.is_err());
+        assert_eq!(app.model.pending.in_folder("f").count(), 0);
+        assert!(app.model.pending.folder("f").is_none());
+        let after: Vec<_> = ["gone", "edited", "new"]
+            .iter()
+            .map(|n| displayed(&app, n))
+            .collect();
+        assert_eq!(after, before);
+        let index = &app.model.syncthing.need_index["f"];
+        assert_eq!(
+            index.local_changed.get("gone"),
+            Some(&SyncState::RemoteOnly)
+        );
+        assert_eq!(
+            index.local_changed.get("edited"),
+            Some(&SyncState::LocalOnly)
+        );
+        assert_eq!(index.local_changed.get("new"), Some(&SyncState::LocalOnly));
+    }
+
+    #[tokio::test]
+    async fn test_revert_updates_parent_directory_at_once() {
+        let url = spawn_ok_stub().await;
+        let (mut app, _rx) = crate::test_support::create_test_app_at(&url);
+        view_folder_root(&mut app, "f", vec![crate::test_support::dir_item("d")]);
+        let changes = vec![changed("d/x", false)];
+        let mut index = crate::model::syncthing::NeedIndex::default();
+        crate::logic::sync_states::set_index_local_changed(&mut index, &changes, 5);
+        app.model
+            .syncthing
+            .need_index
+            .insert("f".to_string(), index);
+        app.refresh_derived_states("f");
+        let before = displayed(&app, "d");
+        assert_eq!(before, Some(ItemDisplay::State(SyncState::LocalOnly)));
+
+        app.revert_folder_changes("f", &changes).await.unwrap();
+
+        assert_eq!(
+            displayed(&app, "d"),
+            Some(ItemDisplay::State(SyncState::Syncing))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_local_changed_after_revert_finished_does_not_show_local_change() {
+        let url = spawn_ok_stub().await;
+        let (mut app, _rx) = crate::test_support::create_test_app_at(&url);
+        view_folder_root(
+            &mut app,
+            "f",
+            vec![crate::test_support::dir_item("d"), file_item("edited")],
+        );
+        let changes = vec![changed("d/x", false), changed("edited", false)];
+        let mut index = crate::model::syncthing::NeedIndex::default();
+        crate::logic::sync_states::set_index_local_changed(&mut index, &changes, 5);
+        app.model
+            .syncthing
+            .need_index
+            .insert("f".to_string(), index);
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("f".to_string(), 5);
+        let sent = before_now();
+        app.revert_folder_changes("f", &changes).await.unwrap();
+        handle_cache_invalidation(&mut app, item_finished("f", "d/x"));
+        handle_cache_invalidation(&mut app, item_finished("f", "edited"));
+        assert_eq!(app.model.pending.in_folder("f").count(), 0);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::LocalChangedIndex {
+                folder_id: "f".to_string(),
+                sequence: 5,
+                requested_at: sent,
+                files: Ok(changes),
+            },
+        );
+
+        let shown = crate::test_support::displayed_items(&app);
+        assert_eq!(shown["edited"], Some(ItemDisplay::State(SyncState::Synced)));
+        assert_ne!(shown["d"], Some(ItemDisplay::State(SyncState::LocalOnly)));
+    }
+
+    #[test]
+    fn test_reverting_added_file_confirmed_by_delete_event() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("new")]);
+        app.record_pending("f", "new", PendingKind::Reverting);
+
+        handle_cache_invalidation(
+            &mut app,
+            crate::services::events::CacheInvalidation::ItemFinished {
+                folder_id: "f".to_string(),
+                file_path: "new".to_string(),
+                failed: false,
+                deleted: true,
+                timestamp: std::time::SystemTime::now(),
+            },
+        );
+
+        assert!(app.model.pending.get("f", "new").is_none());
+    }
+
+    // ========================================
+    // CACHE PRECEDENCE AND WRITE-THROUGH
+    // ========================================
+
+    fn queued_write(app: &App, path: &str) -> Option<SyncState> {
+        app.pending_sync_state_writes
+            .iter()
+            .rev()
+            .find(|(folder, p, ..)| folder == "f" && p == path)
+            .map(|(_, _, state, _)| *state)
+    }
+
+    #[test]
+    fn test_reopened_level_shows_pending_state_not_cache() {
+        let mut app = create_test_app();
+        let items = vec![file_item("a"), file_item("b")];
+        app.cache
+            .save_sync_state("f", "sub/a", SyncState::Synced, 0)
+            .unwrap();
+        app.cache
+            .save_sync_state("f", "sub/b", SyncState::Synced, 0)
+            .unwrap();
+        app.record_pending(
+            "f",
+            "sub/a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
+
+        let (states, _) = app.load_sync_states_from_cache("f", &items, Some("sub/"));
+
+        assert!(!states.contains_key("a"));
+        assert_eq!(states.get("b"), Some(&SyncState::Synced));
+    }
+
+    #[test]
+    fn test_confirmed_change_written_through_to_cache() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.cache
+            .save_sync_state("f", "a", SyncState::Synced, 0)
+            .unwrap();
+        app.record_pending(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+        );
+
+        handle_api_response(&mut app, file_info("a", SyncState::Ignored, Instant::now()));
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert_eq!(queued_write(&app, "a"), Some(SyncState::Ignored));
+    }
+
+    #[test]
+    fn test_item_finished_synced_written_through_to_cache() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+
+        handle_cache_invalidation(&mut app, item_finished("f", "a"));
+
+        assert_eq!(queued_write(&app, "a"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_item_finished_confirming_restore_written_through_to_cache() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Restoring);
+
+        handle_cache_invalidation(&mut app, item_finished("f", "a"));
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert_eq!(queued_write(&app, "a"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_failed_item_finished_writes_nothing() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+
+        handle_cache_invalidation(&mut app, crate::test_support::item_failed("f", "a"));
+
+        assert_eq!(queued_write(&app, "a"), None);
     }
 }

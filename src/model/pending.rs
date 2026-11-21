@@ -1,23 +1,34 @@
 //! Local actions the user took that Syncthing hasn't confirmed yet.
 
-use crate::logic::pending::PATH_DEADLINE;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long after its rescan returns a change may stay unconfirmed
+pub const PATH_DEADLINE: Duration = Duration::from_secs(30);
+/// How long a revert may stay unconfirmed after its request returns
+pub const REVERT_DEADLINE: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingKind {
     DeletedLocally,
     Removed,
-    Ignored { exists: bool },
+    /// `deleting` is set only when the file is also being deleted (`I`)
+    Ignored {
+        exists: bool,
+        deleting: bool,
+    },
     Unignored,
     Restoring,
+    /// A local addition or edit a folder revert is undoing
+    Reverting,
 }
 
 #[derive(Clone, Debug)]
 pub struct PendingChange {
     pub kind: PendingKind,
     pub started: Instant,
-    /// None until the rescan that follows the action returns; never set for `Restoring`
+    /// None until the rescan or revert that follows the action returns; never set for
+    /// `Restoring`
     pub deadline: Option<Instant>,
 }
 
@@ -66,6 +77,12 @@ impl PendingChanges {
         removed
     }
 
+    pub fn set_deadline(&mut self, folder: &str, path: &str, deadline: Instant) {
+        if let Some(change) = self.paths.get_mut(folder).and_then(|m| m.get_mut(path)) {
+            change.deadline = Some(deadline);
+        }
+    }
+
     pub fn in_folder(&self, folder: &str) -> impl Iterator<Item = (&str, &PendingChange)> {
         self.paths
             .get(folder)
@@ -79,6 +96,15 @@ impl PendingChanges {
             .map(|(p, _)| p)
     }
 
+    /// Whether a `Reverting` or `Restoring` change lies below the directory `dir`
+    pub fn transfer_below(&self, folder: &str, dir: &str) -> bool {
+        let prefix = format!("{}/", dir);
+        self.in_folder(folder).any(|(path, change)| {
+            path.starts_with(&prefix)
+                && matches!(change.kind, PendingKind::Reverting | PendingKind::Restoring)
+        })
+    }
+
     /// Whether `path` or an ancestor is being ignored and deleted
     pub fn blocks_unignore(&self, folder: &str, path: &str) -> bool {
         let Some(in_folder) = self.paths.get(folder) else {
@@ -87,7 +113,7 @@ impl PendingChanges {
         let deleting = |p: &str| {
             in_folder
                 .get(p)
-                .is_some_and(|c| c.kind == PendingKind::Ignored { exists: false })
+                .is_some_and(|c| matches!(c.kind, PendingKind::Ignored { deleting: true, .. }))
         };
         if deleting(path) {
             return true;
@@ -99,7 +125,7 @@ impl PendingChanges {
         self.paths
             .values()
             .flat_map(|m| m.values())
-            .filter(|c| c.kind == PendingKind::Ignored { exists: false })
+            .filter(|c| matches!(c.kind, PendingKind::Ignored { deleting: true, .. }))
             .count()
     }
 
@@ -177,8 +203,6 @@ impl PendingChanges {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::pending::PATH_DEADLINE;
-    use std::time::Duration;
 
     fn ms(base: Instant, n: u64) -> Instant {
         base + Duration::from_millis(n)
@@ -192,7 +216,15 @@ mod tests {
     fn test_record_replaces_existing_change() {
         let t0 = Instant::now();
         let mut p = PendingChanges::default();
-        p.record("f", "a", PendingKind::Ignored { exists: true }, t0);
+        p.record(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+            t0,
+        );
         p.start_deadlines("f", ms(t0, 5));
         assert!(p.get("f", "a").unwrap().deadline.is_some());
 
@@ -222,13 +254,27 @@ mod tests {
         let mut p = PendingChanges::default();
         p.record("f", "a", PendingKind::Restoring, t0);
         p.record("f", "b", PendingKind::Removed, t0);
+        p.record("f", "r", PendingKind::Reverting, t0);
         p.record("g", "c", PendingKind::Restoring, t0);
         let mut all: Vec<&str> = p.in_folder("f").map(|(path, _)| path).collect();
         all.sort();
-        assert_eq!(all, vec!["a", "b"]);
+        assert_eq!(all, vec!["a", "b", "r"]);
         let restoring: Vec<&str> = p.restoring_in("f").collect();
         assert_eq!(restoring, vec!["a"]);
         assert_eq!(p.restoring_in("nope").count(), 0);
+    }
+
+    #[test]
+    fn test_transfer_below_matches_descendants_only() {
+        let t0 = Instant::now();
+        let mut p = PendingChanges::default();
+        p.record("f", "d/x", PendingKind::Reverting, t0);
+        p.record("f", "e/y", PendingKind::Removed, t0);
+        p.record("f", "dd", PendingKind::Restoring, t0);
+        assert!(p.transfer_below("f", "d"));
+        assert!(!p.transfer_below("f", "e"));
+        assert!(!p.transfer_below("f", "d/x"));
+        assert!(!p.transfer_below("g", "d"));
     }
 
     // ========================================
@@ -239,7 +285,15 @@ mod tests {
     fn test_blocks_unignore_for_ancestor_ignore_delete() {
         let t0 = Instant::now();
         let mut p = PendingChanges::default();
-        p.record("f", "dir", PendingKind::Ignored { exists: false }, t0);
+        p.record(
+            "f",
+            "dir",
+            PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+            t0,
+        );
         assert!(p.blocks_unignore("f", "dir"));
         assert!(p.blocks_unignore("f", "dir/sub/file"));
         assert!(!p.blocks_unignore("f", "dir2/file"));
@@ -251,7 +305,15 @@ mod tests {
     fn test_blocks_unignore_ignores_other_kinds() {
         let t0 = Instant::now();
         let mut p = PendingChanges::default();
-        p.record("f", "dir", PendingKind::Ignored { exists: true }, t0);
+        p.record(
+            "f",
+            "dir",
+            PendingKind::Ignored {
+                exists: false,
+                deleting: false,
+            },
+            t0,
+        );
         p.record("f", "x", PendingKind::Removed, t0);
         assert!(!p.blocks_unignore("f", "dir/file"));
         assert!(!p.blocks_unignore("f", "x"));
@@ -261,9 +323,42 @@ mod tests {
     fn test_ignore_delete_count_spans_folders() {
         let t0 = Instant::now();
         let mut p = PendingChanges::default();
-        p.record("f", "a", PendingKind::Ignored { exists: false }, t0);
-        p.record("g", "b", PendingKind::Ignored { exists: false }, t0);
-        p.record("g", "c", PendingKind::Ignored { exists: true }, t0);
+        p.record(
+            "f",
+            "a",
+            PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+            t0,
+        );
+        p.record(
+            "g",
+            "b",
+            PendingKind::Ignored {
+                exists: false,
+                deleting: true,
+            },
+            t0,
+        );
+        p.record(
+            "g",
+            "c",
+            PendingKind::Ignored {
+                exists: true,
+                deleting: false,
+            },
+            t0,
+        );
+        p.record(
+            "g",
+            "e",
+            PendingKind::Ignored {
+                exists: false,
+                deleting: false,
+            },
+            t0,
+        );
         p.record("g", "d", PendingKind::Removed, t0);
         assert_eq!(p.ignore_delete_count(), 2);
     }
@@ -317,6 +412,18 @@ mod tests {
     }
 
     #[test]
+    fn test_start_deadlines_covers_reverting_paths() {
+        let t0 = Instant::now();
+        let mut p = PendingChanges::default();
+        p.record("f", "a", PendingKind::Reverting, t0);
+        p.start_deadlines("f", ms(t0, 10));
+        assert_eq!(
+            p.get("f", "a").unwrap().deadline,
+            Some(ms(t0, 10) + PATH_DEADLINE)
+        );
+    }
+
+    #[test]
     fn test_start_deadlines_keeps_existing_deadline() {
         let t0 = Instant::now();
         let mut p = PendingChanges::default();
@@ -327,6 +434,17 @@ mod tests {
             p.get("f", "a").unwrap().deadline,
             Some(ms(t0, 10) + PATH_DEADLINE)
         );
+    }
+
+    #[test]
+    fn test_set_deadline_on_existing_change_only() {
+        let t0 = Instant::now();
+        let mut p = PendingChanges::default();
+        p.record("f", "a", PendingKind::Reverting, t0);
+        p.set_deadline("f", "a", ms(t0, 7));
+        p.set_deadline("f", "missing", ms(t0, 7));
+        assert_eq!(p.get("f", "a").unwrap().deadline, Some(ms(t0, 7)));
+        assert!(p.get("f", "missing").is_none());
     }
 
     #[test]
