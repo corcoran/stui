@@ -129,9 +129,11 @@ fn sniff(content: &str) -> char {
     let (mut commas, mut semicolons, mut tabs) = (0usize, 0usize, 0usize);
     let mut in_quotes = false;
     let mut field_start = true;
-    for ch in content.chars() {
+    let mut chars = content.chars().peekable();
+    while let Some(ch) = chars.next() {
         if in_quotes {
-            if ch == '"' {
+            // `""` inside a quoted field is a literal quote
+            if ch == '"' && chars.next_if_eq(&'"').is_none() {
                 in_quotes = false;
             }
             continue;
@@ -334,6 +336,12 @@ mod tests {
     fn test_csv_sniff_ignores_mid_field_quote() {
         let first = lines(&render("size 6\" pipe;a;b\n1;2;3\n", None, 80))[0].clone();
         assert_eq!(first.matches(" │ ").count(), 2, "{}", first);
+    }
+    #[test]
+    fn test_csv_sniff_skips_escaped_quotes_in_quoted_fields() {
+        // The ';'s inside "a""b;c;d" belong to the field, so ',' wins 1 to 0
+        let first = lines(&render("\"a\"\"b;c;d\",x\n", None, 80))[0].clone();
+        assert_eq!(first, "a\"b;c;d │ x");
     }
     #[test]
     fn test_csv_control_characters_become_spaces() {
