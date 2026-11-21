@@ -29,6 +29,9 @@ image = { version = "0.25", default-features = true }
 codepage-437 = "0.1"
 chrono = "0.4"
 pulldown-cmark = { version = "0.13", default-features = false }
+zip = { version = "9.8.1", default-features = false }
+tar = "0.4.46"
+flate2 = "1.1.11"
 
 [build-dependencies]
 chrono = "0.4"

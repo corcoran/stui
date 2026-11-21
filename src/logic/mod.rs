@@ -20,6 +20,7 @@
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
+pub mod archive;
 pub mod clipboard;
 pub mod command;
 pub mod csv;
