@@ -700,11 +700,10 @@ fn render_preview_column(
             Err(msg) => format!("Error: {}", msg),
         };
 
-        let is_ansi_art = state.art_width.is_some();
+        let is_ansi_art = state.art_width.is_some() && state.file_content.is_ok();
         let canvas_width: u16 = state
             .art_width
             .unwrap_or(crate::logic::file::DEFAULT_ART_WIDTH);
-        let parser_width = canvas_width;
 
         // Art gets a box as wide as its canvas
         use ratatui::layout::{Constraint, Direction, Layout};
@@ -740,7 +739,7 @@ fn render_preview_column(
             crate::logic::markdown::render(&content_str, inner_width)
         } else {
             // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
-            crate::logic::file::parse_ansi_to_text(&content_str, parser_width)
+            crate::logic::file::parse_ansi_to_text(&content_str, canvas_width)
         };
 
         // Art is not wrapped, so each parsed row is one screen row
@@ -1303,6 +1302,15 @@ mod tests {
         let mut nfo_text = popup("notes.txt", "plain", false);
         nfo_text.art_width = Some(80);
         assert_eq!(render_cell_style(&mut nfo_text, 2, 1).bg, Some(ANSI_ART_BG));
+    }
+
+    #[test]
+    fn test_error_text_is_never_drawn_as_art() {
+        use crate::logic::file::ANSI_ART_BG;
+        let mut state = popup("art.ans", "", false);
+        state.file_content = Err("File not found on disk".to_string());
+        state.art_width = Some(80);
+        assert_ne!(render_cell_style(&mut state, 2, 1).bg, Some(ANSI_ART_BG));
     }
 
     #[test]

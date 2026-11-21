@@ -509,7 +509,8 @@ pub(crate) fn run_clipboard_command(command: &str, text: &str) -> CopyOutcome {
 }
 
 /// Kind of the file at `path`: a directory, text (a regular file that is not an image and
-/// has no NUL byte in its first 8 KB, the check preview uses), or binary
+/// whose first 8 KB `logic::file::detect_encoding` decodes, the preview's decision), or
+/// binary
 fn file_kind(path: &str) -> logic::open::FileKind {
     use logic::open::FileKind;
     use std::io::Read;
@@ -526,10 +527,10 @@ fn file_kind(path: &str) -> logic::open::FileKind {
     if file.take(8192).read_to_end(&mut head).is_err() {
         return FileKind::Binary;
     }
-    if logic::file::is_binary_content(&head) {
-        FileKind::Binary
-    } else {
+    if logic::file::detect_encoding(path, &head).is_some() {
         FileKind::Text
+    } else {
+        FileKind::Binary
     }
 }
 
@@ -558,4 +559,35 @@ fn spawn_detached(command: &str, setting: &str, target: &str) -> Result<(), Open
             command: command.to_string(),
             error: e.to_string(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use logic::open::FileKind;
+
+    fn kind_of(name: &str, bytes: &[u8]) -> FileKind {
+        let dir = std::env::temp_dir().join(format!("stui-file-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        file_kind(path.to_str().unwrap())
+    }
+
+    #[test]
+    fn test_utf16_with_bom_is_text() {
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend("hello".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        assert_eq!(kind_of("utf16.txt", &bytes), FileKind::Text);
+    }
+
+    #[test]
+    fn test_nul_bytes_without_art_extension_are_binary() {
+        assert_eq!(kind_of("data.bin", b"ab\0cd"), FileKind::Binary);
+    }
+
+    #[test]
+    fn test_nfo_with_nul_bytes_is_text() {
+        assert_eq!(kind_of("release.nfo", b"ab\0cd"), FileKind::Text);
+    }
 }

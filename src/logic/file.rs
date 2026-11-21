@@ -36,30 +36,7 @@ pub fn is_image_file(path: &str) -> bool {
         || path_lower.ends_with(".tif")
 }
 
-/// Check if file content is binary based on presence of null bytes
-///
-/// A file is considered binary if it contains any null bytes (0x00) in the
-/// first portion of the content. This is a heuristic similar to how Unix
-/// tools like `file` detect binary content.
-///
-/// # Arguments
-/// * `bytes` - File content to check (typically first 8KB is sufficient)
-///
-/// # Returns
-/// `true` if the content contains null bytes (binary), `false` otherwise
-///
-/// # Examples
-/// ```
-/// use stui::logic::file::is_binary_content;
-///
-/// // Text content - no null bytes
-/// assert!(!is_binary_content(b"Hello, world!"));
-/// assert!(!is_binary_content(b"UTF-8: \xE2\x9C\x93"));
-///
-/// // Binary content - contains null bytes
-/// assert!(is_binary_content(b"Hello\x00World"));
-/// assert!(is_binary_content(b"\x00\x01\x02\x03"));
-/// ```
+/// Whether the path has a Markdown extension.
 pub fn is_markdown_path(path: &str) -> bool {
     let lower = path.to_lowercase();
     [".md", ".markdown", ".mdown"]
@@ -70,10 +47,6 @@ pub fn is_markdown_path(path: &str) -> bool {
 /// Whether the preview renders this file's content and `r` can switch to the raw source.
 pub fn has_rendered_view(path: &str) -> bool {
     is_markdown_path(path)
-}
-
-pub fn is_binary_content(bytes: &[u8]) -> bool {
-    bytes.contains(&0)
 }
 
 /// Detect if file content contains ANSI escape codes
@@ -229,8 +202,8 @@ impl SgrState {
 
 /// Parse ANSI codes and convert to Ratatui Text with styling
 ///
-/// Draws the text on an 80-column grid of rows, like the DOS screen ANSI art was made
-/// on, and returns the rows. Nothing reaches the real terminal. Relative cursor moves
+/// Draws the text on a grid of rows `width` columns wide, like the DOS screen ANSI art
+/// was made on, and returns the rows. Nothing reaches the real terminal. Relative cursor moves
 /// (CSI A/B/C/D) move within the grid; screen clearing, absolute positioning and other
 /// codes are ignored.
 ///
@@ -244,6 +217,7 @@ impl SgrState {
 ///
 /// # Arguments
 /// * `text` - Text with ANSI escape codes
+/// * `width` - canvas width in columns; rows wrap at it; at least 1
 ///
 /// # Returns
 /// Ratatui `Text` with styling applied, all escape codes stripped
@@ -268,7 +242,7 @@ pub fn parse_ansi_to_text(text: &str, width: u16) -> ratatui::text::Text<'static
     let mut rows: Vec<Vec<(char, Style)>> = vec![blank_row.clone()];
     let mut row: usize = 0;
     let mut col: usize = 0;
-    // Writing column 80 wraps to the next row at once, as on DOS. A newline right after
+    // Writing the last column wraps to the next row at once, as on DOS. A newline right after
     // that wrap ends the same line, so it doesn't add a blank row.
     let mut just_wrapped = false;
 
@@ -503,6 +477,8 @@ pub enum TextEncoding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sauce {
     pub width: Option<u16>,
+    /// DataType 1 (Character): the file is CP437 text art
+    pub character: bool,
 }
 
 /// Result of decoding a file's bytes for the preview.
@@ -523,8 +499,10 @@ pub fn sauce(bytes: &[u8]) -> Option<Sauce> {
         return None;
     }
     let width = u16::from_le_bytes([rec[96], rec[97]]);
-    let character_art = rec[94] == 1 && rec[95] <= 2;
+    let character = rec[94] == 1;
+    let character_art = character && rec[95] <= 2;
     Some(Sauce {
+        character,
         width: (character_art && (1..=1000).contains(&width)).then_some(width),
     })
 }
@@ -544,6 +522,21 @@ fn has_art_extension(path: &str) -> bool {
     [".ans", ".asc", ".nfo", ".diz"]
         .iter()
         .any(|ext| lower.ends_with(ext))
+}
+
+/// `.nfo` and `.diz` files hold either scene CP437 art or modern text (Kodi/Jellyfin XML,
+/// UTF-8 notes). They are modern text when valid UTF-8 with a multi-byte character, or
+/// when the first non-whitespace byte after an optional BOM is `<`.
+fn is_modern_info_text(path: &str, bytes: &[u8]) -> bool {
+    let lower = path.to_ascii_lowercase();
+    if !(lower.ends_with(".nfo") || lower.ends_with(".diz")) {
+        return false;
+    }
+    if std::str::from_utf8(bytes).is_ok() && bytes.iter().any(|&b| b >= 0x80) {
+        return true;
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
+    body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
 }
 
 /// UTF-16 without a BOM: even length of at least 4, and in the first 8 KB at least
@@ -574,10 +567,12 @@ fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
 /// First match wins:
 /// 1. UTF-16 BOM (`FF FE` LE, `FE FF` BE)
 /// 2. UTF-16 without a BOM (see `sniff_utf16`)
-/// 3. Extension `.ans`/`.asc`/`.nfo`/`.diz` or a SAUCE record: CP437, even with NUL bytes
-/// 4. A NUL byte in the first 8 KB: binary
-/// 5. Escape codes, or invalid UTF-8 with a CP437 art run: CP437
-/// 6. Otherwise UTF-8
+/// 3. `.nfo`/`.diz` that is modern text (see `is_modern_info_text`): UTF-8
+/// 4. Extension `.ans`/`.asc`/`.nfo`/`.diz` or a character-art SAUCE record (DataType 1):
+///    CP437, even with NUL bytes
+/// 5. A NUL byte in the first 8 KB: binary
+/// 6. Escape codes, or invalid UTF-8 with a CP437 art run: CP437
+/// 7. Otherwise UTF-8
 pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
     match bytes {
         [0xFF, 0xFE, ..] => return Some(TextEncoding::Utf16Le),
@@ -587,7 +582,10 @@ pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
     if let Some(enc) = sniff_utf16(bytes) {
         return Some(enc);
     }
-    if has_art_extension(path) || sauce(bytes).is_some() {
+    if is_modern_info_text(path, bytes) {
+        return Some(TextEncoding::Utf8);
+    }
+    if has_art_extension(path) || sauce(bytes).is_some_and(|s| s.character) {
         return Some(TextEncoding::Cp437);
     }
     if bytes[..bytes.len().min(PREVIEW_SNIFF_BYTES)].contains(&0) {
@@ -713,47 +711,6 @@ mod tests {
         assert!(!is_image_file("png")); // No extension dot
     }
 
-    // ========================================
-    // BINARY CONTENT DETECTION
-    // ========================================
-
-    #[test]
-    fn test_is_binary_content_text() {
-        // Plain ASCII text
-        assert!(!is_binary_content(b"Hello, world!"));
-        assert!(!is_binary_content(b"Line 1\nLine 2\n"));
-        assert!(!is_binary_content(b"")); // Empty file is text
-    }
-
-    #[test]
-    fn test_is_binary_content_utf8() {
-        // UTF-8 encoded text (no null bytes)
-        assert!(!is_binary_content("UTF-8: ✓".as_bytes()));
-        assert!(!is_binary_content("日本語".as_bytes()));
-        assert!(!is_binary_content("Emoji: 🦀".as_bytes()));
-    }
-
-    #[test]
-    fn test_is_binary_content_binary() {
-        // Content with null bytes
-        assert!(is_binary_content(b"Hello\x00World"));
-        assert!(is_binary_content(b"\x00\x01\x02\x03"));
-        assert!(is_binary_content(b"\x00")); // Just a null byte
-    }
-
-    #[test]
-    fn test_is_binary_content_null_at_start() {
-        // Null byte at beginning
-        assert!(is_binary_content(b"\x00text after null"));
-    }
-
-    #[test]
-    fn test_is_binary_content_null_at_end() {
-        // Null byte at end
-        assert!(is_binary_content(b"text before null\x00"));
-    }
-
-    // ========================================
     // ANSI CODE DETECTION
     // ========================================
 
@@ -1343,7 +1300,10 @@ mod tests {
     fn test_sauce_reads_width() {
         assert_eq!(
             sauce(&with_sauce(b"art", 1, 1, 132)),
-            Some(Sauce { width: Some(132) })
+            Some(Sauce {
+                width: Some(132),
+                character: true
+            })
         );
     }
 
@@ -1357,19 +1317,31 @@ mod tests {
     fn test_sauce_width_only_for_character_art() {
         assert_eq!(
             sauce(&with_sauce(b"x", 5, 1, 132)),
-            Some(Sauce { width: None })
+            Some(Sauce {
+                width: None,
+                character: false
+            })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 3, 132)),
-            Some(Sauce { width: None })
+            Some(Sauce {
+                width: None,
+                character: true
+            })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 1, 0)),
-            Some(Sauce { width: None })
+            Some(Sauce {
+                width: None,
+                character: true
+            })
         );
         assert_eq!(
             sauce(&with_sauce(b"x", 1, 1, 1001)),
-            Some(Sauce { width: None })
+            Some(Sauce {
+                width: None,
+                character: true
+            })
         );
     }
 
@@ -1427,6 +1399,57 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn test_non_character_sauce_is_not_art() {
+        assert_eq!(
+            detect_encoding("song.xm", &with_sauce(&[0, 1, 2, 0], 4, 0, 0)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_escape_codes_make_art() {
+        assert_eq!(
+            detect_encoding("a.txt", b"\x1b[31mred"),
+            Some(TextEncoding::Cp437)
+        );
+    }
+
+    #[test]
+    fn test_kodi_nfo_xml_is_text() {
+        let xml = "<movie><plot>It\u{2019}s caf\u{e9}</plot></movie>".as_bytes();
+        assert_eq!(detect_encoding("movie.nfo", xml), Some(TextEncoding::Utf8));
+        assert_eq!(decode_preview_bytes("movie.nfo", xml).art_width, None);
+    }
+
+    #[test]
+    fn test_ascii_xml_nfo_is_text() {
+        assert_eq!(
+            detect_encoding("tvshow.nfo", b"  <?xml version=\"1.0\"?><tvshow/>"),
+            Some(TextEncoding::Utf8)
+        );
+        assert_eq!(
+            detect_encoding("tvshow.nfo", b"\xEF\xBB\xBF\n<tvshow/>"),
+            Some(TextEncoding::Utf8)
+        );
+    }
+
+    #[test]
+    fn test_ascii_scene_nfo_is_art() {
+        assert_eq!(
+            detect_encoding("release.nfo", b"  RELEASE INFO\n  ====="),
+            Some(TextEncoding::Cp437)
+        );
+    }
+
+    #[test]
+    fn test_cp437_nfo_is_art() {
+        assert_eq!(
+            detect_encoding("release.nfo", &[0xDB, 0xDB, b'A']),
+            Some(TextEncoding::Cp437)
+        );
     }
 
     #[test]
