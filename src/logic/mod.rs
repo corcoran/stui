@@ -31,6 +31,7 @@ pub mod folder_groups;
 pub mod folder_history;
 pub mod formatting;
 pub mod ignore;
+pub mod json;
 pub mod layout;
 pub mod markdown;
 pub mod navigation;
