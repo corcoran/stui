@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed delete or revert shows an error
 - Previewing an image that is not on disk says why, instead of staying on "Loading image..."
 
+### 🧪 Testing
+
+- `demo/run.sh` builds the working tree and runs it with `--debug` against the demo cluster. Its cache and debug log stay under `demo/.run/`, away from a real stui
+
 ---
 
 ## [0.13.0] - 2026-11-20
