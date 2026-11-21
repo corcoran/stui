@@ -314,6 +314,16 @@ pub fn render_group_name_input(f: &mut Frame, input: &crate::model::types::Group
     f.render_widget(paragraph, area);
 }
 
+/// Text shown in place of file content. The locally deleted explanation is guidance, not an
+/// error, so it has no "Error:" prefix.
+fn preview_message_text(msg: &str) -> String {
+    if msg == crate::logic::sync_states::locally_deleted_message() {
+        msg.to_string()
+    } else {
+        format!("Error: {}", msg)
+    }
+}
+
 /// Render the file information popup with metadata and preview
 #[allow(clippy::too_many_arguments)]
 pub fn render_file_info(
@@ -720,7 +730,10 @@ fn render_preview_column(
 
         let inner_width = preview_area.width.saturating_sub(2);
         let has_rendered_view = crate::logic::file::has_rendered_view(&state.file_path);
-        let parsed_text = if has_rendered_view && !state.raw_view {
+        let parsed_text = if let Err(msg) = &state.file_content {
+            // Plain text so the paragraph word-wraps it
+            ratatui::text::Text::from(preview_message_text(msg))
+        } else if has_rendered_view && !state.raw_view {
             crate::logic::markdown::render(&content_str, inner_width)
         } else {
             // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
@@ -1137,5 +1150,45 @@ mod tests {
         ] {
             assert!(shows(&rows, text), "{:?} missing in {:?}", text, rows);
         }
+    }
+
+    // ========================================
+    // PREVIEW MESSAGES
+    // ========================================
+
+    fn message_rows(message: &str) -> Vec<String> {
+        let mut state = popup("manuals/router-setup.txt", "", false);
+        state.file_content = Err(message.to_string());
+        render_rows(&mut state, 60, 12)
+            .into_iter()
+            .map(|r| {
+                r.trim_matches(|c: char| c == '│' || c.is_whitespace())
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_locally_deleted_message_is_word_wrapped_without_error_prefix() {
+        let message = crate::logic::sync_states::locally_deleted_message();
+        let rows = message_rows(message);
+        assert!(!rows.iter().any(|r| r.contains("Error:")), "{:#?}", rows);
+        let body: Vec<&str> = rows[1..]
+            .iter()
+            .map(String::as_str)
+            .filter(|r| !r.is_empty() && !r.starts_with('└'))
+            .collect();
+        assert_eq!(body.join(" "), message.replace('\n', " "), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_other_preview_errors_keep_prefix() {
+        let rows = message_rows("File not found on disk");
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Error: File not found on disk")),
+            "{:#?}",
+            rows
+        );
     }
 }

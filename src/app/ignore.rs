@@ -25,7 +25,177 @@ pub(crate) enum IgnoreToggle {
     BlockedByPendingDelete(PathBuf),
 }
 
+/// Undeletes for one folder: whether a batch is running, and the paths for the next batch
+#[derive(Debug, Default)]
+pub(crate) struct UndeleteJob {
+    pub running: bool,
+    pub pending: Vec<String>,
+}
+
+/// Result of one undelete batch, sent back to the main loop
+#[derive(Debug)]
+pub(crate) struct UndeleteDone {
+    pub folder_id: String,
+    pub paths: Vec<String>,
+    pub patterns: Vec<String>,
+    pub result: Result<(), String>,
+    /// Whether the ignore list holds none of `patterns` afterwards
+    pub ignores_restored: bool,
+}
+
+/// One undelete batch. Syncthing has no per-file revert, so this ignores the paths and
+/// rescans them (Syncthing forgets the local deletions), then puts the ignore list back and
+/// rescans again (Syncthing downloads the files). The ignore list is put back even when a
+/// step fails. Rescans wait while the folder syncs, which is why this runs in the background.
+async fn run_undelete_batch(
+    client: crate::SyncthingClient,
+    folder_id: String,
+    paths: Vec<String>,
+    patterns: Vec<String>,
+) -> UndeleteDone {
+    let original: Result<Vec<String>, String> = client
+        .get_ignore_patterns(&folder_id)
+        .await
+        .map(|current| {
+            current
+                .into_iter()
+                .filter(|p| !patterns.contains(p))
+                .collect()
+        })
+        .map_err(|e| e.to_string());
+    let (result, ignores_restored) = match original {
+        Err(e) => (Err(e), true),
+        Ok(original) => {
+            let mut with_paths = patterns.clone();
+            with_paths.extend(original.iter().cloned());
+            let forget = async {
+                client.set_ignore_patterns(&folder_id, with_paths).await?;
+                client.rescan_paths(&folder_id, &paths).await
+            }
+            .await;
+            let restore = client.set_ignore_patterns(&folder_id, original).await;
+            let ignores_restored = restore.is_ok();
+            let result = match (forget, restore) {
+                (Ok(()), Ok(())) => client.rescan_paths(&folder_id, &paths).await,
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+            (result.map_err(|e| e.to_string()), ignores_restored)
+        }
+    };
+    UndeleteDone {
+        folder_id,
+        paths,
+        patterns,
+        result,
+        ignores_restored,
+    }
+}
+
 impl App {
+    /// Undelete `path` in `folder_id`: its local deletion is dropped from the index at once,
+    /// and it joins the folder's next batch if one is already running.
+    pub(crate) fn queue_undelete(&mut self, folder_id: &str, path: String) {
+        if let Some(index) = self.model.syncthing.need_index.get_mut(folder_id) {
+            logic::sync_states::forget_local_change(index, &path);
+        }
+        // Shown syncing until Syncthing reports the download finished
+        for set in [
+            &mut self.model.syncthing.syncing_files,
+            &mut self.model.syncthing.restoring,
+        ] {
+            set.entry(folder_id.to_string())
+                .or_default()
+                .insert(path.clone());
+        }
+        let job = self.undelete_jobs.entry(folder_id.to_string()).or_default();
+        if job.running {
+            if !job.pending.contains(&path) {
+                job.pending.push(path);
+            }
+        } else {
+            self.start_undelete_batch(folder_id.to_string(), vec![path]);
+        }
+    }
+
+    fn start_undelete_batch(&mut self, folder_id: String, paths: Vec<String>) {
+        let patterns: Vec<String> = paths.iter().map(|p| format!("/{}", p)).collect();
+        let _ = self.cache.add_pending_undelete(&folder_id, &patterns);
+        self.undelete_jobs
+            .entry(folder_id.clone())
+            .or_default()
+            .running = true;
+        let client = self.client.clone();
+        let tx = self.undelete_tx.clone();
+        tokio::spawn(async move {
+            let done = run_undelete_batch(client, folder_id, paths, patterns).await;
+            let _ = tx.send(done);
+        });
+    }
+
+    /// Show a failed batch's files as deleted locally again instead of syncing
+    pub(crate) fn mark_undelete_failed(&mut self, done: &UndeleteDone) {
+        let syncthing = &mut self.model.syncthing;
+        for sets in [&mut syncthing.syncing_files, &mut syncthing.restoring] {
+            if let Some(set) = sets.get_mut(&done.folder_id) {
+                for path in &done.paths {
+                    set.remove(path);
+                }
+            }
+        }
+        let index = syncthing
+            .need_index
+            .entry(done.folder_id.clone())
+            .or_default();
+        for path in &done.paths {
+            logic::sync_states::record_local_deletion(index, path);
+        }
+    }
+
+    /// Clear the record of a finished batch and start the folder's next batch, if any
+    pub(crate) fn finish_undelete_batch(&mut self, done: &UndeleteDone) {
+        if done.ignores_restored {
+            let _ = self
+                .cache
+                .remove_pending_undelete(&done.folder_id, &done.patterns);
+        }
+        let next = match self.undelete_jobs.get_mut(&done.folder_id) {
+            Some(job) if !job.pending.is_empty() => std::mem::take(&mut job.pending),
+            _ => {
+                self.undelete_jobs.remove(&done.folder_id);
+                return;
+            }
+        };
+        self.start_undelete_batch(done.folder_id.clone(), next);
+    }
+
+    /// Remove undelete patterns a previous run recorded but didn't take back out of the
+    /// ignore list (stui exited or Syncthing was unreachable). Only those exact patterns go.
+    pub(crate) async fn remove_leftover_undelete_patterns(&mut self) {
+        let Ok(pending) = self.cache.pending_undelete_patterns() else {
+            return;
+        };
+        for (folder_id, patterns) in pending {
+            let Ok(current) = self.client.get_ignore_patterns(&folder_id).await else {
+                continue;
+            };
+            let kept: Vec<String> = current
+                .iter()
+                .filter(|p| !patterns.contains(p))
+                .cloned()
+                .collect();
+            if kept.len() != current.len()
+                && self
+                    .client
+                    .set_ignore_patterns(&folder_id, kept)
+                    .await
+                    .is_err()
+            {
+                continue;
+            }
+            let _ = self.cache.remove_pending_undelete(&folder_id, &patterns);
+        }
+    }
+
     pub(crate) async fn toggle_ignore(&mut self) -> Result<IgnoreToggle> {
         // Only works when focused on a breadcrumb level (not folder list)
         if self.model.navigation.focus_level == 0

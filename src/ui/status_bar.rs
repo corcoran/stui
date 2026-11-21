@@ -1,5 +1,6 @@
 use crate::api::{Folder, FolderStatus, SyncState};
 use crate::logic::need_paging::NeedPagingProgress;
+use crate::logic::sync_states::ItemDisplay;
 use crate::ui::icons::{FolderState, IconRenderer};
 use crate::utils;
 use ratatui::{
@@ -37,6 +38,15 @@ impl StatusContent {
             separator,
             self.right
         )
+    }
+}
+
+/// Status bar label for a file or directory
+fn item_display_label(display: ItemDisplay) -> &'static str {
+    match display {
+        ItemDisplay::State(state) => map_sync_state_label(state),
+        ItemDisplay::Ignored { .. } => map_sync_state_label(SyncState::Ignored),
+        ItemDisplay::LocallyDeleted => "Deleted locally",
     }
 }
 
@@ -112,7 +122,7 @@ pub fn build_status_paragraph(
     breadcrumb_folder_label: Option<String>,
     breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    breadcrumb_selected_item: Option<(String, String, Option<ItemDisplay>)>,
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
@@ -291,7 +301,7 @@ fn build_status_line(
     breadcrumb_folder_label: Option<String>,
     breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    breadcrumb_selected_item: Option<(String, String, Option<ItemDisplay>)>,
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
@@ -463,24 +473,12 @@ fn build_status_line(
         }
 
         // Show selected item info if available
-        if let Some((item_name, item_type, sync_state, exists)) = breadcrumb_selected_item {
+        if let Some((item_name, item_type, display)) = breadcrumb_selected_item {
             // Add state display with icon if sync state is available
-            if let Some(state) = sync_state {
+            if let Some(display) = display {
                 let is_dir = item_type.as_str() == "FILE_INFO_TYPE_DIRECTORY";
-
-                // For ignored items, check existence to choose correct icon
-                let state_icon = if state == SyncState::Ignored {
-                    if let Some(exists_val) = exists {
-                        icon_renderer.ignored_item(is_dir, exists_val)
-                    } else {
-                        // Default to warning icon if exists is None
-                        icon_renderer.ignored_item(is_dir, true)
-                    }
-                } else {
-                    icon_renderer.item_with_sync_state(is_dir, state)
-                };
-
-                let state_label = map_sync_state_label(state);
+                let state_icon = icon_renderer.item_icon(is_dir, display);
+                let state_label = item_display_label(display);
                 let state_display = format!(
                     "{}{}",
                     state_icon
@@ -501,10 +499,8 @@ fn build_status_line(
             metrics.push(format!("Selected: {}", formatted_name));
 
             // Add ignored status if applicable
-            if sync_state == Some(SyncState::Ignored)
-                && let Some(exists_val) = exists
-            {
-                let ignored_status = if exists_val {
+            if let Some(ItemDisplay::Ignored { exists }) = display {
+                let ignored_status = if exists {
                     "Ignored, not deleted!"
                 } else {
                     "Ignored"
@@ -532,7 +528,7 @@ pub fn render_status_bar(
     breadcrumb_folder_label: Option<String>,
     breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    breadcrumb_selected_item: Option<(String, String, Option<ItemDisplay>)>,
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
@@ -581,7 +577,7 @@ pub fn calculate_status_height(
     breadcrumb_folder_label: Option<String>,
     breadcrumb_folder_id: Option<String>,
     breadcrumb_item_count: Option<usize>,
-    breadcrumb_selected_item: Option<(String, String, Option<SyncState>, Option<bool>)>,
+    breadcrumb_selected_item: Option<(String, String, Option<ItemDisplay>)>,
     sort_mode: &str,
     sort_reverse: bool,
     last_load_time_ms: Option<u64>,
@@ -893,8 +889,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::Synced),
-                None,
+                Some(ItemDisplay::State(SyncState::Synced)),
             )),
             "A-Z",
             false,
@@ -926,8 +921,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::OutOfSync),
-                None,
+                Some(ItemDisplay::State(SyncState::OutOfSync)),
             )),
             "A-Z",
             false,
@@ -959,8 +953,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::LocalOnly),
-                None,
+                Some(ItemDisplay::State(SyncState::LocalOnly)),
             )),
             "A-Z",
             false,
@@ -992,8 +985,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::RemoteOnly),
-                None,
+                Some(ItemDisplay::State(SyncState::RemoteOnly)),
             )),
             "A-Z",
             false,
@@ -1025,8 +1017,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::Syncing),
-                None,
+                Some(ItemDisplay::State(SyncState::Syncing)),
             )),
             "A-Z",
             false,
@@ -1059,8 +1050,7 @@ mod tests {
             Some((
                 "subdir".to_string(),
                 "FILE_INFO_TYPE_DIRECTORY".to_string(),
-                Some(SyncState::Synced),
-                None,
+                Some(ItemDisplay::State(SyncState::Synced)),
             )),
             "A-Z",
             false,
@@ -1092,8 +1082,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::Ignored),
-                Some(true),
+                Some(ItemDisplay::Ignored { exists: true }),
             )),
             "A-Z",
             false,
@@ -1126,8 +1115,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::Ignored),
-                Some(false),
+                Some(ItemDisplay::Ignored { exists: false }),
             )),
             "A-Z",
             false,
@@ -1161,8 +1149,7 @@ mod tests {
             Some((
                 "test.txt".to_string(),
                 "file".to_string(),
-                Some(SyncState::Unknown),
-                None,
+                Some(ItemDisplay::State(SyncState::Unknown)),
             )),
             "A-Z",
             false,
@@ -1192,7 +1179,7 @@ mod tests {
             Some("TestFolder".to_string()),
             None, // breadcrumb_folder_id
             Some(5),
-            Some(("test.txt".to_string(), "file".to_string(), None, None)),
+            Some(("test.txt".to_string(), "file".to_string(), None)),
             "A-Z",
             false,
             None,

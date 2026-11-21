@@ -181,6 +181,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             folder_id,
             file_path,
             failed,
+            deleted,
             timestamp: _,
         } => {
             crate::log_debug(&format!(
@@ -188,8 +189,13 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 folder_id, file_path
             ));
 
-            if let Some(set) = app.model.syncthing.syncing_files.get_mut(&folder_id) {
-                set.remove(file_path.trim_end_matches('/'));
+            for sets in [
+                &mut app.model.syncthing.syncing_files,
+                &mut app.model.syncthing.restoring,
+            ] {
+                if let Some(set) = sets.get_mut(&folder_id) {
+                    set.remove(file_path.trim_end_matches('/'));
+                }
             }
 
             // A downloaded item leaves the need list; a failed one stays
@@ -200,8 +206,33 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
             }
             app.note_need_list_changed(&folder_id);
 
-            // Don't clear state or fetch FileInfo - causes flicker and API flood
-            // LocalIndexUpdated event will trigger Browse refresh with fresh data
+            // A finished download leaves the local copy matching the global one, so show it
+            // synced now; the Browse refresh after LocalIndexUpdated confirms it. No FileInfo
+            // fetch here: it would flood the API during large syncs.
+            if !failed && !deleted {
+                let path = file_path.trim_end_matches('/');
+                // No longer a local change, even if a local-changes list fetched mid-restore
+                // still lists it as deleted
+                if let Some(index) = app.model.syncthing.need_index.get_mut(&folder_id) {
+                    crate::logic::sync_states::forget_local_change(index, path);
+                }
+                for level in app
+                    .model
+                    .navigation
+                    .breadcrumb_trail
+                    .iter_mut()
+                    .filter(|l| l.folder_id == folder_id)
+                {
+                    if let Some(name) =
+                        crate::logic::sync_states::name_in_level(level.prefix.as_deref(), path)
+                        && level.items.iter().any(|i| i.name == name)
+                    {
+                        level
+                            .file_sync_states
+                            .insert(name.to_string(), crate::api::SyncState::Synced);
+                    }
+                }
+            }
         }
         CacheInvalidation::Activity {
             folder_id,
@@ -294,6 +325,7 @@ mod tests {
         let (_invalidation_tx, invalidation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (_event_id_tx, event_id_rx) = tokio::sync::mpsc::unbounded_channel();
         let (image_update_tx, image_update_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (undelete_tx, undelete_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let app = App {
             model: Model::new(config.vim_mode),
@@ -319,6 +351,9 @@ mod tests {
             pending_preview_need: None,
             terminal_title_enabled: false,
             last_terminal_title: None,
+            undelete_jobs: HashMap::new(),
+            undelete_tx,
+            undelete_rx,
             last_db_flush: std::time::Instant::now(),
             last_reconnect_attempt: std::time::Instant::now(),
             reconnect_delay: Duration::from_secs(1),
@@ -455,6 +490,7 @@ mod tests {
             folder_id: folder.to_string(),
             file_path: path.to_string(),
             failed: false,
+            deleted: false,
             timestamp: SystemTime::now(),
         }
     }
@@ -464,6 +500,7 @@ mod tests {
             folder_id: folder.to_string(),
             file_path: path.to_string(),
             failed: true,
+            deleted: false,
             timestamp: SystemTime::now(),
         }
     }
@@ -681,7 +718,8 @@ mod tests {
         handle_cache_invalidation(&mut app, item_finished("media", "a.mkv"));
         assert_eq!(
             displayed_states(&app).get("a.mkv"),
-            Some(&SyncState::RemoteOnly)
+            Some(&SyncState::Synced),
+            "a finished download shows synced without waiting for a refresh"
         );
     }
 
@@ -4088,5 +4126,596 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Char('y')).await;
 
         assert!(!app.model.selected_folder().unwrap().paused);
+    }
+
+    // ========================================
+    // LOCAL DELETIONS
+    // ========================================
+
+    /// Documents/manuals, receive-only, with router-setup.txt deleted locally and selected
+    fn app_viewing_locally_deleted() -> App {
+        let mut app = create_test_app();
+        let folder: crate::api::Folder = serde_json::from_value(serde_json::json!({
+            "id": "documents", "label": "Documents", "path": "/data/documents",
+            "paused": false, "type": "receiveonly"
+        }))
+        .unwrap();
+        app.model.set_folders(vec![folder]);
+        view_folder_root(
+            &mut app,
+            "documents",
+            vec![file_item("printer.txt"), file_item("router-setup.txt")],
+        );
+        let level = &mut app.model.navigation.breadcrumb_trail[0];
+        level.folder_label = "Documents".to_string();
+        level.prefix = Some("manuals/".to_string());
+        level.selected_index = Some(1);
+        level
+            .file_sync_states
+            .insert("printer.txt".to_string(), SyncState::Synced);
+        let mut index = crate::model::syncthing::NeedIndex::default();
+        crate::logic::sync_states::set_index_local_changed(
+            &mut index,
+            &[crate::api::LocalChangedFile {
+                name: "manuals/router-setup.txt".to_string(),
+                deleted: true,
+            }],
+            1,
+        );
+        app.model
+            .syncthing
+            .need_index
+            .insert("documents".to_string(), index);
+        app
+    }
+
+    #[tokio::test]
+    async fn test_locally_deleted_file_has_its_own_icon_and_label() {
+        let mut app = app_viewing_locally_deleted();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+
+        let row = rows
+            .iter()
+            .find(|r| r.contains("router-setup.txt") && !r.contains("Selected"))
+            .expect("listing row");
+        assert!(row.contains("❌"), "{}", row);
+        assert!(!row.contains("⛅"), "{}", row);
+        assert!(
+            rows.iter().any(|r| r.contains("Deleted locally")),
+            "{:#?}",
+            rows
+        );
+    }
+
+    #[tokio::test]
+    async fn test_locally_deleted_preview_explains_restore() {
+        let mut app = app_viewing_locally_deleted();
+        let item = file_item("router-setup.txt");
+
+        app.fetch_file_info_and_content(
+            "documents".to_string(),
+            "manuals/router-setup.txt".to_string(),
+            item,
+        )
+        .await;
+
+        let popup = app.model.ui.file_info_popup.as_ref().unwrap();
+        assert_eq!(
+            popup.file_content.as_ref().unwrap_err(),
+            crate::logic::sync_states::locally_deleted_message()
+        );
+    }
+
+    // ========================================
+    // UNDELETE
+    // ========================================
+
+    /// How the undelete stub answers scan requests
+    #[derive(Clone)]
+    enum ScanMode {
+        Normal,
+        /// Never answers any scan
+        Hang,
+        /// Closes the first scan's connection without a response
+        DropFirst,
+        /// Holds the first scan until the test notifies
+        GateFirst(std::sync::Arc<tokio::sync::Notify>),
+    }
+
+    /// Stub that records each request in full; GET ignores answers with `patterns`
+    async fn spawn_undelete_stub(patterns: &[&str], scans: ScanMode) -> (String, RequestLog) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::json!({ "ignore": patterns }).to_string();
+        let log: RequestLog = Default::default();
+        let log_for_task = log.clone();
+        let first_scan_seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let (body, log, scans, first_scan_seen) = (
+                    body.clone(),
+                    log_for_task.clone(),
+                    scans.clone(),
+                    first_scan_seen.clone(),
+                );
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 16384];
+                    let mut n = sock.read(&mut buf).await.unwrap_or(0);
+                    if let Ok(Ok(more)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(20),
+                        sock.read(&mut buf[n..]),
+                    )
+                    .await
+                    {
+                        n += more;
+                    }
+                    let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                    log.lock().unwrap().push(request.clone());
+                    if request.starts_with("POST /rest/db/scan") {
+                        let first =
+                            !first_scan_seen.swap(true, std::sync::atomic::Ordering::SeqCst);
+                        match scans {
+                            ScanMode::Hang => {
+                                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                return;
+                            }
+                            ScanMode::DropFirst if first => return,
+                            ScanMode::GateFirst(gate) if first => gate.notified().await,
+                            _ => {}
+                        }
+                    }
+                    let payload = if request.starts_with("GET ") {
+                        body.as_str()
+                    } else {
+                        ""
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    let _ = sock.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{}", addr), log)
+    }
+
+    fn request_lines(log: &RequestLog) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.lines().next().unwrap_or("").to_string())
+            .collect()
+    }
+
+    fn ignore_bodies(log: &RequestLog) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.starts_with("POST /rest/db/ignores"))
+            .map(|r| r.split("\r\n\r\n").nth(1).unwrap_or("").to_string())
+            .collect()
+    }
+
+    /// Handle finished undelete batches, as the main loop does, until none are running
+    async fn finish_undeletes(app: &mut App) {
+        while app.undelete_jobs.values().any(|job| job.running) {
+            let done =
+                tokio::time::timeout(std::time::Duration::from_secs(5), app.undelete_rx.recv())
+                    .await
+                    .expect("undelete batch should finish")
+                    .expect("channel open");
+            crate::handlers::undelete::handle_undelete_done(app, done);
+        }
+    }
+
+    /// Documents/manuals with three locally deleted files, `router-setup.txt` selected
+    fn app_with_deleted_files(url: &str) -> App {
+        let mut app = app_viewing_locally_deleted();
+        app.client = crate::SyncthingClient::new(url.to_string(), "k".to_string());
+        let level = &mut app.model.navigation.breadcrumb_trail[0];
+        level.items.push(file_item("wifi.txt"));
+        level.items.push(file_item("zigbee.txt"));
+        let index = app.model.syncthing.need_index.get_mut("documents").unwrap();
+        crate::logic::sync_states::set_index_local_changed(
+            index,
+            &[
+                crate::api::LocalChangedFile {
+                    name: "manuals/router-setup.txt".to_string(),
+                    deleted: true,
+                },
+                crate::api::LocalChangedFile {
+                    name: "manuals/wifi.txt".to_string(),
+                    deleted: true,
+                },
+                crate::api::LocalChangedFile {
+                    name: "manuals/zigbee.txt".to_string(),
+                    deleted: true,
+                },
+            ],
+            1,
+        );
+        app
+    }
+
+    fn deleted_here(app: &App, path: &str) -> bool {
+        crate::logic::sync_states::is_locally_deleted(
+            app.model.syncthing.need_index.get("documents"),
+            None,
+            path,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_undelete_returns_immediately_while_scan_hangs() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            press(&mut app, crossterm::event::KeyCode::Char('u')),
+        )
+        .await
+        .expect("u must not wait for Syncthing");
+
+        let toast = app.model.ui.toast.as_ref().expect("toast");
+        assert!(
+            toast.message.starts_with("Restoring router-setup.txt"),
+            "{}",
+            toast.message
+        );
+        assert!(
+            !deleted_here(&app, "manuals/router-setup.txt"),
+            "❌ clears right away"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_undelete_batch_ignores_rescans_then_restores_ignores() {
+        let (url, log) = spawn_undelete_stub(&["*.tmp"], ScanMode::Normal).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+        finish_undeletes(&mut app).await;
+
+        let lines = request_lines(&log);
+        let kinds: Vec<&str> = lines
+            .iter()
+            .map(|l| {
+                if l.starts_with("GET /rest/db/ignores") {
+                    "get-ignores"
+                } else if l.starts_with("POST /rest/db/ignores") {
+                    "set-ignores"
+                } else if l.starts_with("POST /rest/db/scan") && l.contains("sub=manuals") {
+                    "scan-path"
+                } else {
+                    "other"
+                }
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "get-ignores",
+                "set-ignores",
+                "scan-path",
+                "set-ignores",
+                "scan-path"
+            ],
+            "{:#?}",
+            lines
+        );
+        let bodies = ignore_bodies(&log);
+        assert!(
+            bodies[0].contains("/manuals/router-setup.txt") && bodies[0].contains("*.tmp"),
+            "{:?}",
+            bodies
+        );
+        assert!(
+            !bodies[1].contains("router-setup") && bodies[1].contains("*.tmp"),
+            "{:?}",
+            bodies
+        );
+        assert_eq!(
+            app.model.ui.toast.as_ref().unwrap().message,
+            "Restored router-setup.txt"
+        );
+        assert!(app.cache.pending_undelete_patterns().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_undeletes_during_a_running_batch_join_the_next_batch() {
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (url, log) = spawn_undelete_stub(&[], ScanMode::GateFirst(gate.clone())).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await; // router-setup.txt
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        for idx in [2, 3] {
+            app.model.navigation.breadcrumb_trail[0].selected_index = Some(idx);
+            press(&mut app, crossterm::event::KeyCode::Char('u')).await; // wifi, zigbee
+        }
+        gate.notify_one();
+        finish_undeletes(&mut app).await;
+
+        let bodies = ignore_bodies(&log);
+        assert_eq!(
+            bodies.len(),
+            4,
+            "two batches, two ignore changes each: {:?}",
+            bodies
+        );
+        assert!(
+            bodies[0].contains("router-setup") && !bodies[0].contains("wifi"),
+            "{:?}",
+            bodies
+        );
+        assert!(
+            bodies[2].contains("/manuals/wifi.txt") && bodies[2].contains("/manuals/zigbee.txt"),
+            "{:?}",
+            bodies
+        );
+        assert_eq!(
+            app.model.ui.toast.as_ref().unwrap().message,
+            "Restored 2 files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_undelete_failure_still_restores_ignores() {
+        let (url, log) = spawn_undelete_stub(&["*.tmp"], ScanMode::DropFirst).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+        finish_undeletes(&mut app).await;
+
+        let bodies = ignore_bodies(&log);
+        let last = bodies.last().expect("ignores set back");
+        assert!(
+            !last.contains("router-setup") && last.contains("*.tmp"),
+            "{:?}",
+            bodies
+        );
+        let toast = app.model.ui.toast.as_ref().expect("toast");
+        assert!(
+            toast
+                .message
+                .starts_with("Failed to restore router-setup.txt"),
+            "{}",
+            toast.message
+        );
+        assert_eq!(toast.kind, crate::model::ToastKind::Error);
+        assert!(app.cache.pending_undelete_patterns().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_leftover_undelete_patterns_are_removed_at_startup() {
+        let (url, log) =
+            spawn_undelete_stub(&["/recipes/chili.md", "*.tmp"], ScanMode::Normal).await;
+        let mut app = app_with_deleted_files(&url);
+        app.cache
+            .add_pending_undelete("documents", &["/recipes/chili.md".to_string()])
+            .unwrap();
+
+        app.remove_leftover_undelete_patterns().await;
+
+        let bodies = ignore_bodies(&log);
+        assert_eq!(bodies.len(), 1, "{:?}", bodies);
+        assert!(
+            !bodies[0].contains("chili") && bodies[0].contains("*.tmp"),
+            "{:?}",
+            bodies
+        );
+        assert!(app.cache.pending_undelete_patterns().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_undelete_on_other_file_warns_and_sends_nothing() {
+        let (url, log) = spawn_undelete_stub(&[], ScanMode::Normal).await;
+        let mut app = app_with_deleted_files(&url);
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(0); // printer.txt
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(log.lock().unwrap().is_empty());
+        let toast = app.model.ui.toast.as_ref().expect("toast");
+        assert_eq!(
+            toast.message,
+            "Only files deleted on this device can be undeleted"
+        );
+        assert_eq!(toast.kind, crate::model::ToastKind::Warning);
+    }
+
+    #[tokio::test]
+    async fn test_delete_in_receive_only_folder_marks_row_deleted() {
+        let mut app = app_viewing_locally_deleted();
+        let dir = std::env::temp_dir().join(format!("stui-del-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("printer.txt");
+        std::fs::write(&file, "x").unwrap();
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(0);
+        app.model.ui.confirm_action = Some(crate::model::ConfirmAction::Delete {
+            path: file.to_string_lossy().to_string(),
+            name: "printer.txt".to_string(),
+            is_dir: false,
+        });
+
+        press(&mut app, crossterm::event::KeyCode::Char('y')).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let level = &app.model.navigation.breadcrumb_trail[0];
+        assert!(
+            level.items.iter().any(|i| i.name == "printer.txt"),
+            "row stays"
+        );
+        assert!(
+            deleted_here(&app, "manuals/printer.txt"),
+            "row shows deleted locally"
+        );
+    }
+
+    // ========================================
+    // FINISHED DOWNLOADS
+    // ========================================
+
+    fn level_state(app: &App, level: usize, name: &str) -> Option<SyncState> {
+        app.model.navigation.breadcrumb_trail[level]
+            .file_sync_states
+            .get(name)
+            .copied()
+    }
+
+    #[test]
+    fn test_finished_download_marks_file_synced_at_once() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+
+        handle_cache_invalidation(&mut app, item_finished("media", "a.mkv"));
+
+        assert_eq!(level_state(&app, 0, "a.mkv"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_finished_download_in_subdirectory_marks_that_level() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+        app.model.navigation.breadcrumb_trail[0].prefix = Some("clips/".to_string());
+
+        handle_cache_invalidation(&mut app, item_finished("media", "clips/a.mkv"));
+        handle_cache_invalidation(&mut app, item_finished("media", "other/a.mkv"));
+
+        assert_eq!(level_state(&app, 0, "a.mkv"), Some(SyncState::Synced));
+    }
+
+    #[test]
+    fn test_failed_download_or_finished_delete_keeps_state() {
+        let mut app = create_test_app();
+        view_folder_root(
+            &mut app,
+            "media",
+            vec![file_item("a.mkv"), file_item("b.mkv")],
+        );
+
+        handle_cache_invalidation(&mut app, item_failed("media", "a.mkv"));
+        handle_cache_invalidation(
+            &mut app,
+            CacheInvalidation::ItemFinished {
+                folder_id: "media".to_string(),
+                file_path: "b.mkv".to_string(),
+                failed: false,
+                deleted: true,
+                timestamp: SystemTime::now(),
+            },
+        );
+
+        assert_eq!(level_state(&app, 0, "a.mkv"), Some(SyncState::RemoteOnly));
+        assert_eq!(level_state(&app, 0, "b.mkv"), Some(SyncState::RemoteOnly));
+    }
+
+    #[tokio::test]
+    async fn test_undelete_shows_file_syncing_until_downloaded() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+
+        assert!(
+            app.model
+                .syncthing
+                .syncing_files
+                .get("documents")
+                .is_some_and(|s| s.contains("manuals/router-setup.txt")),
+            "🔄 from the moment u is pressed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_failed_undelete_shows_file_deleted_again() {
+        let (url, _log) = spawn_undelete_stub(&["*.tmp"], ScanMode::DropFirst).await;
+        let mut app = app_with_deleted_files(&url);
+
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+        finish_undeletes(&mut app).await;
+
+        assert!(
+            !app.model
+                .syncthing
+                .syncing_files
+                .get("documents")
+                .is_some_and(|s| s.contains("manuals/router-setup.txt"))
+        );
+        assert!(deleted_here(&app, "manuals/router-setup.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_finished_download_stays_synced_through_relisting() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+        // A need list fetched mid-download still lists the file
+        let at = mark_fetched(&mut app, "media");
+        handle_api_response(&mut app, need_result("media", at, &[], &["a.mkv"]));
+
+        handle_cache_invalidation(&mut app, item_finished("media", "a.mkv"));
+        handle_api_response(
+            &mut app,
+            ApiResponse::BrowseResult {
+                folder_id: "media".to_string(),
+                prefix: None,
+                items: Ok(vec![file_item("a.mkv")]),
+            },
+        );
+
+        assert_eq!(
+            displayed_states(&app).get("a.mkv"),
+            Some(&SyncState::Synced),
+            "the re-listing must not bring back the stale need entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_undeleted_file_stays_syncing_through_need_refresh() {
+        let (url, _log) = spawn_undelete_stub(&[], ScanMode::Hang).await;
+        let mut app = app_with_deleted_files(&url);
+        press(&mut app, crossterm::event::KeyCode::Char('u')).await;
+
+        // Syncthing hasn't started the download yet: nothing in progress
+        let at = mark_fetched(&mut app, "documents");
+        handle_api_response(&mut app, need_result("documents", at, &[], &[]));
+
+        assert_eq!(
+            displayed_states(&app).get("router-setup.txt"),
+            Some(&SyncState::Syncing)
+        );
+    }
+
+    #[test]
+    fn test_finished_download_clears_stale_local_deletion() {
+        // Mid-restore, Syncthing's local changes still listed the file as deleted
+        let mut app = app_viewing_locally_deleted();
+
+        handle_cache_invalidation(
+            &mut app,
+            item_finished("documents", "manuals/router-setup.txt"),
+        );
+
+        assert!(!deleted_here(&app, "manuals/router-setup.txt"));
+        assert_eq!(
+            displayed_states(&app).get("router-setup.txt"),
+            Some(&SyncState::Synced)
+        );
     }
 }

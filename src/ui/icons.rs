@@ -83,6 +83,7 @@ enum StatusType {
     Unknown,
     Error,
     Paused,
+    LocallyDeleted,
 }
 
 /// Icon renderer that handles both emoji and Nerd Font modes
@@ -140,6 +141,30 @@ impl IconRenderer {
 
         spans.push(self.status_icon(status_type));
         spans
+    }
+
+    /// Icon spans for an item shown as `display`
+    pub fn item_icon(
+        &self,
+        is_dir: bool,
+        display: crate::logic::sync_states::ItemDisplay,
+    ) -> Vec<Span<'static>> {
+        use crate::logic::sync_states::ItemDisplay;
+        match display {
+            ItemDisplay::State(state) => self.item_with_sync_state(is_dir, state),
+            ItemDisplay::Ignored { exists } => self.ignored_item(is_dir, exists),
+            ItemDisplay::LocallyDeleted => self.locally_deleted_item(is_dir),
+        }
+    }
+
+    /// Render an item deleted on this device in a Receive Only folder
+    pub fn locally_deleted_item(&self, is_dir: bool) -> Vec<Span<'static>> {
+        let item_icon = if is_dir {
+            self.folder_icon()
+        } else {
+            self.file_icon()
+        };
+        vec![item_icon, self.status_icon(StatusType::LocallyDeleted)]
     }
 
     /// Render an item whose sync state hasn't loaded yet: the file or folder icon
@@ -244,6 +269,7 @@ impl IconRenderer {
             StatusType::Unknown => ("❓ ", "\u{F128} ", self.theme.unknown_color),
             StatusType::Error => ("❌ ", "\u{F00D} ", self.theme.error_color),
             StatusType::Paused => ("⏸  ", "\u{F04C}  ", self.theme.paused_color),
+            StatusType::LocallyDeleted => ("❌ ", "\u{F1F8} ", self.theme.error_color),
         };
 
         let icon = match self.mode {
@@ -337,5 +363,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_locally_deleted_item_icons() {
+        let emoji = IconRenderer::new(IconMode::Emoji, IconTheme::default());
+        let text: String = emoji
+            .locally_deleted_item(false)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "📄❌ ");
+
+        let nerd = IconRenderer::new(IconMode::NerdFont, IconTheme::default());
+        let text: String = nerd
+            .locally_deleted_item(false)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains('\u{F1F8}'), "{:?}", text);
     }
 }

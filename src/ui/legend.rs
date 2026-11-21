@@ -14,6 +14,7 @@ fn build_hotkey_spans(
     has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
+    can_undelete: bool,
 ) -> Vec<Span<'static>> {
     let mut hotkey_spans = vec![];
 
@@ -93,6 +94,13 @@ fn build_hotkey_spans(
             ]);
         }
 
+        if can_undelete {
+            hotkey_spans.extend(vec![
+                Span::styled("u", Style::default().fg(Color::Yellow)),
+                Span::raw(":Undelete  "),
+            ]);
+        }
+
         hotkey_spans.extend(vec![
             Span::styled("s", Style::default().fg(Color::Yellow)),
             Span::raw(":Sort  "),
@@ -153,6 +161,7 @@ pub fn build_legend_paragraph(
     has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
+    can_undelete: bool,
 ) -> Paragraph<'static> {
     let hotkey_spans = build_hotkey_spans(
         vim_mode,
@@ -161,6 +170,7 @@ pub fn build_legend_paragraph(
         has_open_command,
         search_mode,
         has_search_query,
+        can_undelete,
     );
     let hotkey_line = Line::from(hotkey_spans);
 
@@ -181,6 +191,7 @@ pub fn render_legend(
     has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
+    can_undelete: bool,
 ) {
     let legend = build_legend_paragraph(
         vim_mode,
@@ -189,11 +200,13 @@ pub fn render_legend(
         has_open_command,
         search_mode,
         has_search_query,
+        can_undelete,
     );
     f.render_widget(legend, area);
 }
 
 /// Calculate required height for legend based on terminal width and content
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_legend_height(
     terminal_width: u16,
     vim_mode: bool,
@@ -202,6 +215,7 @@ pub fn calculate_legend_height(
     has_open_command: bool,
     search_mode: bool,
     has_search_query: bool,
+    can_undelete: bool,
 ) -> u16 {
     // Build paragraph WITHOUT block borders for accurate line counting
     // (line_count() doesn't account for borders correctly when block is attached)
@@ -212,6 +226,7 @@ pub fn calculate_legend_height(
         has_open_command,
         search_mode,
         has_search_query,
+        can_undelete,
     );
     let hotkey_line = Line::from(hotkey_spans);
 
@@ -243,6 +258,28 @@ mod tests {
     }
 
     // ========================================
+    // UNDELETE KEY
+    // ========================================
+
+    #[test]
+    fn test_legend_shows_undelete_only_for_locally_deleted_selection() {
+        let text = |focus_level, can_undelete| {
+            spans_to_text(&build_hotkey_spans(
+                true,
+                focus_level,
+                false,
+                true,
+                false,
+                false,
+                can_undelete,
+            ))
+        };
+        assert!(text(1, true).contains("u:Undelete"));
+        assert!(!text(1, false).contains("u:Undelete"));
+        assert!(!text(0, true).contains("u:Undelete"));
+    }
+
+    // ========================================
     // OUT-OF-SYNC FILTER KEY
     // ========================================
 
@@ -254,6 +291,7 @@ mod tests {
             true,
             search_mode,
             has_search_query,
+            false,
         ))
     }
 
@@ -283,6 +321,7 @@ mod tests {
             true,  // has_open_command
             false, // search_mode
             false, // has_search_query
+            false, // can_undelete
         );
 
         let text = spans_to_text(&spans);
@@ -303,6 +342,7 @@ mod tests {
             true,  // has_open_command
             false, // search_mode
             false, // has_search_query
+            false, // can_undelete
         );
 
         let text = spans_to_text(&spans);
@@ -329,6 +369,7 @@ mod tests {
             false, // has_open_command (no command configured)
             false, // search_mode
             false, // has_search_query
+            false, // can_undelete
         );
 
         let text = spans_to_text(&spans);
@@ -358,6 +399,7 @@ mod tests {
             false, // has_open_command (no command configured)
             false, // search_mode
             false, // has_search_query
+            false, // can_undelete
         );
 
         let text = spans_to_text(&spans);
@@ -373,11 +415,11 @@ mod tests {
         // Test that 'o' key behavior changes based on focus_level
 
         // Folder view (focus_level == 0)
-        let folder_spans = build_hotkey_spans(false, 0, false, true, false, false);
+        let folder_spans = build_hotkey_spans(false, 0, false, true, false, false, false);
         let folder_text = spans_to_text(&folder_spans);
 
         // Breadcrumb view (focus_level > 0)
-        let breadcrumb_spans = build_hotkey_spans(false, 1, false, true, false, false);
+        let breadcrumb_spans = build_hotkey_spans(false, 1, false, true, false, false, false);
         let breadcrumb_text = spans_to_text(&breadcrumb_spans);
 
         // Verify they're different

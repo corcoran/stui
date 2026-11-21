@@ -7,10 +7,10 @@
 ### Feature Enhancements
 
 **High Priority:**
+- Pending local changes: one model for "the user did X, show the result until Syncthing confirms it". Today each action has its own patch (`restoring` set, `record_local_deletion`, `ItemFinished` marking Synced, ignore-toggle state kept, pause flag set locally, group edits applied locally), and Syncthing replies built before an action still overwrite its result. Record pending changes per path, draw them over Syncthing's data, clear them on confirmation, failure or timeout, and drop replies requested before the action for that path. Reverting a whole Receive Only folder (`R`) shows heavy icon churn that this would remove
 - Syncthing log viewer
 
 **Medium Priority:**
-- Tell local deletions apart in Receive Only folders: a file deleted locally (`deleted: true` in `/rest/db/localchanged`) shows the same local-change icon as an edit or addition, and its preview just says "File not found on disk". Mark deletions differently in the file list, and have the preview say it was deleted on this device and that `R` restores it from the other devices (e.g. `Documents/manuals/router-setup.txt` in the demo)
 - `blockIndexing` toggle (Syncthing v2.1.0+): per-folder bool, defaults to true. Off shrinks the Syncthing database but loses block reuse across files. Fits next to the folder type menu
 - Taskbar icon (plus ability to launch terminal + app)
 

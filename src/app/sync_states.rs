@@ -88,7 +88,14 @@ impl App {
         let wanted = logic::sync_states::need_index_wanted(folder_open, &status.state);
         let fetch = plan.fetch && wanted;
         if plan.clear_syncing {
-            syncthing.syncing_files.remove(folder_id);
+            let restoring = syncthing.restoring_in(folder_id);
+            if restoring.is_empty() {
+                syncthing.syncing_files.remove(folder_id);
+            } else {
+                syncthing
+                    .syncing_files
+                    .insert(folder_id.to_string(), restoring);
+            }
         }
         if plan.fetch && !wanted {
             // Stale and not worth fetching while closed: forget the outstanding request (late

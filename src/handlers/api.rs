@@ -858,6 +858,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         sequence,
                         syncing.len()
                     ));
+                    let mut syncing = syncing;
+                    syncing.extend(app.model.syncthing.restoring_in(&folder_id));
                     app.model
                         .syncthing
                         .syncing_files

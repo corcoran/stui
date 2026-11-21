@@ -130,6 +130,12 @@ impl CacheDb {
                 device_name TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS pending_undelete_ignores (
+                folder_id TEXT NOT NULL,
+                pattern TEXT NOT NULL,
+                PRIMARY KEY (folder_id, pattern)
+            );
+
             CREATE TABLE IF NOT EXISTS cached_folders (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 data TEXT NOT NULL
@@ -769,6 +775,44 @@ impl CacheDb {
         ));
 
         Ok(folders)
+    }
+
+    /// Record ignore patterns an undelete is about to add, so a later start can remove them
+    /// if stui exits before the undelete puts the ignore list back
+    pub fn add_pending_undelete(&self, folder_id: &str, patterns: &[String]) -> Result<()> {
+        for pattern in patterns {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO pending_undelete_ignores (folder_id, pattern) VALUES (?1, ?2)",
+                params![folder_id, pattern],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn remove_pending_undelete(&self, folder_id: &str, patterns: &[String]) -> Result<()> {
+        for pattern in patterns {
+            self.conn.execute(
+                "DELETE FROM pending_undelete_ignores WHERE folder_id = ?1 AND pattern = ?2",
+                params![folder_id, pattern],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Recorded undelete patterns per folder
+    pub fn pending_undelete_patterns(&self) -> Result<HashMap<String, Vec<String>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT folder_id, pattern FROM pending_undelete_ignores")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut pending: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (folder_id, pattern) = row?;
+            pending.entry(folder_id).or_default().push(pattern);
+        }
+        Ok(pending)
     }
 
     // Event ID persistence

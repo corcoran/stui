@@ -102,6 +102,8 @@ pub enum CacheInvalidation {
         file_path: String,
         /// The event carried an error: the item is still needed
         failed: bool,
+        /// The finished action removed the item locally
+        deleted: bool,
         #[allow(dead_code)]
         timestamp: std::time::SystemTime,
     },
@@ -261,6 +263,11 @@ async fn event_listener_loop(
                                                 folder_id: folder_id.to_string(),
                                                 file_path: item_path.to_string(),
                                                 failed: item_finished_failed(&event.data),
+                                                deleted: event
+                                                    .data
+                                                    .get("action")
+                                                    .and_then(|v| v.as_str())
+                                                    == Some("delete"),
                                                 timestamp,
                                             };
                                         log_debug(&format!(

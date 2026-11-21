@@ -53,18 +53,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         item,
                         syncing,
                     );
-                    let is_ignored = sync_state == Some(crate::api::SyncState::Ignored);
-                    let exists = if is_ignored {
-                        level.ignored_exists.get(&item.name).copied()
-                    } else {
-                        None
-                    };
-                    (
-                        item.name.clone(),
-                        item.item_type.clone(),
+                    let display = crate::logic::sync_states::item_display(
                         sync_state,
-                        exists,
-                    )
+                        level.ignored_exists.get(&item.name).copied(),
+                        crate::logic::sync_states::is_locally_deleted(
+                            app.model.syncthing.need_index.get(&level.folder_id),
+                            syncing,
+                            &crate::logic::sync_states::breadcrumb_item_path(
+                                level.prefix.as_deref(),
+                                &item.name,
+                            ),
+                        ),
+                    );
+                    (item.name.clone(), item.item_type.clone(), display)
                 })
             });
             (folder_label, folder_id, item_count, selected_item)
@@ -115,6 +116,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Determine if search should be visible
     let search_visible = app.model.ui.search_mode || !app.model.ui.search_query.is_empty();
+    let can_undelete = matches!(
+        &breadcrumb_selected_item,
+        Some((
+            _,
+            _,
+            Some(crate::logic::sync_states::ItemDisplay::LocallyDeleted)
+        ))
+    );
 
     let layout_info = layout::calculate_layout(
         size,
@@ -126,6 +135,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.open_command.is_some(),
         status_height,
         search_visible,
+        can_undelete,
     );
 
     // Render system info bar at the top
@@ -205,6 +215,23 @@ pub fn render(f: &mut Frame, app: &mut App) {
             app.model.syncthing.syncing_files.get(&level.folder_id),
         );
 
+        let need_index = app.model.syncthing.need_index.get(&level.folder_id);
+        let locally_deleted: std::collections::HashSet<String> = level
+            .items
+            .iter()
+            .filter(|item| {
+                crate::logic::sync_states::is_locally_deleted(
+                    need_index,
+                    app.model.syncthing.syncing_files.get(&level.folder_id),
+                    &crate::logic::sync_states::breadcrumb_item_path(
+                        level.prefix.as_deref(),
+                        &item.name,
+                    ),
+                )
+            })
+            .map(|item| item.name.clone())
+            .collect();
+
         // Create temporary ListState for rendering
         let mut temp_state = ratatui::widgets::ListState::default();
         temp_state.select(level.selected_index);
@@ -215,6 +242,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             level.filtered_items.as_ref(), // Filtered view (if active)
             &sync_states,
             &level.ignored_exists,
+            &locally_deleted,
             &mut temp_state,
             &title,
             is_focused,
@@ -264,6 +292,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             app.open_command.is_some(),
             app.model.ui.search_mode,
             !app.model.ui.search_query.is_empty(),
+            can_undelete,
         );
     }
 

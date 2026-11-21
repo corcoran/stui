@@ -148,6 +148,10 @@ pub struct App {
     terminal_title_enabled: bool,
     /// Last title written to the terminal
     last_terminal_title: Option<String>,
+    /// Undelete batches per folder
+    undelete_jobs: HashMap<String, app::ignore::UndeleteJob>,
+    undelete_tx: tokio::sync::mpsc::UnboundedSender<app::ignore::UndeleteDone>,
+    undelete_rx: tokio::sync::mpsc::UnboundedReceiver<app::ignore::UndeleteDone>,
     last_db_flush: Instant,
     last_reconnect_attempt: Instant,
     reconnect_delay: Duration,
@@ -449,6 +453,7 @@ impl App {
 
         // Create channel for image updates
         let (image_update_tx, image_update_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (undelete_tx, undelete_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Spawn event listener
         services::events::spawn_event_listener(
@@ -578,6 +583,9 @@ impl App {
             pending_preview_need: None,
             terminal_title_enabled: config.terminal_title,
             last_terminal_title: None,
+            undelete_jobs: HashMap::new(),
+            undelete_tx,
+            undelete_rx,
             last_db_flush: Instant::now(),
             last_reconnect_attempt: Instant::now(),
             reconnect_delay: Duration::from_secs(5), // Start with 5s
@@ -607,6 +615,8 @@ impl App {
         if let Ok(version) = app.client.get_version().await {
             app.model.syncthing.version = Some(version);
         }
+
+        app.remove_leftover_undelete_patterns().await;
 
         if let Ok(conn_stats) = app.client.get_connection_stats().await {
             app.model.syncthing.last_connection_stats = Some((conn_stats.clone(), Instant::now()));
@@ -1055,6 +1065,10 @@ where
         while let Ok(event_id) = app.event_id_rx.try_recv() {
             // Persist event ID to cache periodically
             let _ = app.cache.save_last_event_id(event_id);
+        }
+
+        while let Ok(done) = app.undelete_rx.try_recv() {
+            handlers::undelete::handle_undelete_done(app, done);
         }
 
         // Process image updates from background loading tasks (non-blocking)

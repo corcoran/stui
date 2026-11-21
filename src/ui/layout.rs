@@ -32,6 +32,7 @@ pub fn calculate_layout(
     has_open_command: bool,
     status_height: u16,
     search_visible: bool,
+    can_undelete: bool,
 ) -> LayoutInfo {
     // Calculate dynamic legend height based on terminal width and content
     // Note: We use search_visible for both parameters since we need visibility for layout
@@ -43,6 +44,7 @@ pub fn calculate_layout(
         has_open_command,
         search_visible, // search_mode (approximation for layout)
         search_visible, // has_search_query (approximation for layout)
+        can_undelete,
     );
 
     let search_height = if search_visible { 3 } else { 0 };

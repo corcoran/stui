@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ New Features
 
+- **Local deletions**: In a Receive Only folder, a file deleted on this device shows ❌ (a trash can in Nerd Font mode) and "Deleted locally". It no longer looks like a pending download. Its preview says how to restore it
+- **Undelete one file**: In a Receive Only folder, press `u` on a file deleted on this device to download it again from your other devices. `R` still reverts the whole folder. Undeletes run in the background, so you can press `u` on several files in a row
 - **Terminal title**: The terminal or tab title follows where you are (`stui · Projects/website`, or the file while previewing) and goes back to the previous title on exit. Set `terminal_title: false` to leave the title alone
 
 ### 🐛 Bug Fixes
@@ -16,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README
 - Photos with an EXIF orientation (most phone and camera shots) preview upright instead of sideways, and their resolution reads the right way round
 - Selecting a paused folder, or pausing the selected one, no longer leaves a folder's files on screen; the pane closes, and resuming the folder shows its files again
+- Deleting a file in a Receive Only folder keeps it in the list as deleted locally, instead of removing the row and briefly showing ✅
+- A file shows ✅ as soon as its download finishes, instead of after the next directory refresh
+- Preview error messages wrap at word boundaries instead of mid-word
 
 ---
 

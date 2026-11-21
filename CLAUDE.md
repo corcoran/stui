@@ -408,7 +408,8 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `S`: Toggle reverse sort order
 - `t`: Toggle info display (Off → TimestampOnly → TimestampAndSize → Off)
 - `p`: Pause/resume folder (folder view only, with confirmation)
-- `u`: **Folder Update History** - Shows recent file updates for the selected folder with lazy-loading pagination
+- `u` (breadcrumb view): **Undelete** a file deleted locally in a Receive Only folder (shown 📄❌ "Deleted locally"); `u:Undelete` appears in the legend only for such a file
+- `u` (folder view): **Folder Update History** - Shows recent file updates for the selected folder with lazy-loading pagination
   - Loads files in batches of 100 as you scroll
   - Auto-loads when within 10 items of bottom
   - Press `Enter` on a file to jump directly to that file's location in breadcrumbs
@@ -531,6 +532,9 @@ Auto-detects ANSI codes (ESC[ sequences), CP437 encoding, 80-column wrapping, li
 
 ### Derived States
 `model.syncthing.need_index` holds each folder's queued/rest need entries, receive-only local changes and ignore patterns, refetched on sequence changes and syncing transitions. `logic::sync_states::derived_state` fills states the cache and FileInfo haven't supplied: listed paths and their ancestors get the listed state (a directory's aggregate beats its own Synced FileInfo), and anything else is Synced only when the folder is idle, the index is complete for the current sequence and no ignore pattern could match.
+
+### Undelete
+Syncthing has no per-file revert, so `u` ignores the file's exact path, rescans it (Syncthing forgets the local deletion), puts the original ignore list back and rescans again (Syncthing downloads it). Rescans block while a folder syncs, so batches run in the background, one per folder at a time (`App::undelete_jobs`); presses during a batch join the next one. The temporary patterns are recorded in the cache table `pending_undelete_ignores` before they are added and removed after, and `App::remove_leftover_undelete_patterns` clears any left over at startup. `model.syncthing.restoring` keeps restored files in `syncing_files` (which need responses rebuild) until `ItemFinished`, which also marks the file Synced and drops its local change.
 
 ## Current State
 

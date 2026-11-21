@@ -188,6 +188,11 @@ pub struct SyncthingModel {
     /// no trailing slash). Overlaid on breadcrumb sync states at render time.
     pub syncing_files: HashMap<String, HashSet<String>>,
 
+    /// Files stui asked Syncthing to restore (undelete) and hasn't seen finish downloading.
+    /// Kept in `syncing_files` too, which need responses and status changes rebuild, so they
+    /// show syncing from the keypress until the download ends.
+    pub restoring: HashMap<String, HashSet<String>>,
+
     /// Latest /rest/db/need request per folder; feeds both `syncing_files` and `need_index`
     pub need_fetches: HashMap<String, NeedFetch>,
 
@@ -208,6 +213,11 @@ pub struct SyncthingModel {
 }
 
 impl SyncthingModel {
+    /// The folder's files being restored, to keep in a rebuilt syncing set
+    pub fn restoring_in(&self, folder_id: &str) -> HashSet<String> {
+        self.restoring.get(folder_id).cloned().unwrap_or_default()
+    }
+
     /// Create initial empty Syncthing model
     pub fn new() -> Self {
         Self {
@@ -230,6 +240,7 @@ impl SyncthingModel {
             connected_device_count: None,
             last_folder_updates: HashMap::new(),
             syncing_files: HashMap::new(),
+            restoring: HashMap::new(),
             need_fetches: HashMap::new(),
             need_index: HashMap::new(),
             need_paging: HashMap::new(),

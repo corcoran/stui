@@ -11,6 +11,7 @@
 pub mod api;
 pub mod events;
 pub mod keyboard;
+pub mod undelete;
 
 // Re-export for convenience
 pub use api::handle_api_response;

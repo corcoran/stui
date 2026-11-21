@@ -219,8 +219,22 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                                             .invalidate_single_file(&folder_id, &file_path);
                                     }
 
-                                    // Immediately remove from current view (mutable borrow)
-                                    if let Some(level) =
+                                    let receive_only =
+                                        app.model.syncthing.folders.iter().any(|f| {
+                                            f.id == folder_id && f.folder_type == "receiveonly"
+                                        });
+                                    if receive_only {
+                                        // The file stays on the other devices, so the row stays,
+                                        // shown as deleted locally
+                                        crate::logic::sync_states::record_local_deletion(
+                                            app.model
+                                                .syncthing
+                                                .need_index
+                                                .entry(folder_id.clone())
+                                                .or_default(),
+                                            &file_path,
+                                        );
+                                    } else if let Some(level) =
                                         app.model.navigation.breadcrumb_trail.get_mut(level_idx)
                                     {
                                         // Remove from items by name (not by index, which is relative to filtered list)
@@ -970,6 +984,57 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     folder_id,
                     folder_label,
                 });
+            }
+        }
+        KeyCode::Char('u') if app.model.navigation.focus_level > 0 => {
+            let selection = app.model.current_level().and_then(|level| {
+                level.selected_item().map(|item| {
+                    (
+                        level.folder_id.clone(),
+                        crate::logic::sync_states::breadcrumb_item_path(
+                            level.prefix.as_deref(),
+                            &item.name,
+                        ),
+                        item.name.clone(),
+                    )
+                })
+            });
+            match selection {
+                Some((folder_id, path, name))
+                    if crate::logic::sync_states::is_locally_deleted(
+                        app.model.syncthing.need_index.get(&folder_id),
+                        app.model.syncthing.syncing_files.get(&folder_id),
+                        &path,
+                    ) =>
+                {
+                    app.queue_undelete(&folder_id, path);
+                    let busy = app
+                        .model
+                        .syncthing
+                        .folder_statuses
+                        .get(&folder_id)
+                        .is_some_and(|s| s.state != "idle");
+                    let label = app
+                        .model
+                        .syncthing
+                        .folders
+                        .iter()
+                        .find(|f| f.id == folder_id)
+                        .map(|f| f.label.clone().unwrap_or_else(|| f.id.clone()))
+                        .unwrap_or(folder_id);
+                    if busy {
+                        app.model.ui.show_success(format!(
+                            "Restoring {} once {} finishes syncing…",
+                            name, label
+                        ));
+                    } else {
+                        app.model.ui.show_success(format!("Restoring {}…", name));
+                    }
+                }
+                _ => app
+                    .model
+                    .ui
+                    .show_warning("Only files deleted on this device can be undeleted"),
             }
         }
         KeyCode::Char('R') => {

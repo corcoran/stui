@@ -154,6 +154,17 @@ impl App {
             (content, exists, binary, None)
         };
 
+        let file_content = if !exists_on_disk
+            && logic::sync_states::is_locally_deleted(
+                self.model.syncthing.need_index.get(&folder_id),
+                self.model.syncthing.syncing_files.get(&folder_id),
+                &file_path,
+            ) {
+            Err(logic::sync_states::locally_deleted_message().to_string())
+        } else {
+            file_content
+        };
+
         // 3. Update popup state with results
         self.model.ui.file_info_popup = Some(model::FileInfoPopupState {
             folder_id,

@@ -159,6 +159,12 @@ pub fn breadcrumb_item_path(prefix: Option<&str>, name: &str) -> String {
     format!("{}{}", prefix.unwrap_or(""), name)
 }
 
+/// Name of `path` as an item of the level listing `prefix`, if it lies directly in it
+pub fn name_in_level<'a>(prefix: Option<&str>, path: &'a str) -> Option<&'a str> {
+    let rest = path.strip_prefix(prefix.unwrap_or(""))?;
+    (!rest.is_empty() && !rest.contains('/')).then_some(rest)
+}
+
 /// Overlay the in-flight transfer set on a base sync state.
 ///
 /// `path` is relative to the folder root with no trailing slash. A directory is Syncing
@@ -346,6 +352,75 @@ pub fn local_changed_states(files: &[LocalChangedFile]) -> HashMap<String, SyncS
             (f.name.trim_end_matches('/').to_string(), state)
         })
         .collect()
+}
+
+/// Drop `path` from the index's local changes, e.g. once an undelete starts for it
+pub fn forget_local_change(index: &mut NeedIndex, path: &str) {
+    if index.local_changed.remove(path).is_some() {
+        rebuild_descendants(index);
+    }
+}
+
+/// Record `path` as deleted on this device, before /rest/db/localchanged reports it
+pub fn record_local_deletion(index: &mut NeedIndex, path: &str) {
+    index.local_changed.insert(
+        path.trim_end_matches('/').to_string(),
+        SyncState::RemoteOnly,
+    );
+    rebuild_descendants(index);
+}
+
+/// Whether `path` was deleted on this device in a Receive Only folder: /rest/db/localchanged
+/// lists it as deleted. Such a file's sync state is RemoteOnly. A file Syncthing is downloading
+/// or has queued is not: while it restores a file, Syncthing lists it both as a local deletion
+/// and as needed.
+pub fn is_locally_deleted(
+    index: Option<&NeedIndex>,
+    syncing: Option<&HashSet<String>>,
+    path: &str,
+) -> bool {
+    let Some(index) = index else {
+        return false;
+    };
+    index.local_changed.get(path) == Some(&SyncState::RemoteOnly)
+        && !index.need.contains_key(path)
+        && !syncing.is_some_and(|s| s.contains(path))
+}
+
+/// How a file or directory is shown: its icon in the list and its state in the status bar
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemDisplay {
+    State(SyncState),
+    /// Ignored; `exists` picks the on-disk or deleted icon
+    Ignored {
+        exists: bool,
+    },
+    /// Deleted on this device in a Receive Only folder
+    LocallyDeleted,
+}
+
+/// Display for an item from its sync state, whether an ignored item exists on disk, and
+/// whether it was deleted locally. `None` while the state hasn't loaded.
+pub fn item_display(
+    state: Option<SyncState>,
+    ignored_exists: Option<bool>,
+    locally_deleted: bool,
+) -> Option<ItemDisplay> {
+    if locally_deleted {
+        return Some(ItemDisplay::LocallyDeleted);
+    }
+    Some(match state? {
+        SyncState::Ignored => ItemDisplay::Ignored {
+            exists: ignored_exists.unwrap_or(false),
+        },
+        other => ItemDisplay::State(other),
+    })
+}
+
+/// Preview text for a file deleted on this device in a Receive Only folder
+pub fn locally_deleted_message() -> &'static str {
+    "Deleted on this device. If you wish to sync this file to your device, close the preview and \
+     press:\n\u{2022} u to restore this file\n\u{2022} R to revert all local changes in this folder"
 }
 
 /// Rank used to combine states into a directory state, matching `aggregate_directory_state`.
@@ -1896,5 +1971,92 @@ mod derived_tests {
         let now = Instant::now();
         let plan = need_fetch_plan(Some("syncing"), "sync-preparing", fetch(now, 1), 2, now);
         assert_eq!(plan, NeedFetchPlan::default());
+    }
+
+    // ========================================
+    // LOCAL DELETIONS
+    // ========================================
+
+    #[test]
+    fn test_is_locally_deleted() {
+        let index = documents_index(3);
+        assert!(is_locally_deleted(
+            Some(&index),
+            None,
+            "manuals/router-setup.txt"
+        ));
+        assert!(!is_locally_deleted(
+            Some(&index),
+            None,
+            "recipes/pancakes.md"
+        ));
+        assert!(!is_locally_deleted(
+            Some(&index),
+            None,
+            "manuals/printer.txt"
+        ));
+        assert!(!is_locally_deleted(None, None, "manuals/router-setup.txt"));
+    }
+
+    #[test]
+    fn test_file_being_downloaded_is_not_locally_deleted() {
+        // Mid-restore, Syncthing lists the file both as a local deletion and as needed
+        let path = "manuals/router-setup.txt";
+        let mut queued = documents_index(3);
+        set_index_need(&mut queued, &need(&[], &[path], &[]), 3, true, None);
+        assert!(!is_locally_deleted(Some(&queued), None, path));
+
+        let syncing: HashSet<String> = [path.to_string()].into();
+        assert!(!is_locally_deleted(
+            Some(&documents_index(3)),
+            Some(&syncing),
+            path
+        ));
+    }
+
+    #[test]
+    fn test_locally_deleted_message_points_at_revert() {
+        let message = locally_deleted_message();
+        assert!(
+            message.starts_with("Deleted on this device."),
+            "{}",
+            message
+        );
+        assert!(message.contains("u to restore this file"), "{}", message);
+        assert!(
+            message.contains("R to revert all local changes"),
+            "{}",
+            message
+        );
+    }
+
+    // ========================================
+    // ITEM DISPLAY
+    // ========================================
+
+    #[test]
+    fn test_item_display_precedence() {
+        use SyncState::*;
+        assert_eq!(item_display(None, None, false), None);
+        assert_eq!(
+            item_display(Some(Synced), None, false),
+            Some(ItemDisplay::State(Synced))
+        );
+        assert_eq!(
+            item_display(Some(Ignored), Some(true), false),
+            Some(ItemDisplay::Ignored { exists: true })
+        );
+        assert_eq!(
+            item_display(Some(Ignored), None, false),
+            Some(ItemDisplay::Ignored { exists: false })
+        );
+        assert_eq!(
+            item_display(Some(RemoteOnly), None, true),
+            Some(ItemDisplay::LocallyDeleted)
+        );
+        assert_eq!(
+            item_display(None, None, true),
+            Some(ItemDisplay::LocallyDeleted)
+        );
     }
 }

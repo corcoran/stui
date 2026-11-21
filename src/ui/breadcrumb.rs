@@ -176,6 +176,7 @@ pub fn render_breadcrumb_panel(
     filtered_items: Option<&Vec<BrowseItem>>, // Filtered view
     file_sync_states: &std::collections::HashMap<String, SyncState>,
     ignored_exists: &std::collections::HashMap<String, bool>,
+    locally_deleted: &std::collections::HashSet<String>,
     state: &mut ratatui::widgets::ListState,
     title: &str,
     is_focused: bool,
@@ -194,14 +195,14 @@ pub fn render_breadcrumb_panel(
         .iter()
         .map(|item| {
             let is_directory = item.item_type == "FILE_INFO_TYPE_DIRECTORY";
-            let icon_spans: Vec<Span> = match file_sync_states.get(&item.name).copied() {
+            let display = crate::logic::sync_states::item_display(
+                file_sync_states.get(&item.name).copied(),
+                ignored_exists.get(&item.name).copied(),
+                locally_deleted.contains(&item.name),
+            );
+            let icon_spans: Vec<Span> = match display {
                 None => icon_renderer.item_loading(is_directory),
-                Some(SyncState::Ignored) => {
-                    // Use pre-computed ignored_exists value (checked when state was set)
-                    let exists = ignored_exists.get(&item.name).copied().unwrap_or(false);
-                    icon_renderer.ignored_item(is_directory, exists)
-                }
-                Some(state) => icon_renderer.item_with_sync_state(is_directory, state),
+                Some(display) => icon_renderer.item_icon(is_directory, display),
             };
 
             build_list_item(
