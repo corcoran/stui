@@ -3531,6 +3531,19 @@ mod tests {
         app
     }
 
+    #[tokio::test]
+    async fn test_ctrl_u_scrolls_half_page_up_in_breadcrumbs() {
+        let mut app = create_vim_app();
+        let items: Vec<BrowseItem> = (0..60).map(|i| file_item(&format!("f{i:02}"))).collect();
+        view_folder_root(&mut app, "media", items);
+        app.model.navigation.breadcrumb_trail[0].selected_index = Some(50);
+
+        press_with(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL).await;
+
+        assert!(selected(&app).is_some_and(|i| i < 50));
+        assert!(app.model.ui.toast.is_none());
+    }
+
     fn three_files() -> Vec<BrowseItem> {
         vec![file_item("a.txt"), file_item("b.md"), file_item("c.txt")]
     }
@@ -4360,6 +4373,45 @@ mod tests {
             popup.file_content.as_ref().unwrap_err(),
             crate::logic::sync_states::locally_deleted_message()
         );
+    }
+
+    #[tokio::test]
+    async fn test_locally_deleted_image_preview_shows_restore_text_not_loading() {
+        let mut app = app_viewing_locally_deleted();
+        let index = app.model.syncthing.need_index.get_mut("documents").unwrap();
+        crate::logic::sync_states::set_index_local_changed(
+            index,
+            &[crate::api::LocalChangedFile {
+                name: "manuals/diagram.jpg".to_string(),
+                deleted: true,
+            }],
+            1,
+        );
+
+        app.fetch_file_info_and_content(
+            "documents".to_string(),
+            "manuals/diagram.jpg".to_string(),
+            file_item("diagram.jpg"),
+        )
+        .await;
+
+        let popup = app.model.ui.file_info_popup.as_ref().unwrap();
+        assert!(!popup.is_image);
+        assert_eq!(
+            popup.file_content.as_ref().unwrap_err(),
+            crate::logic::sync_states::locally_deleted_message()
+        );
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let screen: String = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        assert!(!screen.contains("Loading image"));
+        assert!(screen.contains("Deleted on this device"));
     }
 
     // ========================================

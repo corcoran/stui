@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Icons no longer flip back to an older state after you delete, ignore, unignore, undelete or revert
 - `R` updates the whole folder at once instead of file by file
 - A failed delete or revert shows an error
+- Previewing an image that is not on disk says why, instead of staying on "Loading image..."
 
 ---
 

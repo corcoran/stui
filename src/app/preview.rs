@@ -186,7 +186,9 @@ impl App {
             file_content,
             exists_on_disk,
             is_binary,
-            is_image,
+            // The image pane has nothing to draw for a missing file and would show
+            // "Loading image..." forever; the text pane shows why it is missing
+            is_image: is_image && exists_on_disk,
             scroll_offset: 0,
             raw_view: false,
         });

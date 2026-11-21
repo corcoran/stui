@@ -1028,7 +1028,10 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 });
             }
         }
-        KeyCode::Char('u') if app.model.navigation.focus_level > 0 => {
+        KeyCode::Char('u')
+            if app.model.navigation.focus_level > 0
+                && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
             let selection = app.model.current_level().and_then(|level| {
                 level.selected_item().map(|item| {
                     (
