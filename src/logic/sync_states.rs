@@ -407,36 +407,6 @@ pub fn is_locally_deleted(
         && !syncing.is_some_and(|s| s.contains(path))
 }
 
-/// How a file or directory is shown: its icon in the list and its state in the status bar
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ItemDisplay {
-    State(SyncState),
-    /// Ignored; `exists` picks the on-disk or deleted icon
-    Ignored {
-        exists: bool,
-    },
-    /// Deleted on this device in a Receive Only folder
-    LocallyDeleted,
-}
-
-/// Display for an item from its sync state, whether an ignored item exists on disk, and
-/// whether it was deleted locally. `None` while the state hasn't loaded.
-pub fn item_display(
-    state: Option<SyncState>,
-    ignored_exists: Option<bool>,
-    locally_deleted: bool,
-) -> Option<ItemDisplay> {
-    if locally_deleted {
-        return Some(ItemDisplay::LocallyDeleted);
-    }
-    Some(match state? {
-        SyncState::Ignored => ItemDisplay::Ignored {
-            exists: ignored_exists.unwrap_or(false),
-        },
-        other => ItemDisplay::State(other),
-    })
-}
-
 /// Preview text for a file deleted on this device in a Receive Only folder
 pub fn locally_deleted_message() -> &'static str {
     "Deleted on this device. If you wish to sync this file to your device, close the preview and \
@@ -2105,36 +2075,6 @@ mod derived_tests {
             message.contains("R to revert all local changes"),
             "{}",
             message
-        );
-    }
-
-    // ========================================
-    // ITEM DISPLAY
-    // ========================================
-
-    #[test]
-    fn test_item_display_precedence() {
-        use SyncState::*;
-        assert_eq!(item_display(None, None, false), None);
-        assert_eq!(
-            item_display(Some(Synced), None, false),
-            Some(ItemDisplay::State(Synced))
-        );
-        assert_eq!(
-            item_display(Some(Ignored), Some(true), false),
-            Some(ItemDisplay::Ignored { exists: true })
-        );
-        assert_eq!(
-            item_display(Some(Ignored), None, false),
-            Some(ItemDisplay::Ignored { exists: false })
-        );
-        assert_eq!(
-            item_display(Some(RemoteOnly), None, true),
-            Some(ItemDisplay::LocallyDeleted)
-        );
-        assert_eq!(
-            item_display(None, None, true),
-            Some(ItemDisplay::LocallyDeleted)
         );
     }
 }

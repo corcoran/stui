@@ -44,26 +44,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
             // Use filtered_items if active, otherwise use all items (same as breadcrumb rendering)
             let display_items = level.filtered_items.as_ref().unwrap_or(&level.items);
             let item_count = Some(display_items.len());
-            let syncing = app.model.syncthing.syncing_files.get(&level.folder_id);
             let selected_item = level.selected_index.and_then(|sel| {
                 display_items.get(sel).map(|item| {
-                    let sync_state = crate::logic::sync_states::item_sync_state(
-                        level.file_sync_states.get(&item.name).copied(),
-                        level.prefix.as_deref(),
+                    let display = crate::logic::display::level_item_display(
+                        &app.model.syncthing,
+                        level,
                         item,
-                        syncing,
-                    );
-                    let display = crate::logic::sync_states::item_display(
-                        sync_state,
-                        level.ignored_exists.get(&item.name).copied(),
-                        crate::logic::sync_states::is_locally_deleted(
-                            app.model.syncthing.need_index.get(&level.folder_id),
-                            syncing,
-                            &crate::logic::sync_states::breadcrumb_item_path(
-                                level.prefix.as_deref(),
-                                &item.name,
-                            ),
-                        ),
                     );
                     (item.name.clone(), item.item_type.clone(), display)
                 })
@@ -121,7 +107,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         Some((
             _,
             _,
-            Some(crate::logic::sync_states::ItemDisplay::LocallyDeleted)
+            Some(crate::logic::display::ItemDisplay::LocallyDeleted)
         ))
     );
 
@@ -207,29 +193,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             crate::DisplayMode::TimestampAndSize => DisplayMode::TimestampAndSize,
         };
 
-        // In-flight transfers are overlaid here only; level.file_sync_states stays the base
-        let sync_states = crate::logic::sync_states::overlay_syncing_states(
-            &level.items,
-            &level.file_sync_states,
-            level.prefix.as_deref(),
-            app.model.syncthing.syncing_files.get(&level.folder_id),
-        );
-
-        let need_index = app.model.syncthing.need_index.get(&level.folder_id);
-        let locally_deleted: std::collections::HashSet<String> = level
+        let displays: std::collections::HashMap<String, crate::logic::display::ItemDisplay> = level
             .items
             .iter()
-            .filter(|item| {
-                crate::logic::sync_states::is_locally_deleted(
-                    need_index,
-                    app.model.syncthing.syncing_files.get(&level.folder_id),
-                    &crate::logic::sync_states::breadcrumb_item_path(
-                        level.prefix.as_deref(),
-                        &item.name,
-                    ),
-                )
+            .filter_map(|item| {
+                crate::logic::display::level_item_display(&app.model.syncthing, level, item)
+                    .map(|display| (item.name.clone(), display))
             })
-            .map(|item| item.name.clone())
             .collect();
 
         // Create temporary ListState for rendering
@@ -240,9 +210,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             area,
             &level.items,                  // Unfiltered source
             level.filtered_items.as_ref(), // Filtered view (if active)
-            &sync_states,
-            &level.ignored_exists,
-            &locally_deleted,
+            &displays,
             &mut temp_state,
             &title,
             is_focused,

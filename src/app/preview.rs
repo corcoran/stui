@@ -155,11 +155,18 @@ impl App {
         };
 
         let file_content = if !exists_on_disk
-            && logic::sync_states::is_locally_deleted(
-                self.model.syncthing.need_index.get(&folder_id),
-                self.model.syncthing.syncing_files.get(&folder_id),
-                &file_path,
-            ) {
+            && logic::display::item_display(&logic::display::ItemInput {
+                base: None,
+                item: &BrowseItem {
+                    name: file_path.clone(),
+                    ..browse_item.clone()
+                },
+                prefix: None,
+                syncing: self.model.syncthing.syncing_files.get(&folder_id),
+                index: self.model.syncthing.need_index.get(&folder_id),
+                ignored_exists: None,
+            }) == Some(logic::display::ItemDisplay::LocallyDeleted)
+        {
             Err(logic::sync_states::locally_deleted_message().to_string())
         } else {
             file_content

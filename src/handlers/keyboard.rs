@@ -996,17 +996,21 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             &item.name,
                         ),
                         item.name.clone(),
+                        crate::logic::display::level_item_display(
+                            &app.model.syncthing,
+                            level,
+                            item,
+                        ),
                     )
                 })
             });
             match selection {
-                Some((folder_id, path, name))
-                    if crate::logic::sync_states::is_locally_deleted(
-                        app.model.syncthing.need_index.get(&folder_id),
-                        app.model.syncthing.syncing_files.get(&folder_id),
-                        &path,
-                    ) =>
-                {
+                Some((
+                    folder_id,
+                    path,
+                    name,
+                    Some(crate::logic::display::ItemDisplay::LocallyDeleted),
+                )) => {
                     app.queue_undelete(&folder_id, path);
                     let busy = app
                         .model

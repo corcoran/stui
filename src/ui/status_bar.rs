@@ -1,6 +1,6 @@
 use crate::api::{Folder, FolderStatus, SyncState};
+use crate::logic::display::ItemDisplay;
 use crate::logic::need_paging::NeedPagingProgress;
-use crate::logic::sync_states::ItemDisplay;
 use crate::ui::icons::{FolderState, IconRenderer};
 use crate::utils;
 use ratatui::{

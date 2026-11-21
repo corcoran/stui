@@ -147,9 +147,9 @@ impl IconRenderer {
     pub fn item_icon(
         &self,
         is_dir: bool,
-        display: crate::logic::sync_states::ItemDisplay,
+        display: crate::logic::display::ItemDisplay,
     ) -> Vec<Span<'static>> {
-        use crate::logic::sync_states::ItemDisplay;
+        use crate::logic::display::ItemDisplay;
         match display {
             ItemDisplay::State(state) => self.item_with_sync_state(is_dir, state),
             ItemDisplay::Ignored { exists } => self.ignored_item(is_dir, exists),

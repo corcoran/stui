@@ -1,6 +1,7 @@
 //! Business Logic
 //!
 //! This module contains pure business logic functions that can be unit tested:
+//! - display: How an item is shown (icon and status text)
 //! - errors: Error classification and formatting
 //! - file: File type detection and utilities
 //! - file_navigation: File navigation logic for jumping to files
@@ -18,6 +19,7 @@
 //! - sync_states: Sync state priority and transitions
 //! - ui: UI state transitions and cycling
 
+pub mod display;
 pub mod errors;
 pub mod file;
 pub mod file_navigation;
