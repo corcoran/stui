@@ -6,6 +6,7 @@ pub struct Config {
     pub api_key: String,
     pub base_url: String,
     #[allow(dead_code)]
+    #[serde(default)]
     pub path_map: HashMap<String, String>,
     #[serde(default)]
     pub vim_mode: bool,
@@ -57,5 +58,27 @@ mod tests {
         let yaml = format!("{}terminal_title: false\n", MINIMAL);
         let config: Config = serde_yaml::from_str(&yaml).unwrap();
         assert!(!config.terminal_title);
+    }
+
+    #[test]
+    fn test_path_map_is_optional() {
+        let config: Config =
+            serde_yaml::from_str("api_key: k\nbase_url: http://127.0.0.1:8384\n").unwrap();
+        assert!(config.path_map.is_empty());
+    }
+
+    #[test]
+    fn test_shipped_example_config_parses() {
+        let config: Config = serde_yaml::from_str(include_str!("../config.yaml.example")).unwrap();
+        assert!(config.terminal_title);
+    }
+
+    #[test]
+    fn test_readme_config_matches_shipped_example() {
+        let example = include_str!("../config.yaml.example").trim();
+        assert!(
+            include_str!("../README.md").contains(example),
+            "README's config block differs from config.yaml.example"
+        );
     }
 }

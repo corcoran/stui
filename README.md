@@ -88,39 +88,44 @@ Optional: build with `--features chafa` for much better image previews in termin
 
 ## Configuration
 
-Create a config file at the platform-specific location:
-- **Linux**: `~/.config/stui/config.yaml`
-- **macOS**: `~/Library/Application Support/stui/config.yaml`
-- **Windows**: `%APPDATA%\stui\config.yaml`
+Copy [`config.yaml.example`](config.yaml.example), included in every release, to your config location and fill in your API key:
 
 ```yaml
+# stui configuration. Copy to:
+#   Linux:   ~/.config/stui/config.yaml
+#   macOS:   ~/Library/Application Support/stui/config.yaml
+#   Windows: %APPDATA%\stui\config.yaml
+# Only api_key and base_url are required. Every other setting shows its default.
+
+# Syncthing API key (web UI: Actions > Settings > General > API Key)
 api_key: "your-syncthing-api-key"
 base_url: "http://127.0.0.1:8384"
 
-# Optional: Icon display mode ("emoji" or "nerdfont")
+# Icon display mode: "nerdfont" or "emoji"
 icon_mode: "nerdfont"
 
-# Optional: Command to open files/directories (e.g., xdg-open, code, vim)
+# Command that opens a file or directory in a desktop app (no default)
 # Linux: "xdg-open", macOS: "open", Windows: "explorer"
 open_command: "xdg-open"
 
-# Optional: Command to copy to clipboard (receives text via stdin)
+# Command that receives text on stdin and copies it to the clipboard (no default)
 # Wayland: "wl-copy", X11: "xclip" or "xsel", macOS: "pbcopy", Windows: "clip.exe"
 clipboard_command: "wl-copy"
 
-# Optional: Map container paths to host paths (for Docker setups)
+# Maps paths inside the Syncthing container to paths on this machine (default: none).
+# Needed when Syncthing runs in Docker, so delete, open, copy and preview find the files.
 path_map:
   "/data": "/home/user/syncthing-data"
   "/photos": "/mnt/photos"
 
-# Optional: Enable vim keybindings by default
+# Start with vim keybindings (same as --vim)
 vim_mode: false
 
-# Optional: Image preview settings
-image_preview_enabled: true        # Enable/disable image preview (default: true)
-image_protocol: "auto"             # auto|kitty|iterm2|sixel|halfblocks (default: "auto")
+# Image preview
+image_preview_enabled: true
+image_protocol: "auto"             # auto|kitty|iterm2|sixel|halfblocks
 
-# Optional: Show the current folder, path or file in the terminal title (default: true)
+# Show the current folder, path or file in the terminal title
 terminal_title: true
 ```
 

@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed delete or revert shows an error
 - Previewing an image that is not on disk says why, instead of staying on "Loading image..."
 - Sorting by sync state (`s`) follows the icons: a file being restored by a revert sorts with syncing files, and a file deleted locally sorts with local changes
+- A config without `path_map` loads instead of failing with "missing field `path_map`"
+- The shipped `config.yaml.example` lists `terminal_title`, says where the file goes, and no longer suggests `vim` as an `open_command`
 
 ### 🧪 Testing
 
