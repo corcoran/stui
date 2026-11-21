@@ -29,6 +29,10 @@ seed_photos() {
     mkdir -p "$d"/{Cats,Kitten}
     cp "$fx"/{belly-up,blue-blanket,cat-bed,nap-armchair,sunbathing-deck}.jpg "$d/Cats/"
     cp "$fx"/kitten-{string,vhs-shelf}.jpg "$d/Kitten/"
+    # Pixels stored sideways plus EXIF Orientation 6 (rotate 90° clockwise): shows upright
+    # only in viewers that apply the tag
+    magick "$fx/kitten-string.jpg" -rotate -90 "$d/Kitten/kitten-sideways.jpg"
+    exiftool -q -overwrite_original -n -Orientation=6 "$d/Kitten/kitten-sideways.jpg"
     local i=3; for f in "$d"/*/*; do age "$f" $((i += 4)); done
 }
 

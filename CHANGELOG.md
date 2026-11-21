@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🐛 Bug Fixes
 
 - The breadcrumb legend shows `f:Filter` for the out-of-sync filter; it was only listed in the README
+- Photos with an EXIF orientation (most phone and camera shots) preview upright instead of sideways, and their resolution reads the right way round
 
 ---
 

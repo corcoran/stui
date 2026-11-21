@@ -92,7 +92,7 @@ Run each session inside a single `bash -c`. Background processes (sway, kitty, w
 |---|---|
 | Documents | Receive-only with 3 local changes (edit, add, delete). `art/` holds `gentoo.ans` and `smiths.ans` |
 | Media | Six 100 MB files trickling in at 400 KiB/s: syncing and remote-only |
-| Photos | Synced, with `Cats/` and `Kitten/` |
+| Photos | Synced, with `Cats/` and `Kitten/`. `Kitten/kitten-sideways.jpg` stores its pixels sideways with EXIF orientation 6, so it only shows upright when orientation is applied |
 | Projects | Synced. `notes/scratch.txt` is ignored but on disk, and `website/build.log` is ignored and deleted |
 | Vault | Paused |
 

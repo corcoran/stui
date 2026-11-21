@@ -231,7 +231,7 @@ impl App {
         }
 
         // Load image
-        let img_result = tokio::task::spawn_blocking(move || image::open(&host_path)).await;
+        let img_result = tokio::task::spawn_blocking(move || open_upright(&host_path)).await;
 
         let img = match img_result {
             Ok(Ok(img)) => img,
@@ -438,5 +438,71 @@ impl App {
 
     fn extract_text_from_binary(bytes: &[u8]) -> String {
         logic::file::extract_text_from_binary(bytes)
+    }
+}
+
+/// Decode the image at `path`, rotated and flipped as its EXIF orientation says. Camera
+/// photos often store pixels sideways and rely on that tag.
+pub(crate) fn open_upright(path: &std::path::Path) -> image::ImageResult<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(img)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 2x1 JPEG, optionally carrying an EXIF orientation tag
+    fn jpeg_2x1(orientation: Option<u16>) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::RgbImage::from_pixel(2, 1, image::Rgb([200, 30, 30]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        let Some(orientation) = orientation else {
+            return jpeg;
+        };
+        // APP1 "Exif" segment: big-endian TIFF header, one IFD entry (0x0112 Orientation, SHORT)
+        let mut exif = b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
+        exif.extend_from_slice(&orientation.to_be_bytes());
+        exif.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut out = jpeg[..2].to_vec(); // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&exif);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    fn write_temp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("stui-{}-{}", std::process::id(), name));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_open_upright_applies_exif_rotation() {
+        let path = write_temp("rotated.jpg", &jpeg_2x1(Some(6)));
+        let img = open_upright(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((img.width(), img.height()), (1, 2));
+    }
+
+    #[test]
+    fn test_open_upright_leaves_untagged_image_alone() {
+        let path = write_temp("plain.jpg", &jpeg_2x1(None));
+        let img = open_upright(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((img.width(), img.height()), (2, 1));
     }
 }
