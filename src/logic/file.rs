@@ -2,6 +2,8 @@
 //!
 //! Pure functions for identifying file types and properties.
 
+use codepage_437::{BorrowFromCp437, CP437_CONTROL};
+
 /// Check if a file path represents an image file based on extension
 ///
 /// Supported formats: PNG, JPG/JPEG, GIF, BMP, WEBP, TIFF/TIF
@@ -480,6 +482,180 @@ pub fn extract_text_from_binary(bytes: &[u8]) -> String {
     }
 
     result
+}
+
+/// Bytes inspected for NUL bytes and the BOM-less UTF-16 heuristic.
+const PREVIEW_SNIFF_BYTES: usize = 8192;
+
+/// Canvas width for CP437 art without a SAUCE width.
+pub const DEFAULT_ART_WIDTH: u16 = 80;
+
+/// How a file's bytes are decoded for the preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEncoding {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+    Cp437,
+}
+
+/// The parts of a SAUCE record the preview uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sauce {
+    pub width: Option<u16>,
+}
+
+/// Result of decoding a file's bytes for the preview.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedText {
+    pub text: String,
+    pub is_binary: bool,
+    pub art_width: Option<u16>,
+}
+
+/// Reads the SAUCE record in the last 128 bytes, if there is one.
+///
+/// `width` is the character width (`TInfo1`) and is set only for character art
+/// (DataType 1, FileType 0, 1 or 2) with a width from 1 to 1000.
+pub fn sauce(bytes: &[u8]) -> Option<Sauce> {
+    let rec = bytes.len().checked_sub(128).map(|start| &bytes[start..])?;
+    if !rec.starts_with(b"SAUCE00") {
+        return None;
+    }
+    let width = u16::from_le_bytes([rec[96], rec[97]]);
+    let character_art = rec[94] == 1 && rec[95] <= 2;
+    Some(Sauce {
+        width: (character_art && (1..=1000).contains(&width)).then_some(width),
+    })
+}
+
+/// True when 4 or more identical consecutive bytes are all block/shade characters
+/// (B0 B1 B2 DB DC DD DE DF) or all line-drawing characters (C4 CD B3 BA) in CP437.
+pub fn has_cp437_art_run(bytes: &[u8]) -> bool {
+    const BLOCKS: [u8; 8] = [0xB0, 0xB1, 0xB2, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF];
+    const LINES: [u8; 4] = [0xC4, 0xCD, 0xB3, 0xBA];
+    bytes
+        .windows(4)
+        .any(|w| w.iter().all(|&b| b == w[0]) && (BLOCKS.contains(&w[0]) || LINES.contains(&w[0])))
+}
+
+fn has_art_extension(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".ans", ".asc", ".nfo", ".diz"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// UTF-16 without a BOM: even length of at least 4, and in the first 8 KB at least
+/// 90% of one byte lane is NUL while the other lane has no NUL. The NUL lane is the
+/// high byte (odd indexes) for LE and the low byte (even indexes) for BE.
+fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let window = &bytes[..bytes.len().min(PREVIEW_SNIFF_BYTES) & !1];
+    let (mut even_nul, mut odd_nul) = (0usize, 0usize);
+    for pair in window.chunks_exact(2) {
+        even_nul += usize::from(pair[0] == 0);
+        odd_nul += usize::from(pair[1] == 0);
+    }
+    let units = window.len() / 2;
+    if even_nul == 0 && odd_nul * 10 >= units * 9 {
+        Some(TextEncoding::Utf16Le)
+    } else if odd_nul == 0 && even_nul * 10 >= units * 9 {
+        Some(TextEncoding::Utf16Be)
+    } else {
+        None
+    }
+}
+
+/// Decides how a file's bytes are decoded for the preview; `None` means binary.
+///
+/// First match wins:
+/// 1. UTF-16 BOM (`FF FE` LE, `FE FF` BE)
+/// 2. UTF-16 without a BOM (see `sniff_utf16`)
+/// 3. Extension `.ans`/`.asc`/`.nfo`/`.diz` or a SAUCE record: CP437, even with NUL bytes
+/// 4. A NUL byte in the first 8 KB: binary
+/// 5. Escape codes, or invalid UTF-8 with a CP437 art run: CP437
+/// 6. Otherwise UTF-8
+pub fn detect_encoding(path: &str, bytes: &[u8]) -> Option<TextEncoding> {
+    match bytes {
+        [0xFF, 0xFE, ..] => return Some(TextEncoding::Utf16Le),
+        [0xFE, 0xFF, ..] => return Some(TextEncoding::Utf16Be),
+        _ => {}
+    }
+    if let Some(enc) = sniff_utf16(bytes) {
+        return Some(enc);
+    }
+    if has_art_extension(path) || sauce(bytes).is_some() {
+        return Some(TextEncoding::Cp437);
+    }
+    if bytes[..bytes.len().min(PREVIEW_SNIFF_BYTES)].contains(&0) {
+        return None;
+    }
+    if contains_ansi_codes(bytes)
+        || (std::str::from_utf8(bytes).is_err() && has_cp437_art_run(bytes))
+    {
+        return Some(TextEncoding::Cp437);
+    }
+    Some(TextEncoding::Utf8)
+}
+
+/// Decodes a file's bytes for the preview according to `detect_encoding`.
+///
+/// Binary files yield their extracted strings. Invalid UTF-8 is decoded lossily
+/// and flagged binary. `art_width` is set only for CP437 art.
+#[allow(dead_code)]
+pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
+    let text_only = |text: String| DecodedText {
+        text,
+        is_binary: false,
+        art_width: None,
+    };
+    let utf16 = |units: &[u8], le: bool| {
+        let units: Vec<u16> = units
+            .chunks_exact(2)
+            .map(|p| {
+                if le {
+                    u16::from_le_bytes([p[0], p[1]])
+                } else {
+                    u16::from_be_bytes([p[0], p[1]])
+                }
+            })
+            .collect();
+        text_only(String::from_utf16_lossy(&units))
+    };
+    match detect_encoding(path, bytes) {
+        None => DecodedText {
+            text: extract_text_from_binary(bytes),
+            is_binary: true,
+            art_width: None,
+        },
+        Some(TextEncoding::Utf8) => match std::str::from_utf8(bytes) {
+            Ok(s) => text_only(s.strip_prefix('\u{feff}').unwrap_or(s).to_string()),
+            Err(_) => DecodedText {
+                text: String::from_utf8_lossy(bytes).into_owned(),
+                is_binary: true,
+                art_width: None,
+            },
+        },
+        Some(enc @ (TextEncoding::Utf16Le | TextEncoding::Utf16Be)) => {
+            let body = match bytes {
+                [0xFF, 0xFE, rest @ ..] | [0xFE, 0xFF, rest @ ..] => rest,
+                _ => bytes,
+            };
+            utf16(body, enc == TextEncoding::Utf16Le)
+        }
+        Some(TextEncoding::Cp437) => DecodedText {
+            text: String::borrow_from_cp437(bytes, &CP437_CONTROL),
+            is_binary: false,
+            art_width: Some(
+                sauce(bytes)
+                    .and_then(|s| s.width)
+                    .unwrap_or(DEFAULT_ART_WIDTH),
+            ),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1135,5 +1311,214 @@ mod tests {
         assert!(!has_rendered_view("notes.txt"));
         assert!(!has_rendered_view("art.ans"));
         assert!(!has_rendered_view("photo.png"));
+    }
+
+    // ========================================
+    // ENCODING DETECTION
+    // ========================================
+
+    fn with_sauce(body: &[u8], data_type: u8, file_type: u8, width: u16) -> Vec<u8> {
+        let mut v = body.to_vec();
+        v.push(0x1A);
+        let mut rec = vec![b' '; 128];
+        rec[..7].copy_from_slice(b"SAUCE00");
+        rec[94] = data_type;
+        rec[95] = file_type;
+        rec[96..98].copy_from_slice(&width.to_le_bytes());
+        v.extend(rec);
+        v
+    }
+
+    #[test]
+    fn test_sauce_reads_width() {
+        assert_eq!(
+            sauce(&with_sauce(b"art", 1, 1, 132)),
+            Some(Sauce { width: Some(132) })
+        );
+    }
+
+    #[test]
+    fn test_sauce_missing_or_short() {
+        assert_eq!(sauce(b"no record here"), None);
+        assert_eq!(sauce(b"SAUCE00"), None);
+    }
+
+    #[test]
+    fn test_sauce_width_only_for_character_art() {
+        assert_eq!(
+            sauce(&with_sauce(b"x", 5, 1, 132)),
+            Some(Sauce { width: None })
+        );
+        assert_eq!(
+            sauce(&with_sauce(b"x", 1, 3, 132)),
+            Some(Sauce { width: None })
+        );
+        assert_eq!(
+            sauce(&with_sauce(b"x", 1, 1, 0)),
+            Some(Sauce { width: None })
+        );
+        assert_eq!(
+            sauce(&with_sauce(b"x", 1, 1, 1001)),
+            Some(Sauce { width: None })
+        );
+    }
+
+    #[test]
+    fn test_art_run_needs_four_in_a_row() {
+        assert!(!has_cp437_art_run(&[0xDB, 0xDB, 0xDB, b'a']));
+        assert!(has_cp437_art_run(&[b'a', 0xDB, 0xDB, 0xDB, 0xDB]));
+        assert!(has_cp437_art_run(&[0xCD; 4]));
+        assert!(!has_cp437_art_run(&[0xDB, 0xB0, 0xDB, 0xB0])); // mixed bytes are not a run
+        assert!(!has_cp437_art_run(&[0xDF, b' ', 0xDF, b' ', 0xDF])); // scattered ß
+    }
+
+    #[test]
+    fn test_detect_utf16_boms() {
+        assert_eq!(
+            detect_encoding("a.txt", &[0xFF, 0xFE, b'h', 0]),
+            Some(TextEncoding::Utf16Le)
+        );
+        assert_eq!(
+            detect_encoding("a.txt", &[0xFE, 0xFF, 0, b'h']),
+            Some(TextEncoding::Utf16Be)
+        );
+    }
+
+    #[test]
+    fn test_detect_utf16_without_bom() {
+        let le: Vec<u8> = "hello world"
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let be: Vec<u8> = "hello world"
+            .encode_utf16()
+            .flat_map(|u| u.to_be_bytes())
+            .collect();
+        assert_eq!(detect_encoding("a.txt", &le), Some(TextEncoding::Utf16Le));
+        assert_eq!(detect_encoding("a.txt", &be), Some(TextEncoding::Utf16Be));
+    }
+
+    #[test]
+    fn test_mostly_nul_binary_is_not_utf16() {
+        // Odd bytes all NUL, but an even byte is NUL too
+        assert_eq!(
+            detect_encoding("a.bin", &[b'a', 0, 0, 0, b'b', 0, b'c', 0]),
+            None
+        );
+    }
+
+    #[test]
+    fn test_detect_art_by_extension_even_with_nul() {
+        for name in ["a.ans", "A.ASC", "release.nfo", "file_id.DIZ"] {
+            assert_eq!(
+                detect_encoding(name, b"x\0y"),
+                Some(TextEncoding::Cp437),
+                "{}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_art_by_sauce() {
+        assert_eq!(
+            detect_encoding("art.txt", &with_sauce(b"plain", 1, 1, 80)),
+            Some(TextEncoding::Cp437)
+        );
+    }
+
+    #[test]
+    fn test_detect_art_by_run_in_invalid_utf8() {
+        assert_eq!(
+            detect_encoding("logo.txt", &[b' ', 0xDB, 0xDB, 0xDB, 0xDB, b'\n']),
+            Some(TextEncoding::Cp437)
+        );
+    }
+
+    #[test]
+    fn test_latin1_text_is_not_art() {
+        // "Straße Größe" in Latin-1: invalid UTF-8, no runs
+        let latin1 = b"Stra\xDFe Gr\xF6\xDFe";
+        assert_eq!(detect_encoding("de.txt", latin1), Some(TextEncoding::Utf8));
+    }
+
+    #[test]
+    fn test_binary_with_escape_or_run_stays_binary() {
+        assert_eq!(detect_encoding("a.bin", b"\0\x1b[31mred"), None);
+        assert_eq!(detect_encoding("a.bin", &[0, 0xDB, 0xDB, 0xDB, 0xDB]), None);
+    }
+
+    #[test]
+    fn test_detect_empty_and_tiny_files() {
+        assert_eq!(detect_encoding("a.txt", b""), Some(TextEncoding::Utf8));
+        assert_eq!(detect_encoding("a.txt", b"hi"), Some(TextEncoding::Utf8));
+        assert_eq!(decode_preview_bytes("a.txt", b"").text, "");
+    }
+
+    #[test]
+    fn test_decode_utf8_bom_dropped() {
+        let d = decode_preview_bytes("a.txt", b"\xEF\xBB\xBFhello");
+        assert_eq!(
+            d,
+            DecodedText {
+                text: "hello".into(),
+                is_binary: false,
+                art_width: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_invalid_utf8_is_lossy_and_binary() {
+        let d = decode_preview_bytes("de.txt", b"Stra\xDFe");
+        assert!(d.is_binary);
+        assert!(d.text.starts_with("Stra"));
+    }
+
+    #[test]
+    fn test_decode_utf16_le_with_bom() {
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend("héllo\r\n".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        let d = decode_preview_bytes("a.txt", &bytes);
+        assert_eq!(
+            d,
+            DecodedText {
+                text: "héllo\r\n".into(),
+                is_binary: false,
+                art_width: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_utf16_be_drops_trailing_odd_byte() {
+        let mut bytes: Vec<u8> = "ok".encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        bytes.insert(0, 0xFF);
+        bytes.insert(0, 0xFE);
+        bytes.push(b'x');
+        assert_eq!(decode_preview_bytes("a.txt", &bytes).text, "ok");
+    }
+
+    #[test]
+    fn test_decode_cp437_art_width() {
+        let d = decode_preview_bytes("a.nfo", &[0xDB, b'A']);
+        assert_eq!(
+            d,
+            DecodedText {
+                text: "█A".into(),
+                is_binary: false,
+                art_width: Some(80)
+            }
+        );
+        let wide = decode_preview_bytes("a.ans", &with_sauce(b"x", 1, 1, 132));
+        assert_eq!(wide.art_width, Some(132));
+    }
+
+    #[test]
+    fn test_decode_binary_extracts_strings() {
+        let d = decode_preview_bytes("a.bin", b"\0\0Hello binary world\0\0");
+        assert!(d.is_binary);
+        assert_eq!(d.art_width, None);
+        assert!(d.text.contains("Hello binary world"));
     }
 }
