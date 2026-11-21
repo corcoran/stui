@@ -49,6 +49,8 @@ pub struct ArchiveListing {
 }
 
 pub const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+/// A tar.gz stops after this many times the raw byte limit of decompressed bytes.
+const UNPACKED_FACTOR: u64 = 8;
 pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 
 /// `head` is the start of the file (up to 8 KB). A gzip counts as `TarGz` only when its
@@ -109,7 +111,26 @@ impl<R: Read> Read for LimitedReader<R> {
     }
 }
 
-/// The limit counts raw file bytes, so it also stops a read inside one large entry.
+/// Compares path components, so a directory stays directly above its children.
+fn sort_entries(entries: &mut [ArchiveEntry]) {
+    entries.sort_by(|a, b| a.path.split('/').cmp(b.path.split('/')));
+}
+
+fn entry_limit_note(shown: usize) -> String {
+    format!("Showing the first {} entries", group_digits(shown as u64))
+}
+
+fn byte_limit_note(shown: usize, cap: &str, unpacked: bool) -> String {
+    format!(
+        "Showing the first {} entries (stopped after {}{})",
+        group_digits(shown as u64),
+        cap,
+        if unpacked { " unpacked" } else { "" }
+    )
+}
+
+/// The raw limit counts file bytes and the unpacked limit decompressed bytes, so both stop a
+/// read inside one large entry.
 fn read_tar(
     path: &Path,
     kind: ArchiveKind,
@@ -118,13 +139,19 @@ fn read_tar(
 ) -> Result<ArchiveListing, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let hit = Rc::new(Cell::new(false));
+    let unpacked_hit = Rc::new(Cell::new(false));
+    let unpacked_cap = max_bytes.saturating_mul(UNPACKED_FACTOR);
     let limited = LimitedReader {
         inner: file,
         left: max_bytes,
         hit: hit.clone(),
     };
     let reader: Box<dyn Read> = if kind == ArchiveKind::TarGz {
-        Box::new(GzDecoder::new(limited))
+        Box::new(LimitedReader {
+            inner: GzDecoder::new(limited),
+            left: unpacked_cap,
+            hit: unpacked_hit.clone(),
+        })
     } else {
         Box::new(limited)
     };
@@ -137,14 +164,14 @@ fn read_tar(
     for entry in iter {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) if hit.get() => break,
+            Err(_) if hit.get() || unpacked_hit.get() => break,
             Err(err) => return Err(err.to_string()),
         };
         if entry.header().entry_type().is_pax_global_extensions() {
             continue;
         }
         if entries.len() >= max_entries {
-            stopped_early = Some(format!("Showing the first {} entries", entries.len()));
+            stopped_early = Some(entry_limit_note(entries.len()));
             break;
         }
         let header = entry.header();
@@ -162,14 +189,22 @@ fn read_tar(
             is_dir,
         });
     }
-    if stopped_early.is_none() && hit.get() {
-        stopped_early = Some(format!(
-            "Showing the first {} entries (stopped after {})",
-            entries.len(),
-            format_bytes(max_bytes)
-        ));
+    if stopped_early.is_none() {
+        if unpacked_hit.get() {
+            stopped_early = Some(byte_limit_note(
+                entries.len(),
+                &format_bytes(unpacked_cap),
+                true,
+            ));
+        } else if hit.get() {
+            stopped_early = Some(byte_limit_note(
+                entries.len(),
+                &format_bytes(max_bytes),
+                false,
+            ));
+        }
     }
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    sort_entries(&mut entries);
     Ok(ArchiveListing {
         kind,
         entries,
@@ -191,14 +226,14 @@ fn format_unix_date(secs: u64) -> Option<String> {
 
 fn read_zip(path: &Path, max_entries: usize) -> Result<ArchiveListing, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let archive = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
     let mut entries = Vec::with_capacity(archive.len().min(max_entries.saturating_add(1)));
     let mut total_files = 0u64;
     let mut total_size = 0u64;
     let mut packed = 0u64;
     for index in 0..archive.len() {
-        // The raw entry skips decompression and decryption, so encrypted entries list too.
-        let entry = archive.by_index_raw(index).map_err(|e| e.to_string())?;
+        // Central directory metadata only: no local header reads, so encrypted entries list too.
+        let entry = archive.by_index_data(index).map_err(|e| e.to_string())?;
         let name = entry
             .name()
             .map(|n| n.into_owned())
@@ -217,7 +252,7 @@ fn read_zip(path: &Path, max_entries: usize) -> Result<ArchiveListing, String> {
         });
     }
     let packed_size = (!entries.is_empty()).then_some(packed);
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    sort_entries(&mut entries);
     let stopped_early = (entries.len() > max_entries).then(|| {
         format!(
             "Showing the first {} of {} entries",
@@ -299,7 +334,7 @@ pub fn listing_text(listing: &ArchiveListing) -> Text<'static> {
         };
         let suffix = if entry.is_dir { "/" } else { "" };
         lines.push(Line::from(format!(
-            "{:<16}  {:>9}  {}{}",
+            "{:<16}  {:>10}  {}{}",
             date, size, entry.path, suffix
         )));
     }
@@ -497,8 +532,8 @@ mod tests {
                 "zip · 1 file · 2.00 KB (1.00 KB packed)",
                 "Showing the first 1 of 2 entries",
                 "",
-                "                          -  docs/",
-                "2026-10-02 12:01    2.00 KB  docs/a.txt",
+                "                           -  docs/",
+                "2026-10-02 12:01     2.00 KB  docs/a.txt",
             ]
         );
         assert_eq!(t.lines[0].spans[0].style.fg, Some(Color::Cyan));
@@ -635,7 +670,7 @@ mod tests {
     #[test]
     fn test_pax_global_header_is_not_listed() {
         let mut builder = tar::Builder::new(Vec::new());
-        let record = b"22 comment=from git\n";
+        let record = b"20 comment=from git\n";
         let mut global = tar::Header::new_ustar();
         global.set_entry_type(tar::EntryType::XGlobalHeader);
         global.set_size(record.len() as u64);
@@ -661,5 +696,80 @@ mod tests {
         );
         assert_eq!((l.total_files, l.total_size), (1, 3));
         assert_eq!(l.stopped_early, None);
+    }
+
+    #[test]
+    fn test_tar_gz_unpacked_limit() {
+        let path = write_temp(
+            "unpacked.tar.gz",
+            &gzip(&tar_bytes(&[("zeros.bin", &vec![0u8; 1024 * 1024])])),
+        );
+        let started = std::time::Instant::now();
+        let l = read_archive_with_limits(&path, ArchiveKind::TarGz, 64 * 1024, MAX_ARCHIVE_ENTRIES)
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(started.elapsed().as_secs() < 5);
+        assert!(
+            l.stopped_early
+                .as_deref()
+                .unwrap()
+                .ends_with("(stopped after 512.00 KB unpacked)")
+        );
+    }
+
+    #[test]
+    fn test_tar_notes_group_digits() {
+        assert_eq!(entry_limit_note(1234), "Showing the first 1,234 entries");
+        assert_eq!(
+            byte_limit_note(1234, "64.00 MB", false),
+            "Showing the first 1,234 entries (stopped after 64.00 MB)"
+        );
+        assert_eq!(
+            byte_limit_note(1234, "512.00 MB", true),
+            "Showing the first 1,234 entries (stopped after 512.00 MB unpacked)"
+        );
+    }
+
+    #[test]
+    fn test_entries_sort_by_path_components() {
+        let path = write_temp(
+            "sort.zip",
+            &zip_bytes(&[("foo.rs", b"x"), ("foo/", b""), ("foo/bar.rs", b"y")]),
+        );
+        let l = read_archive(&path, ArchiveKind::Zip).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let names: Vec<&str> = l.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(names, ["foo", "foo/bar.rs", "foo.rs"]);
+        let path = write_temp(
+            "sort.tar",
+            &tar_bytes(&[("foo.rs", b"x"), ("foo/bar.rs", b"y"), ("foo", b"")]),
+        );
+        let l = read_archive(&path, ArchiveKind::Tar).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let names: Vec<&str> = l.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(names, ["foo", "foo/bar.rs", "foo.rs"]);
+    }
+
+    #[test]
+    fn test_zip_lists_with_damaged_local_header() {
+        let mut bytes = zip_bytes(&[("one.txt", b"111"), ("two.txt", b"222")]);
+        let locals: Vec<usize> = bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, w)| *w == b"PK\x03\x04")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(locals.len(), 2);
+        bytes[locals[1]..locals[1] + 4].copy_from_slice(&[0; 4]);
+        let path = write_temp("damaged.zip", &bytes);
+        let l = read_archive(&path, ArchiveKind::Zip).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            l.entries
+                .iter()
+                .map(|e| e.path.as_str())
+                .collect::<Vec<_>>(),
+            ["one.txt", "two.txt"]
+        );
     }
 }

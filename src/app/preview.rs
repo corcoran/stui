@@ -572,4 +572,39 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!((img.width(), img.height()), (2, 1));
     }
+
+    #[tokio::test]
+    async fn test_archive_over_20mb_still_lists() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(3);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "a.txt", &b"abc"[..])
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("stui-bigtar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.tar");
+        std::fs::write(&path, builder.into_inner().unwrap()).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(21 * 1024 * 1024)
+            .unwrap();
+        let folder = Folder {
+            id: "f".into(),
+            label: None,
+            path: dir.to_string_lossy().into_owned(),
+            paused: false,
+            folder_type: "sendreceive".into(),
+            devices: vec![],
+            group: None,
+        };
+        let read = App::read_file_content_static(&HashMap::new(), &folder, "big.tar").await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(read.content.is_ok(), "{:?}", read.content);
+        assert_eq!(read.archive.map(|a| a.total_files), Some(1));
+    }
 }

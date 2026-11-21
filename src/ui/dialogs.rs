@@ -730,12 +730,12 @@ fn render_preview_column(
         };
 
         let inner_width = preview_area.width.saturating_sub(PANE_CHROME);
-        let view = crate::logic::file::rendered_view(&state.file_path)
-            .filter(|_| state.file_content.is_ok());
         let archive = state
             .archive
             .as_ref()
             .filter(|_| state.file_content.is_ok());
+        let view = crate::logic::file::rendered_view(&state.file_path)
+            .filter(|_| state.file_content.is_ok() && archive.is_none());
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
             ratatui::text::Text::from(preview_message_text(msg))
@@ -1039,6 +1039,18 @@ mod tests {
             "{:#?}",
             rows
         );
+    }
+
+    #[test]
+    fn test_archive_named_like_a_rendered_format_shows_listing() {
+        let mut state = popup("data.csv", "", false);
+        let mut long = listing();
+        long.entries[0].path = format!("{}END", "d/".repeat(30));
+        state.archive = Some(long);
+        let rows = render_rows(&mut state, 50, 12);
+        assert!(rows[0].contains("Preview (Archive |"), "{}", rows[0]);
+        assert!(rows[1].contains("tar.gz · 1 file · 12 B"), "{:#?}", rows);
+        assert!(rows.iter().any(|r| r.contains("END")), "{:#?}", rows);
     }
 
     #[test]

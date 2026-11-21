@@ -30,7 +30,7 @@ codepage-437 = "0.1"
 chrono = "0.4"
 pulldown-cmark = { version = "0.13", default-features = false }
 zip = { version = "9.8.1", default-features = false }
-tar = "0.4.46"
+tar = { version = "0.4.46", default-features = false }
 flate2 = "1.1.11"
 
 [build-dependencies]
