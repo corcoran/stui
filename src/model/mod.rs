@@ -26,7 +26,7 @@ pub use pending::PendingChanges;
 pub use performance::PerformanceModel;
 pub use syncthing::SyncthingModel;
 pub use types::*;
-pub use ui::{Toast, ToastKind, UiModel};
+pub use ui::{TerminalRequest, Toast, ToastKind, UiModel};
 
 /// Root application model composed of focused sub-models
 #[derive(Clone, Debug)]

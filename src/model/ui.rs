@@ -29,6 +29,15 @@ pub struct Toast {
     pub shown_at: Instant,
 }
 
+/// Something a handler asks the main loop to do with the terminal
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalRequest {
+    /// Copy text to the terminal's clipboard with OSC 52
+    Copy(String),
+    /// Hand the terminal to a program and wait for it to exit
+    RunInTerminal { program: String, args: Vec<String> },
+}
+
 /// UI preferences and popups
 #[derive(Clone, Debug)]
 pub struct UiModel {
@@ -81,6 +90,9 @@ pub struct UiModel {
     pub needs_folder_refresh: bool,
 
     pub toast: Option<Toast>,
+
+    /// Work only the main loop can do, because it owns the terminal; drained before each draw
+    pub terminal_requests: Vec<TerminalRequest>,
 
     // ============================================
     // SEARCH
@@ -141,6 +153,7 @@ impl UiModel {
             config_path: String::new(),
             needs_folder_refresh: false,
             toast: None,
+            terminal_requests: Vec::new(),
             search_mode: false,
             search_query: String::new(),
             search_origin_level: None,

@@ -7,6 +7,7 @@
 //! - Open files/directories with external commands
 //! - Copy paths to clipboard
 
+use crate::model::TerminalRequest;
 use crate::{App, log_debug, logic, services};
 use anyhow::Result;
 
@@ -296,6 +297,13 @@ impl App {
         }
     }
 
+    /// `clipboard_command`, unless it is unset or blank (then copies go through OSC 52)
+    pub(crate) fn configured_clipboard_command(&self) -> Option<String> {
+        self.clipboard_command
+            .clone()
+            .filter(|command| !command.trim().is_empty())
+    }
+
     pub(crate) fn copy_to_clipboard(&mut self) -> CopyOutcome {
         let text = if self.model.navigation.focus_level == 0 {
             self.model
@@ -309,9 +317,15 @@ impl App {
         let Some(text) = text else {
             return CopyOutcome::NothingToCopy;
         };
-        let outcome = match &self.clipboard_command {
-            Some(command) => run_clipboard_command(command, &text),
-            None => CopyOutcome::NotConfigured,
+        let outcome = match self.configured_clipboard_command() {
+            Some(command) => run_clipboard_command(&command, &text),
+            None => {
+                self.model
+                    .ui
+                    .terminal_requests
+                    .push(TerminalRequest::Copy(text.clone()));
+                CopyOutcome::SentToTerminal(text)
+            }
         };
         // Always logged, not just in debug mode: clipboard failures are otherwise silent
         let line = match &outcome {
@@ -320,7 +334,9 @@ impl App {
                 format!("ERROR: clipboard command '{}' failed: {}", command, error)
             }
             CopyOutcome::Invalid(message) => format!("ERROR: {}", message),
-            CopyOutcome::NotConfigured => "No clipboard_command configured".to_string(),
+            CopyOutcome::SentToTerminal(text) => {
+                format!("Sent to the terminal clipboard: {}", text)
+            }
             CopyOutcome::NothingToCopy => return outcome,
         };
         use std::io::Write;
@@ -343,7 +359,8 @@ pub(crate) enum CopyOutcome {
     },
     /// Full message: `Invalid <setting>: <error>`
     Invalid(String),
-    NotConfigured,
+    /// Queued as OSC 52 for the terminal, because no clipboard_command is set
+    SentToTerminal(String),
     NothingToCopy,
 }
 
@@ -366,7 +383,9 @@ pub(crate) fn run_clipboard_command(command: &str, text: &str) -> CopyOutcome {
     use std::io::Write;
     let (program, args) = match logic::command::parse_command(command) {
         Ok(Some(parsed)) => parsed,
-        Ok(None) => return CopyOutcome::NotConfigured,
+        Ok(None) => {
+            return CopyOutcome::Invalid("Invalid clipboard_command: empty command".to_string());
+        }
         Err(e) => return CopyOutcome::Invalid(format!("Invalid clipboard_command: {}", e)),
     };
     let failed = |error: String| CopyOutcome::Failed {

@@ -78,12 +78,16 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 // Copy config path to clipboard
-                let outcome = match app.clipboard_command.clone() {
-                    Some(command) => crate::app::file_ops::run_clipboard_command(
-                        &command,
-                        &app.model.ui.config_path,
-                    ),
-                    None => crate::app::file_ops::CopyOutcome::NotConfigured,
+                let path = app.model.ui.config_path.clone();
+                let outcome = match app.configured_clipboard_command() {
+                    Some(command) => crate::app::file_ops::run_clipboard_command(&command, &path),
+                    None => {
+                        app.model
+                            .ui
+                            .terminal_requests
+                            .push(crate::model::TerminalRequest::Copy(path.clone()));
+                        crate::app::file_ops::CopyOutcome::SentToTerminal(path)
+                    }
                 };
                 match outcome {
                     crate::app::file_ops::CopyOutcome::Copied(_) => app
@@ -97,11 +101,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     crate::app::file_ops::CopyOutcome::Invalid(message) => {
                         app.model.ui.show_error(message)
                     }
-                    crate::app::file_ops::CopyOutcome::NotConfigured
-                    | crate::app::file_ops::CopyOutcome::NothingToCopy => app
+                    crate::app::file_ops::CopyOutcome::SentToTerminal(_) => app
                         .model
                         .ui
-                        .show_warning("No clipboard command configured".to_string()),
+                        .show_success("Config path sent to the terminal clipboard".to_string()),
+                    crate::app::file_ops::CopyOutcome::NothingToCopy => {}
                 }
                 return Ok(());
             }
@@ -1439,10 +1443,10 @@ fn toast_copy_outcome(app: &mut App, outcome: crate::app::file_ops::CopyOutcome)
             .ui
             .show_error(format!("Failed to copy with '{}'", command)),
         CopyOutcome::Invalid(message) => app.model.ui.show_error(message),
-        CopyOutcome::NotConfigured => app
+        CopyOutcome::SentToTerminal(text) => app
             .model
             .ui
-            .show_warning("clipboard_command not configured"),
+            .show_success(format!("Sent to the terminal clipboard: {}", text)),
         CopyOutcome::NothingToCopy => {}
     }
 }

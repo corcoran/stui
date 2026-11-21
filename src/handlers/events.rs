@@ -3826,7 +3826,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_copy_config_path_without_clipboard_command_is_warning_toast() {
+    async fn test_copy_config_path_without_clipboard_command_sends_to_terminal() {
         let mut app = create_test_app();
         app.model.ui.show_setup_help = true;
         app.model.ui.config_path = "/home/u/.config/stui/config.yaml".to_string();
@@ -3836,8 +3836,8 @@ mod tests {
         assert_eq!(
             toast_of(&app),
             (
-                "No clipboard command configured".to_string(),
-                crate::model::ToastKind::Warning
+                "Config path sent to the terminal clipboard".to_string(),
+                crate::model::ToastKind::Success
             )
         );
     }
@@ -5211,5 +5211,56 @@ mod tests {
             format!("--new-window\n{}\n", dir.join("a.txt").display())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_copy_without_clipboard_command_queues_osc52() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "docs", vec![file_item("a.txt")]);
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::Copy(
+                "/data/docs/a.txt".to_string()
+            )]
+        );
+        assert_eq!(
+            toast_of(&app),
+            (
+                "Sent to the terminal clipboard: /data/docs/a.txt".to_string(),
+                crate::model::ToastKind::Success
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_copy_with_clipboard_command_queues_nothing() {
+        let dir = command_stub("noqueue");
+        let mut app = create_test_app();
+        app.clipboard_command = Some(dir.join("stub").display().to_string());
+        view_folder_root(&mut app, "docs", vec![file_item("a.txt")]);
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert!(app.model.ui.terminal_requests.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_setup_help_copy_without_command_queues_osc52() {
+        let mut app = create_test_app();
+        app.model.ui.show_setup_help = true;
+        app.model.ui.config_path = "/home/u/.config/stui/config.yaml".to_string();
+
+        press(&mut app, crossterm::event::KeyCode::Char('c')).await;
+
+        assert_eq!(
+            app.model.ui.terminal_requests,
+            vec![crate::model::TerminalRequest::Copy(
+                "/home/u/.config/stui/config.yaml".to_string()
+            )]
+        );
     }
 }

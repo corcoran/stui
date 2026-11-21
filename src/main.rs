@@ -880,7 +880,27 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run_app<B: ratatui::backend::Backend>(
+/// Carries out the terminal work handlers queued since the last frame
+fn run_terminal_requests<B: ratatui::backend::Backend + std::io::Write>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> Result<()> {
+    for request in std::mem::take(&mut app.model.ui.terminal_requests) {
+        match request {
+            model::TerminalRequest::Copy(text) => {
+                let backend = terminal.backend_mut();
+                backend.write_all(logic::clipboard::osc52_sequence(&text).as_bytes())?;
+                std::io::Write::flush(backend)?;
+            }
+            model::TerminalRequest::RunInTerminal { program, .. } => {
+                log_debug(&format!("RunInTerminal not handled yet: {}", program));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_app<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> Result<()>
@@ -890,6 +910,8 @@ where
     let mut last_stats_update = Instant::now();
 
     loop {
+        run_terminal_requests(terminal, app)?;
+
         // Clear terminal to remove sixel graphics if needed (brief flash but necessary)
         if app.model.ui.sixel_cleanup_frames > 0 {
             terminal.clear()?;
