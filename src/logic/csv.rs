@@ -11,7 +11,6 @@ const SEPARATOR: &str = " │ ";
 /// Draws `content` as a table fitted to `width` columns: bold header row, a rule, then the rows.
 /// `delimiter: None` picks the most frequent of `,` `;` and tab in the first record (`,` on ties).
 /// The widest column shrinks first and cut cells end in `…`.
-#[allow(dead_code)]
 pub fn render(content: &str, delimiter: Option<char>, width: u16) -> Text<'static> {
     let delimiter = delimiter.unwrap_or_else(|| sniff(content));
     let mut rows = parse(content, delimiter);

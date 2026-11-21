@@ -387,6 +387,8 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 - `?` or `Enter` (on files): Show detailed file info popup with metadata and preview:
   - **Text files**: Scrollable preview with vim keybindings (j/k, gg/G, Ctrl-d/u/f/b, PgUp/PgDn)
   - **Markdown files**: Rendered (headings, lists, code blocks, links, tables); `r` toggles the raw source
+  - **JSON files**: Pretty-printed and colored by `logic::json`; `r` toggles the raw source
+  - **CSV/TSV files**: Drawn as a table fitted to the pane by `logic::csv`; `r` toggles the raw source. `logic::file::RenderedView` names the formatted types and `logic::formatted::render` dispatches; JSON, CSV and TSV over `MAX_FORMATTED_BYTES` (2 MB) show raw under a notice
   - **Stepping**: `Shift+↑/↓` (or `K`/`J` in vim mode) previews the previous/next file, skipping directories
   - **Open**: `o` opens the previewed file like `o` in the file list; the preview reloads after an editor returns
   - **ANSI art files**: Detected by extension (`.ans`/`.asc`/`.nfo`/`.diz`; an `.nfo`/`.diz` that is valid UTF-8 with a multi-byte character or starts with `<` is plain text), a character-art SAUCE record or content; CP437 or ISO-8859-1 (Amiga), drawn at the SAUCE canvas width (80 without one) and cut off at the pane edge, never wrapped; SGR colors in the CGA palette on black

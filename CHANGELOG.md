@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Amiga ASCII**: Amiga art (ISO-8859-1, with `·` `¯` `¥` and the like) previews with its own characters instead of DOS box pieces, in `.asc`, `.txt` and other files
 - **Blinking art**: ANSI art that uses blink blinks, in terminals that support it
 - **UTF-16 text**: UTF-16 text files preview as text
+- **JSON preview**: `.json` files preview pretty-printed with colors. Press `r` for the raw file
+- **CSV/TSV preview**: `.csv` and `.tsv` files preview as a table fitted to the pane, with long cells ending in `…`. Press `r` for the raw file. JSON, CSV and TSV files over 2 MB show raw
 
 ### 🔧 Improvements
 

@@ -730,12 +730,12 @@ fn render_preview_column(
         };
 
         let inner_width = preview_area.width.saturating_sub(PANE_CHROME);
-        let has_rendered_view = crate::logic::file::has_rendered_view(&state.file_path);
+        let view = crate::logic::file::rendered_view(&state.file_path);
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
             ratatui::text::Text::from(preview_message_text(msg))
-        } else if has_rendered_view && !state.raw_view {
-            crate::logic::markdown::render(&content_str, inner_width)
+        } else if let (Some(view), false) = (view, state.raw_view) {
+            crate::logic::formatted::render(view, &content_str, inner_width)
         } else {
             crate::logic::file::parse_ansi_to_text(&content_str, canvas_width)
         };
@@ -753,10 +753,12 @@ fn render_preview_column(
         state.scroll_offset = clamped_scroll;
 
         let scroll_keys = "↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn";
-        let title = match (has_rendered_view, state.raw_view) {
-            (true, false) => format!("Preview (Markdown, r: raw | {})", scroll_keys),
-            (true, true) => format!("Preview (Raw, r: rendered | {})", scroll_keys),
-            (false, _) => format!("Preview ({})", scroll_keys),
+        let title = match (view, state.raw_view) {
+            (Some(v), false) => format!("Preview ({}, r: raw | {})", v.label(), scroll_keys),
+            (Some(v), true) => {
+                format!("Preview (Raw, r: {} | {})", v.rendered_word(), scroll_keys)
+            }
+            (None, _) => format!("Preview ({})", scroll_keys),
         };
 
         // Spans patch over this base style, so the art's own colors still win
@@ -1408,5 +1410,33 @@ mod tests {
         let mut state = popup("notes.txt", &"w".repeat(50), false);
         let rows = render_rows(&mut state, 40, 8);
         assert!(rows[2].starts_with("│ w"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_json_preview_is_formatted_with_title() {
+        let mut state = popup("config.json", r#"{"a":1}"#, false);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[0].contains("Preview (JSON, r: raw"), "{}", rows[0]);
+        assert!(rows[2].contains("\"a\": 1"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_json_raw_view_shows_source() {
+        let mut state = popup("config.json", r#"{"a":1}"#, true);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(
+            rows[0].contains("Preview (Raw, r: formatted"),
+            "{}",
+            rows[0]
+        );
+        assert!(rows[1].contains(r#"{"a":1}"#), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_csv_preview_is_a_table() {
+        let mut state = popup("people.csv", "name,age\nAda,36\n", false);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[0].contains("Preview (CSV, r: raw"), "{}", rows[0]);
+        assert!(rows[1].contains("name │ age"), "{:#?}", rows);
     }
 }

@@ -44,9 +44,54 @@ pub fn is_markdown_path(path: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
-/// Whether the preview renders this file's content and `r` can switch to the raw source.
+/// A file type the preview draws formatted; `r` switches to the raw source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderedView {
+    Markdown,
+    Json,
+    Csv,
+    Tsv,
+}
+
+impl RenderedView {
+    /// Name shown in the preview title.
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderedView::Markdown => "Markdown",
+            RenderedView::Json => "JSON",
+            RenderedView::Csv => "CSV",
+            RenderedView::Tsv => "TSV",
+        }
+    }
+
+    /// Word for the formatted view in the raw view's title.
+    pub fn rendered_word(self) -> &'static str {
+        match self {
+            RenderedView::Markdown => "rendered",
+            _ => "formatted",
+        }
+    }
+}
+
+/// The formatted view for a path, by extension (case-insensitive).
+pub fn rendered_view(path: &str) -> Option<RenderedView> {
+    let lower = path.to_lowercase();
+    if is_markdown_path(path) {
+        Some(RenderedView::Markdown)
+    } else if lower.ends_with(".json") {
+        Some(RenderedView::Json)
+    } else if lower.ends_with(".csv") {
+        Some(RenderedView::Csv)
+    } else if lower.ends_with(".tsv") {
+        Some(RenderedView::Tsv)
+    } else {
+        None
+    }
+}
+
+/// Whether the preview has a formatted view for this file.
 pub fn has_rendered_view(path: &str) -> bool {
-    is_markdown_path(path)
+    rendered_view(path).is_some()
 }
 
 /// Detect if file content contains ANSI escape codes
@@ -1453,7 +1498,29 @@ mod tests {
     }
 
     #[test]
-    fn test_has_rendered_view_only_for_markdown() {
+    fn test_rendered_view_by_extension() {
+        assert_eq!(rendered_view("README.md"), Some(RenderedView::Markdown));
+        assert_eq!(rendered_view("data/Config.JSON"), Some(RenderedView::Json));
+        assert_eq!(rendered_view("people.csv"), Some(RenderedView::Csv));
+        assert_eq!(rendered_view("people.TSV"), Some(RenderedView::Tsv));
+        assert_eq!(rendered_view("notes.txt"), None);
+        assert!(
+            has_rendered_view("a.json")
+                && has_rendered_view("a.csv")
+                && !has_rendered_view("a.ans")
+        );
+    }
+
+    #[test]
+    fn test_rendered_view_labels() {
+        assert_eq!(RenderedView::Json.label(), "JSON");
+        assert_eq!(RenderedView::Tsv.label(), "TSV");
+        assert_eq!(RenderedView::Markdown.rendered_word(), "rendered");
+        assert_eq!(RenderedView::Csv.rendered_word(), "formatted");
+    }
+
+    #[test]
+    fn test_has_rendered_view_only_for_formatted_types() {
         assert!(has_rendered_view("README.md"));
         assert!(!has_rendered_view("notes.txt"));
         assert!(!has_rendered_view("art.ans"));

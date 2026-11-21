@@ -6,6 +6,7 @@
 //! - file: File type detection and utilities
 //! - file_navigation: File navigation logic for jumping to files
 //! - folder: Folder validation and business logic
+//! - formatted: Formatted preview views (Markdown, JSON, CSV, TSV)
 //! - formatting: Data formatting for human-readable display
 //! - ignore: Pattern matching for .stignore rules
 //! - layout: UI layout calculations and constraints
@@ -30,6 +31,7 @@ pub mod folder;
 pub mod folder_card;
 pub mod folder_groups;
 pub mod folder_history;
+pub mod formatted;
 pub mod formatting;
 pub mod ignore;
 pub mod json;

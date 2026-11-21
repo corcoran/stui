@@ -90,6 +90,17 @@ EOF
 - renew passport
 - book dentist
 EOF
+    write "$d/settings.json" 12 <<'EOF'
+{"app":{"name":"homelab","version":"2.4.1","debug":false},"sync":{"interval":300,"retries":3,"folders":["photos","projects","documents"],"ignore":[".DS_Store","*.tmp"]},"ui":{"theme":"dark","columns":["name","size","modified"],"vim":true},"devices":[{"id":"nas","trusted":true},{"id":"laptop","trusted":true}]}
+EOF
+    write "$d/users.csv" 9 <<'EOF'
+id;name;email;role;notes
+1;Ada Lovelace;ada@example.org;admin;Wrote the first published program for the Analytical Engine
+2;Alan Turing;alan@example.org;editor;Keeps the cluster running and reviews every configuration change
+3;Grace Hopper;grace@example.org;editor;Maintains the compiler toolchain and the nightly build
+4;Linus Torvalds;linus@example.org;viewer;Reads the mailing list so the others do not have to
+5;Margaret Hamilton;margaret@example.org;viewer;Owns the on-call rotation and the incident postmortems
+EOF
     mkdir -p "$d/art"
     cp "$DEMO/fixtures/gentoo.ans" "$DEMO/fixtures/smiths.ans" "$DEMO/fixtures/stui.nfo" "$d/art/"
     age "$d/art/gentoo.ans" 50; age "$d/art/smiths.ans" 48; age "$d/art/stui.nfo" 46

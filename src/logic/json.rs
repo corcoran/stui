@@ -11,7 +11,6 @@ enum Token<'a> {
 
 /// Re-indents `content` with two spaces and colors keys, strings, numbers and literals.
 /// Invalid JSON gets a note on the first line followed by the raw content.
-#[allow(dead_code)]
 pub fn render(content: &str) -> Text<'static> {
     if content.trim().is_empty() {
         return Text::default();
