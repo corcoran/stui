@@ -1239,6 +1239,8 @@ where
         // This prevents blocking keyboard input and reduces CPU usage
         let idle_time = app.model.performance.last_user_action.elapsed();
         if idle_time >= std::time::Duration::from_millis(300) {
+            app.expire_pending(Instant::now());
+
             // Cleanup stale pending deletes (60s timeout fallback)
             app.cleanup_stale_pending_deletes();
 

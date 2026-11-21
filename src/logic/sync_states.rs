@@ -434,7 +434,7 @@ fn worse(a: Option<SyncState>, b: SyncState) -> SyncState {
     }
 }
 
-fn rebuild_descendants(index: &mut NeedIndex) {
+pub(crate) fn rebuild_descendants(index: &mut NeedIndex) {
     let mut descendants: HashMap<String, SyncState> = HashMap::new();
     for (path, state) in index.need.iter().chain(&index.local_changed) {
         let mut end = 0;

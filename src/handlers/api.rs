@@ -6,7 +6,9 @@
 use std::time::Instant;
 
 use crate::App;
-use crate::api::SyncState;
+use crate::api::{BrowseItem, SyncState};
+use crate::logic::pending::{Observation, Verdict};
+use crate::model::pending::PendingKind;
 use crate::model::syncthing::ConnectionState;
 use crate::services::api::{ApiRequest, ApiResponse, Priority};
 
@@ -166,6 +168,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 app.model.navigation.breadcrumb_trail.len()
             ));
 
+            observe_listing(app, &folder_id, prefix.as_deref(), &mut items, requested_at);
+
             // Save merged items to cache
             if let Err(e) =
                 app.cache
@@ -201,7 +205,14 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                     idx, folder_id, prefix
                 ));
 
-                let cached_states = app.cached_sync_states(&folder_id, &items, prefix.as_deref());
+                let mut cached_states =
+                    app.cached_sync_states(&folder_id, &items, prefix.as_deref());
+                // The pending change covers these until confirmed; the cache may predate it
+                cached_states.retain(|name, _| {
+                    let path =
+                        crate::logic::sync_states::breadcrumb_item_path(prefix.as_deref(), name);
+                    app.model.pending.get(&folder_id, &path).is_none()
+                });
                 let derive_ctx =
                     crate::app::sync_states::derive_context(&app.model.syncthing, &folder_id);
 
@@ -414,6 +425,24 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 folder_id, file_path, state, file_sequence
             ));
 
+            let path = file_path.trim_end_matches('/');
+            if app.model.pending.get(&folder_id, path).is_some()
+                && app.observe_path(
+                    &folder_id,
+                    path,
+                    Observation::FileInfo {
+                        state,
+                        requested_at,
+                    },
+                ) == Verdict::Keep
+            {
+                crate::log_debug(&format!(
+                    "DEBUG [FileInfoResult]: pending change kept, not applying folder={} path={} state={:?}",
+                    folder_id, file_path, state
+                ));
+                return;
+            }
+
             // Cached even when the folder is no longer on screen, so it isn't fetched again
             app.pending_sync_state_writes.push((
                 folder_id.clone(),
@@ -551,6 +580,13 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                 .syncthing
                 .status_applied_at
                 .insert(folder_id.clone(), requested_at);
+            app.observe_folder_change(
+                &folder_id,
+                Observation::FolderStatus {
+                    receive_only_items: status.receive_only_total_items,
+                    requested_at,
+                },
+            );
 
             // Successful API call - mark as connected
             let was_disconnected = !matches!(
@@ -667,6 +703,9 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             success,
             error,
         } => {
+            app.model
+                .pending
+                .start_deadlines(&folder_id, std::time::Instant::now());
             if success {
                 crate::log_debug(&format!(
                     "DEBUG [RescanResult]: Successfully rescanned folder={}, requesting immediate status update",
@@ -986,7 +1025,7 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
         ApiResponse::LocalChangedIndex {
             folder_id,
             sequence,
-            requested_at: _,
+            requested_at,
             files,
         } => {
             if app.model.syncthing.local_changed_requested.get(&folder_id) != Some(&sequence) {
@@ -1011,6 +1050,34 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
                         .entry(folder_id.clone())
                         .or_default();
                     crate::logic::sync_states::set_index_local_changed(index, &files, sequence);
+                    let pending: Vec<String> = app
+                        .model
+                        .pending
+                        .in_folder(&folder_id)
+                        .map(|(path, _)| path.to_string())
+                        .collect();
+                    for path in pending {
+                        let deleted = files
+                            .iter()
+                            .any(|f| f.deleted && f.name.trim_end_matches('/') == path);
+                        app.observe_path(
+                            &folder_id,
+                            &path,
+                            Observation::LocalChanged {
+                                deleted,
+                                requested_at,
+                            },
+                        );
+                    }
+                    if let Some(index) = app.model.syncthing.need_index.get_mut(&folder_id) {
+                        crate::logic::pending::reapply_to_index(
+                            index,
+                            app.model
+                                .pending
+                                .in_folder(&folder_id)
+                                .map(|(path, change)| (path, &change.kind)),
+                        );
+                    }
                     app.refresh_derived_states(&folder_id);
                 }
                 Err(e) => {
@@ -1058,11 +1125,54 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
     }
 }
 
+/// Judge a listing of `prefix` against the pending changes of paths directly in it, and drop
+/// rows whose removal is still pending
+fn observe_listing(
+    app: &mut App,
+    folder_id: &str,
+    prefix: Option<&str>,
+    items: &mut Vec<BrowseItem>,
+    requested_at: Instant,
+) {
+    let listed_here: Vec<(String, String)> = app
+        .model
+        .pending
+        .in_folder(folder_id)
+        .filter_map(|(path, _)| {
+            crate::logic::sync_states::name_in_level(prefix, path)
+                .map(|name| (path.to_string(), name.to_string()))
+        })
+        .collect();
+    for (path, name) in &listed_here {
+        let present = items.iter().any(|item| &item.name == name);
+        app.observe_path(
+            folder_id,
+            path,
+            Observation::Listed {
+                present,
+                requested_at,
+            },
+        );
+    }
+    items.retain(|item| {
+        let path = crate::logic::sync_states::breadcrumb_item_path(prefix, &item.name);
+        app.model
+            .pending
+            .get(folder_id, &path)
+            .is_none_or(|change| change.kind != PendingKind::Removed)
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handlers::events::handle_cache_invalidation;
+    use crate::logic::display::ItemDisplay;
+    use crate::logic::pending::PATH_DEADLINE;
+    use crate::model::pending::PendingFolderKind;
     use crate::test_support::{
-        create_test_app, create_test_app_with_api_rx, file_item, folder_status, view_folder_root,
+        create_test_app, create_test_app_with_api_rx, file_details, file_item, folder_status,
+        item_finished, status_result, view_folder_root,
     };
     use std::time::Duration;
 
@@ -1180,5 +1290,358 @@ mod tests {
         handle_api_response(&mut app, listing("f", &["a"], t0));
 
         assert_eq!(shown_names(&app), vec!["a"]);
+    }
+
+    // ========================================
+    // PENDING LOCAL CHANGES
+    // ========================================
+
+    /// An instant strictly before anything recorded after this call
+    fn before_now() -> Instant {
+        Instant::now() - Duration::from_millis(1)
+    }
+
+    fn displayed(app: &App, name: &str) -> Option<ItemDisplay> {
+        let level = &app.model.navigation.breadcrumb_trail[0];
+        let item = level
+            .items
+            .iter()
+            .find(|i| i.name == name)
+            .expect("item listed");
+        crate::logic::display::level_item_display(
+            &app.model.syncthing,
+            level,
+            item,
+            &app.model.pending,
+        )
+    }
+
+    fn file_info(path: &str, state: SyncState, requested_at: Instant) -> ApiResponse {
+        ApiResponse::FileInfoResult {
+            folder_id: "f".to_string(),
+            file_path: path.to_string(),
+            details: Box::new(Ok(file_details(state))),
+            requested_at,
+        }
+    }
+
+    fn cache_write_queued(app: &App, path: &str) -> bool {
+        app.pending_sync_state_writes
+            .iter()
+            .any(|(folder, p, ..)| folder == "f" && p == path)
+    }
+
+    fn local_changed_index(sequence: u64, deleted: &[&str], requested_at: Instant) -> ApiResponse {
+        ApiResponse::LocalChangedIndex {
+            folder_id: "f".to_string(),
+            sequence,
+            requested_at,
+            files: Ok(deleted
+                .iter()
+                .map(|n| crate::api::LocalChangedFile {
+                    name: n.to_string(),
+                    deleted: true,
+                })
+                .collect()),
+        }
+    }
+
+    #[test]
+    fn test_pending_ignored_survives_stale_file_info() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        let sent = before_now();
+        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+
+        handle_api_response(&mut app, file_info("a", SyncState::Synced, sent));
+
+        assert_eq!(
+            displayed(&app, "a"),
+            Some(ItemDisplay::Ignored { exists: true })
+        );
+        assert!(app.model.pending.get("f", "a").is_some());
+        assert_eq!(
+            app.model.navigation.breadcrumb_trail[0].file_sync_states["a"],
+            SyncState::RemoteOnly
+        );
+        assert!(!cache_write_queued(&app, "a"));
+    }
+
+    #[test]
+    fn test_pending_ignored_survives_fresh_unconfirming_file_info() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+
+        handle_api_response(&mut app, file_info("a", SyncState::Synced, Instant::now()));
+
+        assert_eq!(
+            displayed(&app, "a"),
+            Some(ItemDisplay::Ignored { exists: true })
+        );
+        assert!(app.model.pending.get("f", "a").is_some());
+        assert!(!cache_write_queued(&app, "a"));
+    }
+
+    #[test]
+    fn test_pending_ignored_confirmed_by_fresh_file_info_clears_change() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+
+        handle_api_response(&mut app, file_info("a", SyncState::Ignored, Instant::now()));
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert_eq!(
+            app.model.navigation.breadcrumb_trail[0].file_sync_states["a"],
+            SyncState::Ignored
+        );
+        assert!(cache_write_queued(&app, "a"));
+        // /data/f/a doesn't exist on this machine
+        assert_eq!(
+            displayed(&app, "a"),
+            Some(ItemDisplay::Ignored { exists: false })
+        );
+    }
+
+    #[test]
+    fn test_pending_deleted_locally_survives_same_sequence_local_changed_reply() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("f".to_string(), 5);
+        let sent = before_now();
+        app.record_pending("f", "a", PendingKind::DeletedLocally);
+
+        handle_api_response(&mut app, local_changed_index(5, &[], sent));
+
+        assert_eq!(
+            app.model.syncthing.need_index["f"].local_changed.get("a"),
+            Some(&SyncState::RemoteOnly)
+        );
+        assert!(app.model.pending.get("f", "a").is_some());
+        assert_eq!(displayed(&app, "a"), Some(ItemDisplay::LocallyDeleted));
+    }
+
+    #[test]
+    fn test_pending_deleted_locally_confirmed_by_fresh_local_changed_reply() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.model
+            .syncthing
+            .local_changed_requested
+            .insert("f".to_string(), 5);
+        app.record_pending("f", "a", PendingKind::DeletedLocally);
+
+        handle_api_response(&mut app, local_changed_index(5, &["a"], Instant::now()));
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert_eq!(displayed(&app, "a"), Some(ItemDisplay::LocallyDeleted));
+    }
+
+    #[test]
+    fn test_zero_receive_only_status_keeps_pending_local_deletion_in_index() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::DeletedLocally);
+
+        handle_api_response(&mut app, status_result("f", "idle"));
+
+        assert_eq!(
+            app.model.syncthing.need_index["f"].local_changed.get("a"),
+            Some(&SyncState::RemoteOnly)
+        );
+        assert_eq!(displayed(&app, "a"), Some(ItemDisplay::LocallyDeleted));
+    }
+
+    #[test]
+    fn test_pending_removed_row_stays_hidden_on_stale_listing() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("b")]);
+        let sent = before_now();
+        app.record_pending("f", "a", PendingKind::Removed);
+
+        handle_api_response(&mut app, listing("f", &["a", "b"], sent));
+
+        assert_eq!(shown_names(&app), vec!["b"]);
+        assert!(app.model.pending.get("f", "a").is_some());
+    }
+
+    #[test]
+    fn test_pending_removed_confirmed_by_fresh_listing_without_it() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("b")]);
+        app.record_pending("f", "a", PendingKind::Removed);
+
+        handle_api_response(&mut app, listing("f", &["a", "b"], Instant::now()));
+        assert_eq!(shown_names(&app), vec!["b"]);
+        assert!(app.model.pending.get("f", "a").is_some());
+
+        handle_api_response(&mut app, listing("f", &["b"], Instant::now()));
+        assert!(app.model.pending.get("f", "a").is_none());
+    }
+
+    #[test]
+    fn test_pending_path_keeps_in_memory_state_over_cache_on_listing() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.cache
+            .save_sync_state("f", "a", SyncState::Synced, 1)
+            .unwrap();
+        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+
+        handle_api_response(&mut app, listing("f", &["a"], Instant::now()));
+
+        assert_eq!(
+            app.model.navigation.breadcrumb_trail[0].file_sync_states["a"],
+            SyncState::RemoteOnly
+        );
+    }
+
+    #[test]
+    fn test_rescan_result_starts_deadline_and_expiry_requests_file_info() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Ignored { exists: true });
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::RescanResult {
+                folder_id: "f".to_string(),
+                success: true,
+                error: None,
+            },
+        );
+        let deadline = app.model.pending.get("f", "a").unwrap().deadline;
+        assert!(deadline.is_some());
+        while rx.try_recv().is_ok() {}
+
+        app.expire_pending(Instant::now() + PATH_DEADLINE);
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        let queued: Vec<ApiRequest> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            queued.iter().any(|r| matches!(
+                r,
+                ApiRequest::GetFileInfo { folder_id, file_path, priority: Priority::High, .. }
+                    if folder_id == "f" && file_path == "a"
+            )),
+            "{:?}",
+            queued
+        );
+        assert!(app.model.performance.loading_sync_states.contains("f:a"));
+    }
+
+    #[test]
+    fn test_failed_rescan_also_starts_deadline() {
+        let mut app = create_test_app();
+        app.record_pending("f", "a", PendingKind::Removed);
+
+        handle_api_response(
+            &mut app,
+            ApiResponse::RescanResult {
+                folder_id: "f".to_string(),
+                success: false,
+                error: Some(anyhow::anyhow!("boom")),
+            },
+        );
+
+        assert!(app.model.pending.get("f", "a").unwrap().deadline.is_some());
+    }
+
+    #[test]
+    fn test_expired_folder_change_refreshes_folder_statuses() {
+        let (mut app, mut rx) = create_test_app_with_api_rx();
+        app.model.syncthing.folders = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "f",
+                "label": "F",
+                "path": "/data/f",
+                "paused": false,
+                "type": "receiveonly",
+            }))
+            .expect("valid Folder"),
+        ];
+        let now = Instant::now();
+        app.model
+            .pending
+            .record_folder("f", PendingFolderKind::Reverting, now);
+        app.model.pending.folder_mut("f").unwrap().deadline = Some(now);
+
+        app.expire_pending(now);
+
+        assert!(app.model.pending.folder("f").is_none());
+        let queued: Vec<ApiRequest> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            queued.iter().any(
+                |r| matches!(r, ApiRequest::GetFolderStatus { folder_id, .. } if folder_id == "f")
+            ),
+            "{:?}",
+            queued
+        );
+    }
+
+    #[test]
+    fn test_fresh_zero_receive_only_status_confirms_revert() {
+        let mut app = create_test_app();
+        app.model
+            .pending
+            .record_folder("f", PendingFolderKind::Reverting, Instant::now());
+
+        let stale = before_now() - Duration::from_millis(5);
+        handle_api_response(
+            &mut app,
+            crate::test_support::status_result_at("f", "idle", stale),
+        );
+        assert!(app.model.pending.folder("f").is_some());
+
+        handle_api_response(&mut app, status_result("f", "idle"));
+        assert!(app.model.pending.folder("f").is_none());
+    }
+
+    #[test]
+    fn test_pause_contradicts_restoring_and_revert() {
+        let mut app = create_test_app();
+        app.record_pending("f", "a", PendingKind::Restoring);
+        app.record_pending("f", "b", PendingKind::Removed);
+        app.model
+            .pending
+            .record_folder("f", PendingFolderKind::Reverting, Instant::now());
+
+        let mut status = folder_status("paused");
+        status.receive_only_total_items = 3;
+        handle_api_response(
+            &mut app,
+            ApiResponse::FolderStatusResult {
+                folder_id: "f".to_string(),
+                status: Ok(status),
+                requested_at: Instant::now(),
+            },
+        );
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert!(app.model.pending.get("f", "b").is_some());
+        assert!(app.model.pending.folder("f").is_none());
+    }
+
+    #[test]
+    fn test_item_finished_confirms_restoring() {
+        let mut app = create_test_app();
+        view_folder_root(&mut app, "f", vec![file_item("a")]);
+        app.record_pending("f", "a", PendingKind::Restoring);
+        assert_eq!(
+            displayed(&app, "a"),
+            Some(ItemDisplay::State(SyncState::Syncing))
+        );
+
+        handle_cache_invalidation(&mut app, item_finished("f", "a"));
+
+        assert!(app.model.pending.get("f", "a").is_none());
+        assert_eq!(
+            displayed(&app, "a"),
+            Some(ItemDisplay::State(SyncState::Synced))
+        );
     }
 }

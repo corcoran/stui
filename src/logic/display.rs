@@ -4,6 +4,7 @@
 use crate::api::{BrowseItem, SyncState};
 use crate::logic::sync_states::{breadcrumb_item_path, is_locally_deleted, item_sync_state};
 use crate::model::BreadcrumbLevel;
+use crate::model::pending::{PendingChanges, PendingKind};
 use crate::model::syncthing::{NeedIndex, SyncthingModel};
 use std::collections::HashSet;
 
@@ -31,11 +32,24 @@ pub struct ItemInput<'a> {
     pub index: Option<&'a NeedIndex>,
     /// Whether an ignored item exists on disk
     pub ignored_exists: Option<bool>,
+    /// The item's pending local change
+    pub pending: Option<&'a PendingKind>,
 }
 
-/// Display for an item: in-flight transfers overlay the stored state, a locally deleted item
-/// beats everything else, and `None` means the state hasn't loaded.
+/// Display for an item: a pending change beats everything, then a locally deleted item, then
+/// in-flight transfers over the stored state. `None` means the state hasn't loaded, or the item
+/// is pending removal or an unignore Syncthing hasn't confirmed.
 pub fn item_display(input: &ItemInput) -> Option<ItemDisplay> {
+    match input.pending {
+        Some(PendingKind::DeletedLocally) => return Some(ItemDisplay::LocallyDeleted),
+        Some(PendingKind::Ignored { exists }) => {
+            return Some(ItemDisplay::Ignored { exists: *exists });
+        }
+        Some(PendingKind::Restoring) => return Some(ItemDisplay::State(SyncState::Syncing)),
+        Some(PendingKind::Removed) => return None,
+        Some(PendingKind::Unignored) if input.base == Some(SyncState::Ignored) => return None,
+        Some(PendingKind::Unignored) | None => {}
+    }
     let path = breadcrumb_item_path(input.prefix, &input.item.name);
     if is_locally_deleted(input.index, input.syncing, &path) {
         return Some(ItemDisplay::LocallyDeleted);
@@ -54,7 +68,9 @@ pub fn level_item_display(
     syncthing: &SyncthingModel,
     level: &BreadcrumbLevel,
     item: &BrowseItem,
+    pending: &PendingChanges,
 ) -> Option<ItemDisplay> {
+    let path = breadcrumb_item_path(level.prefix.as_deref(), &item.name);
     item_display(&ItemInput {
         base: level.file_sync_states.get(&item.name).copied(),
         item,
@@ -62,6 +78,7 @@ pub fn level_item_display(
         syncing: syncthing.syncing_files.get(&level.folder_id),
         index: syncthing.need_index.get(&level.folder_id),
         ignored_exists: level.ignored_exists.get(&item.name).copied(),
+        pending: pending.get(&level.folder_id, &path).map(|c| &c.kind),
     })
 }
 
@@ -70,6 +87,7 @@ mod tests {
     use super::*;
     use crate::api::SyncState;
     use crate::model::BreadcrumbLevel;
+    use crate::model::pending::{PendingChanges, PendingKind};
     use crate::model::syncthing::{NeedIndex, SyncthingModel};
     use std::collections::{HashMap, HashSet};
 
@@ -95,6 +113,7 @@ mod tests {
             syncing: None,
             index,
             ignored_exists,
+            pending: None,
         }
     }
 
@@ -149,6 +168,83 @@ mod tests {
     }
 
     #[test]
+    fn test_display_maps_each_pending_kind() {
+        use SyncState::*;
+        let item = browse_item("a.txt");
+        let shown = |base: Option<SyncState>, kind: PendingKind| {
+            let mut inp = input(base, &item, Some(true), None);
+            inp.pending = Some(&kind);
+            item_display(&inp)
+        };
+
+        assert_eq!(
+            shown(Some(Synced), PendingKind::DeletedLocally),
+            Some(ItemDisplay::LocallyDeleted)
+        );
+        assert_eq!(
+            shown(Some(Synced), PendingKind::Ignored { exists: false }),
+            Some(ItemDisplay::Ignored { exists: false })
+        );
+        assert_eq!(
+            shown(None, PendingKind::Ignored { exists: true }),
+            Some(ItemDisplay::Ignored { exists: true })
+        );
+        assert_eq!(
+            shown(Some(RemoteOnly), PendingKind::Restoring),
+            Some(ItemDisplay::State(Syncing))
+        );
+        assert_eq!(shown(Some(Ignored), PendingKind::Unignored), None);
+        assert_eq!(
+            shown(Some(OutOfSync), PendingKind::Unignored),
+            Some(ItemDisplay::State(OutOfSync))
+        );
+        assert_eq!(shown(Some(Synced), PendingKind::Removed), None);
+    }
+
+    #[test]
+    fn test_level_item_display_reads_pending_change_by_folder_path() {
+        let model = SyncthingModel::new();
+        let level = BreadcrumbLevel {
+            folder_id: "f".to_string(),
+            folder_label: "f".to_string(),
+            folder_path: "/data/f".to_string(),
+            prefix: Some("sub/".to_string()),
+            items: vec![],
+            filtered_items: None,
+            selected_index: None,
+            file_sync_states: HashMap::from([
+                ("a.txt".to_string(), SyncState::Synced),
+                ("b.txt".to_string(), SyncState::Synced),
+            ]),
+            direct_states: HashMap::new(),
+            ignored_exists: HashMap::new(),
+            translated_base_path: "/data/f".to_string(),
+        };
+        let mut pending = PendingChanges::default();
+        pending.record(
+            "f",
+            "sub/a.txt",
+            PendingKind::Ignored { exists: true },
+            std::time::Instant::now(),
+        );
+
+        assert_eq!(
+            level_item_display(&model, &level, &browse_item("a.txt"), &pending),
+            Some(ItemDisplay::Ignored { exists: true })
+        );
+        pending.record(
+            "g",
+            "sub/b.txt",
+            PendingKind::Removed,
+            std::time::Instant::now(),
+        );
+        assert_eq!(
+            level_item_display(&model, &level, &browse_item("b.txt"), &pending),
+            Some(ItemDisplay::State(SyncState::Synced))
+        );
+    }
+
+    #[test]
     fn test_level_item_display_matches_list_and_status_bar_inputs() {
         let mut model = SyncthingModel::new();
         let level = BreadcrumbLevel {
@@ -179,19 +275,39 @@ mod tests {
         model.need_index.insert("f".to_string(), index);
 
         assert_eq!(
-            level_item_display(&model, &level, &browse_item("downloading.txt")),
+            level_item_display(
+                &model,
+                &level,
+                &browse_item("downloading.txt"),
+                &PendingChanges::default()
+            ),
             Some(ItemDisplay::State(SyncState::Syncing))
         );
         assert_eq!(
-            level_item_display(&model, &level, &browse_item("gone.txt")),
+            level_item_display(
+                &model,
+                &level,
+                &browse_item("gone.txt"),
+                &PendingChanges::default()
+            ),
             Some(ItemDisplay::LocallyDeleted)
         );
         assert_eq!(
-            level_item_display(&model, &level, &browse_item("skipped.txt")),
+            level_item_display(
+                &model,
+                &level,
+                &browse_item("skipped.txt"),
+                &PendingChanges::default()
+            ),
             Some(ItemDisplay::Ignored { exists: true })
         );
         assert_eq!(
-            level_item_display(&model, &level, &browse_item("unloaded.txt")),
+            level_item_display(
+                &model,
+                &level,
+                &browse_item("unloaded.txt"),
+                &PendingChanges::default()
+            ),
             None
         );
     }

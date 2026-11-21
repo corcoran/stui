@@ -50,6 +50,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         &app.model.syncthing,
                         level,
                         item,
+                        &app.model.pending,
                     );
                     (item.name.clone(), item.item_type.clone(), display)
                 })
@@ -197,8 +198,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .items
             .iter()
             .filter_map(|item| {
-                crate::logic::display::level_item_display(&app.model.syncthing, level, item)
-                    .map(|display| (item.name.clone(), display))
+                crate::logic::display::level_item_display(
+                    &app.model.syncthing,
+                    level,
+                    item,
+                    &app.model.pending,
+                )
+                .map(|display| (item.name.clone(), display))
             })
             .collect();
 

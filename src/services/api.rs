@@ -308,7 +308,6 @@ pub enum ApiResponse {
     LocalChangedIndex {
         folder_id: String,
         sequence: u64,
-        #[allow(dead_code)]
         requested_at: std::time::Instant,
         files: Result<Vec<LocalChangedFile>, anyhow::Error>,
     },

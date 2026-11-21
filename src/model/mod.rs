@@ -15,12 +15,14 @@
 //! - Serializable: Can save/restore app state
 
 pub mod navigation;
+pub mod pending;
 pub mod performance;
 pub mod syncthing;
 pub mod types;
 pub mod ui;
 
 pub use navigation::NavigationModel;
+pub use pending::PendingChanges;
 pub use performance::PerformanceModel;
 pub use syncthing::SyncthingModel;
 pub use types::*;
@@ -40,6 +42,9 @@ pub struct Model {
 
     /// Performance tracking and operational state
     pub performance: PerformanceModel,
+
+    /// Local actions awaiting Syncthing's confirmation
+    pub pending: PendingChanges,
 }
 
 impl Model {
@@ -50,6 +55,7 @@ impl Model {
             navigation: NavigationModel::new(),
             ui: UiModel::new(vim_mode),
             performance: PerformanceModel::new(),
+            pending: PendingChanges::default(),
         }
     }
 

@@ -1000,6 +1000,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             &app.model.syncthing,
                             level,
                             item,
+                            &app.model.pending,
                         ),
                     )
                 })

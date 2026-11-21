@@ -7,6 +7,7 @@
 //! - Tracking ignored file existence
 
 use crate::api::FolderStatus;
+use crate::logic::pending::Observation;
 use crate::model::syncthing::{NeedFetch, SyncthingModel};
 use crate::{App, SyncState, log_debug, logic, services};
 use std::collections::HashMap;
@@ -68,6 +69,16 @@ impl App {
             // Also invalidates any outstanding fetch, so a late response can't resurrect state
             syncthing.clear_syncing(folder_id);
             syncthing.need_fetches.remove(folder_id);
+            let pending: Vec<String> = self
+                .model
+                .pending
+                .in_folder(folder_id)
+                .map(|(path, _)| path.to_string())
+                .collect();
+            for path in pending {
+                self.observe_path(folder_id, &path, Observation::FolderPaused);
+            }
+            self.observe_folder_change(folder_id, Observation::FolderPaused);
             return;
         }
 
@@ -122,8 +133,16 @@ impl App {
                 .entry(folder_id.to_string())
                 .or_default();
             if index.local_changed_sequence != Some(sequence) || !index.local_changed.is_empty() {
-                local_changes_cleared = !index.local_changed.is_empty();
+                let before = std::mem::take(&mut index.local_changed);
                 logic::sync_states::set_index_local_changed(index, &[], sequence);
+                logic::pending::reapply_to_index(
+                    index,
+                    self.model
+                        .pending
+                        .in_folder(folder_id)
+                        .map(|(path, change)| (path, &change.kind)),
+                );
+                local_changes_cleared = index.local_changed != before;
             }
         } else if folder_open {
             self.request_local_changed_if_due(folder_id, sequence);

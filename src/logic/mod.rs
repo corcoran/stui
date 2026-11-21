@@ -34,6 +34,7 @@ pub mod markdown;
 pub mod navigation;
 pub mod need_paging;
 pub mod path;
+pub mod pending;
 pub mod performance;
 pub mod platform;
 pub mod search;

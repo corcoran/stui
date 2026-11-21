@@ -201,6 +201,11 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 &file_path,
                 crate::model::syncthing::PathEventKind::Finished,
             );
+            app.observe_path(
+                &folder_id,
+                file_path.trim_end_matches('/'),
+                crate::logic::pending::Observation::ItemFinished { failed, deleted },
+            );
             for sets in [
                 &mut app.model.syncthing.syncing_files,
                 &mut app.model.syncthing.restoring,

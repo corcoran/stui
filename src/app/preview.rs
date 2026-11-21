@@ -165,6 +165,11 @@ impl App {
                 syncing: self.model.syncthing.syncing_files.get(&folder_id),
                 index: self.model.syncthing.need_index.get(&folder_id),
                 ignored_exists: None,
+                pending: self
+                    .model
+                    .pending
+                    .get(&folder_id, &file_path)
+                    .map(|c| &c.kind),
             }) == Some(logic::display::ItemDisplay::LocallyDeleted)
         {
             Err(logic::sync_states::locally_deleted_message().to_string())
