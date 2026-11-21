@@ -39,6 +39,7 @@ fn invalid(content: &str, err: &serde_json::Error) -> Text<'static> {
     Text::from(lines)
 }
 
+/// Assumes `content` is valid JSON (`render` checks first), so unterminated strings never reach it.
 fn tokenize(content: &str) -> Vec<Token<'_>> {
     let mut tokens = Vec::new();
     let mut chars = content.char_indices().peekable();
@@ -189,6 +190,14 @@ mod tests {
         assert_eq!(
             lines(&render(r#"["a,{b}:[c]\"d", "é"]"#)),
             ["[", r#"  "a,{b}:[c]\"d","#, r#"  "é""#, "]"]
+        );
+    }
+
+    #[test]
+    fn test_json_unicode_escapes_stay_as_written() {
+        assert_eq!(
+            lines(&render(r#"["\u00e9\n", "\ud83d\ude00"]"#)),
+            ["[", r#"  "\u00e9\n","#, r#"  "\ud83d\ude00""#, "]"]
         );
     }
 

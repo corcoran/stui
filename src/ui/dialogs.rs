@@ -730,7 +730,8 @@ fn render_preview_column(
         };
 
         let inner_width = preview_area.width.saturating_sub(PANE_CHROME);
-        let view = crate::logic::file::rendered_view(&state.file_path);
+        let view = crate::logic::file::rendered_view(&state.file_path)
+            .filter(|_| state.file_content.is_ok());
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
             ratatui::text::Text::from(preview_message_text(msg))
@@ -740,8 +741,14 @@ fn render_preview_column(
             crate::logic::file::parse_ansi_to_text(&content_str, canvas_width)
         };
 
-        // Art is not wrapped, so each parsed row is one screen row
-        let total_lines = if is_ansi_art {
+        // Art and tables are not wrapped, so each parsed row is one screen row
+        let wrap = !is_ansi_art
+            && view.is_none_or(|v| {
+                state.raw_view
+                    || state.file_content.is_err()
+                    || crate::logic::formatted::wraps(v, &content_str)
+            });
+        let total_lines = if !wrap {
             parsed_text.lines.len()
         } else {
             crate::logic::layout::wrapped_line_count(&parsed_text, inner_width)
@@ -779,7 +786,7 @@ fn render_preview_column(
                     .title(title),
             )
             .scroll((clamped_scroll, 0));
-        if !is_ansi_art {
+        if wrap {
             paragraph = paragraph.wrap(ratatui::widgets::Wrap { trim: false });
         }
 
@@ -1438,5 +1445,36 @@ mod tests {
         let rows = render_rows(&mut state, 120, 8);
         assert!(rows[0].contains("Preview (CSV, r: raw"), "{}", rows[0]);
         assert!(rows[1].contains("name │ age"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_wide_csv_is_cut_off_not_wrapped() {
+        let header = (0..20).map(|i| format!("col{:02}", i)).collect::<Vec<_>>();
+        let row = (0..20).map(|i| format!("v{:02}", i)).collect::<Vec<_>>();
+        let csv = format!(
+            "{}\n{}\n{}\n",
+            header.join(","),
+            row.join(","),
+            row.join(",")
+        );
+        let mut state = popup("wide.csv", &csv, false);
+        let rows = render_rows(&mut state, 60, 10);
+        assert!(rows[1].contains("co"), "{:#?}", rows);
+        assert!(rows[2].starts_with("│ ─"), "{:#?}", rows);
+        assert!(rows[3].contains('v'), "{:#?}", rows);
+        assert!(rows[4].contains('v'), "{:#?}", rows);
+        assert!(
+            rows[5].trim_matches(|c| c == '│' || c == ' ').is_empty(),
+            "{:#?}",
+            rows
+        );
+    }
+
+    #[test]
+    fn test_error_content_has_plain_title() {
+        let mut state = popup("a.json", "", false);
+        state.file_content = Err("missing".to_string());
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(!rows[0].contains("r: "), "{}", rows[0]);
     }
 }

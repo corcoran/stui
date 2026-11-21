@@ -7,6 +7,12 @@ use ratatui::text::{Line, Span, Text};
 /// JSON, CSV and TSV above this size show as the raw file.
 pub const MAX_FORMATTED_BYTES: usize = 2 * 1024 * 1024;
 
+/// Whether the preview paragraph wraps the rendered text.
+/// CSV and TSV drawn as a table are cut off at the pane edge instead; everything else wraps.
+pub fn wraps(view: RenderedView, content: &str) -> bool {
+    !matches!(view, RenderedView::Csv | RenderedView::Tsv) || content.len() > MAX_FORMATTED_BYTES
+}
+
 /// Render `content` for `view` at `width` columns.
 pub fn render(view: RenderedView, content: &str, width: u16) -> Text<'static> {
     if view == RenderedView::Markdown {
@@ -66,5 +72,15 @@ mod tests {
         };
         assert_eq!(first(RenderedView::Tsv, "a,b\tc\n"), "a,b │ c");
         assert_eq!(first(RenderedView::Csv, "a;b\n"), "a │ b");
+    }
+
+    #[test]
+    fn test_wraps_false_only_for_formatted_csv_and_tsv() {
+        assert!(!wraps(RenderedView::Csv, "a,b\n"));
+        assert!(!wraps(RenderedView::Tsv, "a\tb\n"));
+        assert!(wraps(RenderedView::Json, "{}"));
+        assert!(wraps(RenderedView::Markdown, "x"));
+        let big = "a,".repeat(MAX_FORMATTED_BYTES);
+        assert!(wraps(RenderedView::Csv, &big));
     }
 }

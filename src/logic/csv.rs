@@ -19,7 +19,11 @@ pub fn render(content: &str, delimiter: Option<char>, width: u16) -> Text<'stati
     }
     for row in &mut rows {
         for cell in row.iter_mut() {
-            *cell = cell.replace("\r\n", " ").replace(['\n', '\r'], " ");
+            *cell = cell
+                .replace("\r\n", " ")
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
         }
     }
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
@@ -50,17 +54,31 @@ fn column_widths(rows: &[Vec<String>], columns: usize, width: usize) -> Vec<usiz
         })
         .collect();
     let separators = 3 * columns.saturating_sub(1);
-    while widths.iter().sum::<usize>() + separators > width {
-        let mut widest = 0;
-        for (i, w) in widths.iter().enumerate() {
-            if *w > widths[widest] {
-                widest = i;
+    let sum_capped = |cap: usize| widths.iter().map(|w| (*w).min(cap)).sum::<usize>();
+    if columns * MIN_COLUMN + separators >= width {
+        return widths.iter().map(|w| (*w).min(MIN_COLUMN)).collect();
+    }
+    if sum_capped(MAX_COLUMN) + separators <= width {
+        return widths;
+    }
+    let (mut lo, mut hi) = (MIN_COLUMN, MAX_COLUMN);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if sum_capped(mid) + separators <= width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut slack = width - separators - sum_capped(lo);
+    for w in widths.iter_mut() {
+        if *w > lo {
+            *w = lo;
+            if slack > 0 {
+                *w += 1;
+                slack -= 1;
             }
         }
-        if widths[widest] <= MIN_COLUMN {
-            break;
-        }
-        widths[widest] -= 1;
     }
     widths
 }
@@ -108,27 +126,39 @@ fn fit(cell: &str, width: usize) -> String {
 }
 
 fn sniff(content: &str) -> char {
-    let mut counts = [(',', 0usize), (';', 0), ('\t', 0)];
+    let (mut commas, mut semicolons, mut tabs) = (0usize, 0usize, 0usize);
     let mut in_quotes = false;
+    let mut field_start = true;
     for ch in content.chars() {
-        if ch == '"' {
-            in_quotes = !in_quotes;
-        } else if !in_quotes {
-            if ch == '\n' {
-                break;
+        if in_quotes {
+            if ch == '"' {
+                in_quotes = false;
             }
-            if let Some(entry) = counts.iter_mut().find(|(d, _)| *d == ch) {
-                entry.1 += 1;
+            continue;
+        }
+        match ch {
+            '"' if field_start => in_quotes = true,
+            '\n' => break,
+            ',' | ';' | '\t' => {
+                match ch {
+                    ',' => commas += 1,
+                    ';' => semicolons += 1,
+                    _ => tabs += 1,
+                }
+                field_start = true;
+                continue;
             }
+            _ => {}
         }
+        field_start = false;
     }
-    let mut best = counts[0];
-    for entry in &counts[1..] {
-        if entry.1 > best.1 {
-            best = *entry;
-        }
+    if semicolons > commas && semicolons > tabs {
+        ';'
+    } else if tabs > commas && tabs > semicolons {
+        '\t'
+    } else {
+        ','
     }
-    best.0
 }
 
 fn parse(content: &str, delimiter: char) -> Vec<Vec<String>> {
@@ -276,11 +306,38 @@ mod tests {
         let t = render("名前,x\n東京都庁舎,y\n", None, 8);
         for line in lines(&t) {
             assert!(
-                unicode_width::UnicodeWidthStr::width(line.as_str()) <= 8 + 1,
+                unicode_width::UnicodeWidthStr::width(line.as_str()) <= 8,
                 "{}",
                 line
             );
         }
+    }
+    #[test]
+    fn test_csv_many_columns_is_fast() {
+        let header = vec!["abcdefghij"; 50_000].join(",");
+        let t = render(&header, None, 80);
+        assert!(lines(&t)[0].starts_with("ab… │ ab…"));
+    }
+    #[test]
+    fn test_csv_slack_goes_to_leftmost_capped_columns() {
+        assert_eq!(
+            lines(&render("aaaaaaaaaa,bbbbbbbbbb,cccccccccc\n", None, 25))[0],
+            "aaaaaa… │ bbbbb… │ ccccc…"
+        );
+    }
+    #[test]
+    fn test_csv_sniff_tie_falls_back_to_comma() {
+        let first = lines(&render("a;b\tc\n", None, 80))[0].clone();
+        assert_eq!(first, "a;b c");
+    }
+    #[test]
+    fn test_csv_sniff_ignores_mid_field_quote() {
+        let first = lines(&render("size 6\" pipe;a;b\n1;2;3\n", None, 80))[0].clone();
+        assert_eq!(first.matches(" │ ").count(), 2, "{}", first);
+    }
+    #[test]
+    fn test_csv_control_characters_become_spaces() {
+        assert_eq!(lines(&render("a,b\nx\ty,z\n", None, 80))[2], "x y │ z");
     }
     #[test]
     fn test_csv_empty_and_header_only() {
