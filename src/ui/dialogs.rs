@@ -701,13 +701,16 @@ fn render_preview_column(
         };
 
         let is_ansi_art = state.art_width.is_some();
+        let canvas_width: u16 = state
+            .art_width
+            .unwrap_or(crate::logic::file::DEFAULT_ART_WIDTH);
+        let parser_width = canvas_width;
 
-        // Create a fixed 80-character width container for ANSI art only
-        // ANSI art is often designed for 80 columns
+        // Art gets a box as wide as its canvas
         use ratatui::layout::{Constraint, Direction, Layout};
 
         let preview_area = if is_ansi_art {
-            let fixed_width = 80 + PANE_CHROME;
+            let fixed_width = canvas_width + PANE_CHROME;
             if area.width > fixed_width {
                 // Center the container horizontally
                 let horizontal_chunks = Layout::default()
@@ -737,10 +740,15 @@ fn render_preview_column(
             crate::logic::markdown::render(&content_str, inner_width)
         } else {
             // Only handles SGR (color/style) codes, ignores cursor movement/screen clearing
-            crate::logic::file::parse_ansi_to_text(&content_str)
+            crate::logic::file::parse_ansi_to_text(&content_str, parser_width)
         };
 
-        let total_lines = crate::logic::layout::wrapped_line_count(&parsed_text, inner_width);
+        // Art is not wrapped, so each parsed row is one screen row
+        let total_lines = if is_ansi_art {
+            parsed_text.lines.len()
+        } else {
+            crate::logic::layout::wrapped_line_count(&parsed_text, inner_width)
+        };
         let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
         let max_scroll = total_lines.saturating_sub(viewport_height);
         let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
@@ -762,7 +770,7 @@ fn render_preview_column(
         } else {
             Style::default()
         };
-        let paragraph = Paragraph::new(parsed_text)
+        let mut paragraph = Paragraph::new(parsed_text)
             .style(base_style)
             .block(
                 Block::default()
@@ -771,8 +779,10 @@ fn render_preview_column(
                     .border_style(Style::default().fg(Color::Cyan).bg(Color::Reset))
                     .title(title),
             )
-            .wrap(ratatui::widgets::Wrap { trim: false })
             .scroll((clamped_scroll, 0));
+        if !is_ansi_art {
+            paragraph = paragraph.wrap(ratatui::widgets::Wrap { trim: false });
+        }
 
         f.render_widget(paragraph, preview_area);
 
@@ -1339,5 +1349,54 @@ mod tests {
                 screen
             );
         }
+    }
+
+    #[test]
+    fn test_art_rows_are_cut_off_not_wrapped() {
+        let line1 = format!("A{}", "a".repeat(60));
+        let line2 = format!("B{}", "b".repeat(60));
+        let mut state = popup("art.nfo", &format!("{}\n{}", line1, line2), false);
+        state.art_width = Some(80);
+        let rows = render_rows(&mut state, 40, 8); // inner width 36
+        assert!(
+            rows[1].starts_with(&format!("│ A{}", "a".repeat(35))),
+            "{:#?}",
+            rows
+        );
+        assert!(rows[2].starts_with("│ B"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_art_scroll_counts_rows() {
+        let text = (0..3)
+            .map(|i| format!("{}{}", i, "z".repeat(99)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut state = popup("art.nfo", &text, false);
+        state.art_width = Some(100);
+        let rows = render_rows(&mut state, 40, 8); // 6 visible rows, 3 art rows
+        assert!(
+            !rows[1..].iter().any(|r| r.contains('↓')),
+            "no scrollbar: {:#?}",
+            rows
+        );
+    }
+
+    #[test]
+    fn test_art_box_uses_canvas_width() {
+        let mut state = popup("wide.ans", "x", false);
+        state.art_width = Some(132);
+        let rows = render_rows(&mut state, 200, 6);
+        let top: Vec<char> = rows[0].chars().collect();
+        let left = top.iter().position(|c| *c == '┌').unwrap();
+        let right = top.iter().position(|c| *c == '┐').unwrap();
+        assert_eq!(right - left + 1, 132 + 4);
+    }
+
+    #[test]
+    fn test_plain_text_still_wraps() {
+        let mut state = popup("notes.txt", &"w".repeat(50), false);
+        let rows = render_rows(&mut state, 40, 8);
+        assert!(rows[2].starts_with("│ w"), "{:#?}", rows);
     }
 }

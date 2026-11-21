@@ -247,7 +247,7 @@ impl SgrState {
 ///
 /// # Returns
 /// Ratatui `Text` with styling applied, all escape codes stripped
-pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
+pub fn parse_ansi_to_text(text: &str, width: u16) -> ratatui::text::Text<'static> {
     use ratatui::style::Style;
     use ratatui::text::{Line, Span, Text};
 
@@ -262,9 +262,9 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
     // Handle different line endings: \n, \r\n, or \r
     let normalized_text = text_without_sauce.replace("\r\n", "\n").replace('\r', "\n");
 
-    // ANSI art is drawn on an 80-column screen; cursor codes move around a grid of rows
-    const LINE_WIDTH: usize = 80;
-    let blank_row = vec![(' ', Style::default()); LINE_WIDTH];
+    // Cursor codes move around a grid of rows `width` columns wide
+    let line_width: usize = usize::from(width.max(1));
+    let blank_row = vec![(' ', Style::default()); line_width];
     let mut rows: Vec<Vec<(char, Style)>> = vec![blank_row.clone()];
     let mut row: usize = 0;
     let mut col: usize = 0;
@@ -301,7 +301,7 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
                     row += count();
                     just_wrapped = false;
                 }
-                Some('C') => col = (col + count()).min(LINE_WIDTH - 1),
+                Some('C') => col = (col + count()).min(line_width - 1),
                 Some('D') => col = col.saturating_sub(count()),
                 Some('m') => {
                     // Empty params or an empty parameter mean reset (0)
@@ -340,7 +340,7 @@ pub fn parse_ansi_to_text(text: &str) -> ratatui::text::Text<'static> {
             }
             rows[row][col] = (ch, current_style);
             col += 1;
-            just_wrapped = col == LINE_WIDTH;
+            just_wrapped = col == line_width;
             if just_wrapped {
                 row += 1;
                 col = 0;
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_parse_ansi_to_text_plain() {
-        let text = parse_ansi_to_text("Hello, world!");
+        let text = parse_ansi_to_text("Hello, world!", 80);
         assert_eq!(text.lines.len(), 1);
         assert_eq!(text.lines[0].spans.len(), 1);
         assert_eq!(text.lines[0].spans[0].content, "Hello, world!");
@@ -850,13 +850,13 @@ mod tests {
     #[test]
     fn test_parse_ansi_to_text_colors() {
         // Red foreground
-        let text = parse_ansi_to_text("\x1b[31mRed\x1b[0m");
+        let text = parse_ansi_to_text("\x1b[31mRed\x1b[0m", 80);
         assert_eq!(text.lines.len(), 1);
         assert_eq!(text.lines[0].spans[0].style.fg, Some(cga_color(1)));
     }
 
     fn first_style(input: &str) -> ratatui::style::Style {
-        parse_ansi_to_text(input).lines[0].spans[0].style
+        parse_ansi_to_text(input, 80).lines[0].spans[0].style
     }
 
     #[test]
@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_reset_after_color_returns_to_default() {
-        let text = parse_ansi_to_text("\x1b[1;31mRed\x1b[0mPlain");
+        let text = parse_ansi_to_text("\x1b[1;31mRed\x1b[0mPlain", 80);
         let plain = text.lines[0]
             .spans
             .iter()
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn test_parse_ansi_to_text_cursor_forward() {
         // Cursor forward should add spaces
-        let text = parse_ansi_to_text("A\x1b[5CB");
+        let text = parse_ansi_to_text("A\x1b[5CB", 80);
         assert_eq!(text.lines.len(), 1);
         // Should have "A" + 5 spaces + "B"
         let full_text: String = text.lines[0]
@@ -995,23 +995,34 @@ mod tests {
     fn test_parse_ansi_to_text_80_column_wrap() {
         // Create a line with exactly 80 characters
         let long_line = "x".repeat(80);
-        let text = parse_ansi_to_text(&long_line);
+        let text = parse_ansi_to_text(&long_line, 80);
         assert_eq!(text.lines.len(), 1);
 
         // Create a line with 81 characters - should wrap
         let longer_line = "x".repeat(81);
-        let text = parse_ansi_to_text(&longer_line);
+        let text = parse_ansi_to_text(&longer_line, 80);
         assert_eq!(text.lines.len(), 2);
         assert_eq!(text.lines[0].spans[0].content, "x".repeat(80));
         assert_eq!(text.lines[1].spans[0].content, "x");
     }
 
-    fn line_texts(input: &str) -> Vec<String> {
-        parse_ansi_to_text(input)
+    fn line_texts_w(input: &str, width: u16) -> Vec<String> {
+        parse_ansi_to_text(input, width)
             .lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect()
+    }
+
+    fn line_texts(input: &str) -> Vec<String> {
+        line_texts_w(input, 80)
+    }
+
+    #[test]
+    fn test_canvas_width_from_caller() {
+        let line = "x".repeat(100);
+        assert_eq!(line_texts_w(&line, 132), [line.as_str()]);
+        assert_eq!(line_texts_w(&line, 80).len(), 2);
     }
 
     #[test]
@@ -1081,7 +1092,7 @@ mod tests {
 
     #[test]
     fn test_colors_carry_over_to_the_next_line() {
-        let text = parse_ansi_to_text("\x1b[1;31;44mA\nB");
+        let text = parse_ansi_to_text("\x1b[1;31;44mA\nB", 80);
         let style = text.lines[1].spans[0].style;
         assert_eq!(style.fg, Some(cga_color(9)));
         assert_eq!(style.bg, Some(cga_color(4)));
@@ -1089,7 +1100,7 @@ mod tests {
 
     #[test]
     fn test_reset_carries_over_to_the_next_line() {
-        let text = parse_ansi_to_text("\x1b[31mA\x1b[0m\nB");
+        let text = parse_ansi_to_text("\x1b[31mA\x1b[0m\nB", 80);
         assert_eq!(text.lines[1].spans[0].style.fg, None);
     }
 
@@ -1102,7 +1113,7 @@ mod tests {
     fn test_parse_ansi_to_text_sauce_stripping() {
         // SAUCE metadata starts with Ctrl-Z
         let text_with_sauce = "Content\x1ASAUCE00metadata";
-        let text = parse_ansi_to_text(text_with_sauce);
+        let text = parse_ansi_to_text(text_with_sauce, 80);
         let full_text: String = text.lines[0]
             .spans
             .iter()
@@ -1114,22 +1125,22 @@ mod tests {
     #[test]
     fn test_parse_ansi_to_text_line_endings() {
         // Test \r\n line endings
-        let text = parse_ansi_to_text("Line1\r\nLine2\r\nLine3");
+        let text = parse_ansi_to_text("Line1\r\nLine2\r\nLine3", 80);
         assert_eq!(text.lines.len(), 3);
 
         // Test \r line endings
-        let text = parse_ansi_to_text("Line1\rLine2\rLine3");
+        let text = parse_ansi_to_text("Line1\rLine2\rLine3", 80);
         assert_eq!(text.lines.len(), 3);
 
         // Test \n line endings
-        let text = parse_ansi_to_text("Line1\nLine2\nLine3");
+        let text = parse_ansi_to_text("Line1\nLine2\nLine3", 80);
         assert_eq!(text.lines.len(), 3);
     }
 
     #[test]
     fn test_parse_ansi_to_text_background_stripped_from_spaces() {
         // Set background color, write text, then spaces via cursor forward
-        let text = parse_ansi_to_text("\x1b[41mText\x1b[5C");
+        let text = parse_ansi_to_text("\x1b[41mText\x1b[5C", 80);
         let line = &text.lines[0];
 
         // First span should have red background (the "Text")
@@ -1147,7 +1158,7 @@ mod tests {
         use ratatui::style::Modifier;
 
         // Bold + Red foreground + Black background + Underline
-        let text = parse_ansi_to_text("\x1b[1;31;40;4mStyled\x1b[0m");
+        let text = parse_ansi_to_text("\x1b[1;31;40;4mStyled\x1b[0m", 80);
         let span = &text.lines[0].spans[0];
 
         assert_eq!(span.content, "Styled");
@@ -1159,7 +1170,7 @@ mod tests {
     #[test]
     fn test_parse_ansi_to_text_empty_sgr_params() {
         // Empty SGR parameters should reset (like \x1b[m)
-        let text = parse_ansi_to_text("\x1b[31mRed\x1b[mNormal");
+        let text = parse_ansi_to_text("\x1b[31mRed\x1b[mNormal", 80);
         assert_eq!(text.lines.len(), 1);
         // Should have two spans: "Red" (colored) and "Normal" (reset)
         assert!(text.lines[0].spans.len() >= 2);
@@ -1169,7 +1180,7 @@ mod tests {
     fn test_parse_ansi_to_text_line_buffer_positioning() {
         // Test that cursor positioning works correctly within 80-column buffer
         // Write at column 0, jump to column 40, write again
-        let text = parse_ansi_to_text("Start\x1b[35CHere");
+        let text = parse_ansi_to_text("Start\x1b[35CHere", 80);
         let line = &text.lines[0];
         let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 

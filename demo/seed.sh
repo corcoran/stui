@@ -91,8 +91,11 @@ EOF
 - book dentist
 EOF
     mkdir -p "$d/art"
-    cp "$DEMO/fixtures/gentoo.ans" "$DEMO/fixtures/smiths.ans" "$d/art/"
-    age "$d/art/gentoo.ans" 50; age "$d/art/smiths.ans" 48
+    cp "$DEMO/fixtures/gentoo.ans" "$DEMO/fixtures/smiths.ans" "$DEMO/fixtures/stui.nfo" "$d/art/"
+    age "$d/art/gentoo.ans" 50; age "$d/art/smiths.ans" 48; age "$d/art/stui.nfo" 46
+    printf 'Windows notes\nCafé menu: crème brûlée\nBackup runs at 02:00\n' \
+        | iconv -f UTF-8 -t UTF-16 > "$d/windows-notes.txt"
+    age "$d/windows-notes.txt" 2
 }
 
 seed_vault() {

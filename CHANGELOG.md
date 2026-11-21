@@ -15,11 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Copy over SSH**: With no `clipboard_command`, `c` copies through your terminal (OSC 52), so it works locally and over SSH with no setup
 - **Open files over SSH**: Over SSH or without a desktop session, `o` opens text files and directories in your editor inside stui's window. The editor is `editor`, else `$VISUAL`, else `$EDITOR`. Quit the editor to return to stui. Binary files only open on a desktop. To edit text files inside stui on the desktop too, set `open_text_in_editor: true`
 - **Open from the preview**: `o` in the file preview opens the previewed file, and the preview reloads when you return from the editor
+- **NFO and DIZ art**: `.nfo` and `.diz` files, and other CP437 art with no escape codes, preview as ANSI art
+- **UTF-16 text**: UTF-16 text files preview as text
 
 ### 🔧 Improvements
 
 - The preview popup keeps one column of space inside the borders of its info and text panes
 - ANSI art previews in the classic DOS colors on black, the same in every terminal. Uncolored text is light grey instead of your terminal's text color, and bold text is bright
+- ANSI art with a SAUCE width is drawn at that width
+- ANSI art rows are cut off at the pane edge instead of wrapping
 
 ### 🐛 Bug Fixes
 
