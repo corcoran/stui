@@ -42,9 +42,11 @@ Media only trickles in for about 25 minutes after `up.sh`. Shots that should sho
 
 ```bash
 demo/up.sh
-XDG_CACHE_HOME=demo/.run/cache stui --config demo/stui.yaml
+demo/run.sh        # extra arguments go to stui, e.g. demo/run.sh --vim
 demo/down.sh
 ```
+
+`demo/run.sh` builds the working tree with the debug profile and runs it with `--debug` against `demo/stui.yaml`. Its cache and debug log live in `demo/.run/` (log: `demo/.run/tmp/stui-debug.log`), so a real stui's `~/.cache/stui` and `/tmp/stui-debug.log` are untouched, and `target/release/stui` is never rebuilt.
 
 ## Before/after checks
 
