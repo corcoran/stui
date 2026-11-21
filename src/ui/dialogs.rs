@@ -732,9 +732,15 @@ fn render_preview_column(
         let inner_width = preview_area.width.saturating_sub(PANE_CHROME);
         let view = crate::logic::file::rendered_view(&state.file_path)
             .filter(|_| state.file_content.is_ok());
+        let archive = state
+            .archive
+            .as_ref()
+            .filter(|_| state.file_content.is_ok());
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
             ratatui::text::Text::from(preview_message_text(msg))
+        } else if let Some(listing) = archive {
+            crate::logic::archive::listing_text(listing)
         } else if let (Some(view), false) = (view, state.raw_view) {
             crate::logic::formatted::render(view, &content_str, inner_width)
         } else {
@@ -761,6 +767,7 @@ fn render_preview_column(
 
         let scroll_keys = "↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn";
         let title = match (view, state.raw_view) {
+            _ if archive.is_some() => format!("Preview (Archive | {})", scroll_keys),
             (Some(v), false) => format!("Preview ({}, r: raw | {})", v.label(), scroll_keys),
             (Some(v), true) => {
                 format!("Preview (Raw, r: {} | {})", v.rendered_word(), scroll_keys)
@@ -977,6 +984,7 @@ mod tests {
             is_binary: false,
             is_image: false,
             art: None,
+            archive: None,
             scroll_offset: 0,
             raw_view,
         }
@@ -996,6 +1004,54 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    // ========================================
+    // ARCHIVE PREVIEW
+    // ========================================
+
+    fn listing() -> crate::logic::archive::ArchiveListing {
+        use crate::logic::archive::*;
+        ArchiveListing {
+            kind: ArchiveKind::TarGz,
+            total_files: 1,
+            total_size: 12,
+            packed_size: None,
+            stopped_early: None,
+            entries: vec![ArchiveEntry {
+                path: "notes.txt".into(),
+                size: 12,
+                modified: Some("2026-10-02 12:01".into()),
+                is_dir: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn test_archive_preview_shows_listing() {
+        let mut state = popup("snap.tar.gz", "", false);
+        state.archive = Some(listing());
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[0].contains("Preview (Archive |"), "{}", rows[0]);
+        assert!(rows[1].contains("tar.gz · 1 file · 12 B"), "{:#?}", rows);
+        assert!(
+            rows[3].contains("2026-10-02 12:01") && rows[3].contains("notes.txt"),
+            "{:#?}",
+            rows
+        );
+    }
+
+    #[test]
+    fn test_archive_error_shows_message() {
+        let mut state = popup("bad.zip", "", false);
+        state.file_content = Err("Couldn't read archive: invalid Zip archive".into());
+        state.archive = None;
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(
+            rows.iter().any(|r| r.contains("Couldn't read archive")),
+            "{:#?}",
+            rows
+        );
     }
 
     // ========================================

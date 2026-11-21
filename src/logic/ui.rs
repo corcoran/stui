@@ -536,6 +536,7 @@ mod tests {
             is_binary: false,
             is_image: false,
             art: None,
+            archive: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -602,6 +603,7 @@ mod tests {
             is_binary: false,
             is_image: false,
             art: None,
+            archive: None,
             scroll_offset: 0,
             raw_view: false,
         });

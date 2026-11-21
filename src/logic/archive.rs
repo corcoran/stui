@@ -1,7 +1,4 @@
 //! Archive listings (zip, tar, tar.gz) for the file preview.
-
-#![allow(dead_code)]
-
 use crate::utils::format_bytes;
 use flate2::read::GzDecoder;
 use ratatui::style::{Color, Modifier, Style};

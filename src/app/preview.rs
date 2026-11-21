@@ -49,6 +49,7 @@ impl App {
                     is_binary: false,
                     is_image: false,
                     art: None,
+                    archive: None,
                     scroll_offset: 0,
                     raw_view: false,
                 });
@@ -73,6 +74,7 @@ impl App {
             is_binary: false,
             is_image,
             art: None,
+            archive: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -82,6 +84,7 @@ impl App {
 
         // 2. If image, spawn background loading; otherwise read as text
         let mut art: Option<logic::file::ArtStyle> = None;
+        let mut archive: Option<logic::archive::ArchiveListing> = None;
         let (file_content, exists_on_disk, is_binary, _image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
@@ -167,6 +170,7 @@ impl App {
             // Read as text
             let read = Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
             art = read.art;
+            archive = read.archive;
             (read.content, read.exists, read.is_binary, None)
         };
 
@@ -208,6 +212,7 @@ impl App {
             // "Loading image..." forever; the text pane shows why it is missing
             is_image: is_image && exists_on_disk,
             art: art.filter(|_| file_content_ok),
+            archive: archive.filter(|_| file_content_ok),
             scroll_offset: 0,
             raw_view: false,
         });
@@ -389,6 +394,38 @@ impl App {
         Ok((protocol, metadata))
     }
 
+    /// Lists the file when its first bytes say it is an archive; `None` for anything else.
+    async fn read_archive_listing(host_path: &str) -> Option<TextRead> {
+        use tokio::io::AsyncReadExt;
+
+        let mut head = vec![0u8; 8192];
+        let mut file = tokio::fs::File::open(host_path).await.ok()?;
+        let n = file.read(&mut head).await.ok()?;
+        head.truncate(n);
+        let kind = logic::archive::archive_kind(&head)?;
+
+        let path = std::path::PathBuf::from(host_path);
+        let listed = tokio::task::spawn_blocking(move || logic::archive::read_archive(&path, kind))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        Some(match listed {
+            Ok(listing) => TextRead {
+                content: Ok(String::new()),
+                exists: true,
+                is_binary: false,
+                art: None,
+                archive: Some(listing),
+            },
+            Err(e) => TextRead {
+                content: Err(format!("Couldn't read archive: {e}")),
+                exists: true,
+                is_binary: false,
+                art: None,
+                archive: None,
+            },
+        })
+    }
+
     async fn read_file_content_static(
         path_map: &HashMap<String, String>,
         folder: &Folder,
@@ -401,6 +438,7 @@ impl App {
             exists,
             is_binary: false,
             art: None,
+            archive: None,
         };
 
         // Translate container path to host path
@@ -427,7 +465,12 @@ impl App {
                 exists: true,
                 is_binary: false,
                 art: None,
+                archive: None,
             };
+        }
+
+        if let Some(read) = Self::read_archive_listing(&host_path).await {
+            return read;
         }
 
         if metadata.len() > MAX_SIZE {
@@ -448,6 +491,7 @@ impl App {
                     exists: true,
                     is_binary: decoded.is_binary,
                     art: decoded.art,
+                    archive: None,
                 }
             }
             Err(e) => failed(format!("Failed to read file: {}", e), true),
@@ -461,6 +505,7 @@ struct TextRead {
     exists: bool,
     is_binary: bool,
     art: Option<logic::file::ArtStyle>,
+    archive: Option<logic::archive::ArchiveListing>,
 }
 
 /// Decode the image at `path`, rotated and flipped as its EXIF orientation says. Camera

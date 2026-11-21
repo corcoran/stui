@@ -107,6 +107,19 @@ EOF
     printf 'Windows notes\nCafé menu: crème brûlée\nBackup runs at 02:00\n' \
         | iconv -f UTF-8 -t UTF-16 > "$d/windows-notes.txt"
     age "$d/windows-notes.txt" 2
+    local tmp="$d/.archive-src"
+    mkdir -p "$tmp/site/css" "$tmp/snapshots/2026-10"
+    echo "<h1>Home</h1>" > "$tmp/site/index.html"
+    echo "<h1>About</h1>" > "$tmp/site/about.html"
+    echo "body { margin: 0 }" > "$tmp/site/css/main.css"
+    echo "User-agent: *" > "$tmp/site/robots.txt"
+    (cd "$tmp" && python3 -m zipfile -c "$d/site-backup.zip" site)
+    echo "nightly dump, 41 rows" > "$tmp/snapshots/2026-10/db.sql"
+    echo "- renew passport" > "$tmp/snapshots/todo.txt"
+    echo "Backup runs at 02:00" > "$tmp/snapshots/notes.txt"
+    tar czf "$d/snapshots.tar.gz" -C "$tmp" snapshots
+    rm -rf "$tmp"
+    age "$d/site-backup.zip" 5; age "$d/snapshots.tar.gz" 4
 }
 
 seed_vault() {

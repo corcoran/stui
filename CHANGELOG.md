@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **UTF-16 text**: UTF-16 text files preview as text
 - **JSON preview**: `.json` files preview pretty-printed with colors. Press `r` for the raw file
 - **CSV/TSV preview**: `.csv` and `.tsv` files preview as a table fitted to the pane, with long cells ending in `…`. Press `r` for the raw file. JSON, CSV and TSV files over 2 MB show raw
+- **Archive preview**: zip (including jar, apk, epub, cbz and Office files), tar and tar.gz files preview as a listing with each entry's date, size and path, whatever their extension. Very large tarballs list their first 10,000 entries or first 64 MB
 
 ### 🔧 Improvements
 
