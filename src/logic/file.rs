@@ -690,9 +690,9 @@ fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
     }
     let window = &bytes[..bytes.len().min(PREVIEW_SNIFF_BYTES) & !1];
     let (mut even_nul, mut odd_nul) = (0usize, 0usize);
-    for pair in window.chunks_exact(2) {
-        even_nul += usize::from(pair[0] == 0);
-        odd_nul += usize::from(pair[1] == 0);
+    for [low, high] in window.as_chunks::<2>().0 {
+        even_nul += usize::from(*low == 0);
+        odd_nul += usize::from(*high == 0);
     }
     let units = window.len() / 2;
     if even_nul == 0 && odd_nul * 10 >= units * 9 {
@@ -780,12 +780,14 @@ pub fn decode_preview_bytes(path: &str, bytes: &[u8]) -> DecodedText {
     };
     let utf16 = |units: &[u8], le: bool| {
         let units: Vec<u16> = units
-            .chunks_exact(2)
-            .map(|p| {
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| {
                 if le {
-                    u16::from_le_bytes([p[0], p[1]])
+                    u16::from_le_bytes(pair)
                 } else {
-                    u16::from_be_bytes([p[0], p[1]])
+                    u16::from_be_bytes(pair)
                 }
             })
             .collect();
