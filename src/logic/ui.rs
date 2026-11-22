@@ -538,6 +538,7 @@ mod tests {
             art: None,
             archive: None,
             gzip: None,
+            rendered_rows: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -606,6 +607,7 @@ mod tests {
             art: None,
             archive: None,
             gzip: None,
+            rendered_rows: None,
             scroll_offset: 0,
             raw_view: false,
         });

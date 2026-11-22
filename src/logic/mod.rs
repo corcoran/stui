@@ -46,6 +46,7 @@ pub mod path;
 pub mod pending;
 pub mod performance;
 pub mod platform;
+pub mod preview_rows;
 pub mod search;
 pub mod sorting;
 pub mod sync_states;

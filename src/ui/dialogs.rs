@@ -695,11 +695,6 @@ fn render_preview_column(
         }
     } else {
         // Original text preview logic
-        let content_str = match &state.file_content {
-            Ok(text) => text.clone(),
-            Err(msg) => format!("Error: {}", msg),
-        };
-
         let art = state.art.filter(|_| state.file_content.is_ok());
         let is_ansi_art = art.is_some();
         let canvas_width: u16 = art.map_or(crate::logic::file::DEFAULT_ART_WIDTH, |a| a.width);
@@ -736,29 +731,24 @@ fn render_preview_column(
             .filter(|_| state.file_content.is_ok());
         let view = crate::logic::file::rendered_view(state.view_path())
             .filter(|_| state.file_content.is_ok() && archive.is_none());
-        let parsed_text = if let Err(msg) = &state.file_content {
-            // Plain text so the paragraph word-wraps it
-            ratatui::text::Text::from(preview_message_text(msg))
-        } else if let Some(listing) = archive {
-            crate::logic::archive::listing_text(listing)
-        } else if let (Some(view), false) = (view, state.raw_view) {
-            crate::logic::formatted::render(view, &content_str, inner_width)
-        } else {
-            crate::logic::file::parse_ansi_to_text(&content_str, canvas_width)
-        };
-
-        // Art and tables are not wrapped, so each parsed row is one screen row
-        let wrap = !is_ansi_art
-            && view.is_none_or(|v| {
-                state.raw_view
-                    || state.file_content.is_err()
-                    || crate::logic::formatted::wraps(v, &content_str)
+        let stale = state
+            .rendered_rows
+            .as_ref()
+            .is_none_or(|r| r.width != inner_width || r.raw_view != state.raw_view);
+        if stale {
+            let rows = preview_rows(state, art, inner_width, canvas_width);
+            state.rendered_rows = Some(crate::model::types::RenderedRows {
+                width: inner_width,
+                raw_view: state.raw_view,
+                rows: std::sync::Arc::new(rows),
             });
-        let total_lines = if !wrap {
-            parsed_text.lines.len()
-        } else {
-            crate::logic::layout::wrapped_line_count(&parsed_text, inner_width)
-        };
+        }
+        let rows = state
+            .rendered_rows
+            .as_ref()
+            .map(|r| r.rows.clone())
+            .unwrap_or_default();
+        let total_lines = rows.len();
         let viewport_height = area.height.saturating_sub(2) as usize; // -2 for borders
         let max_scroll = total_lines.saturating_sub(viewport_height);
         let clamped_scroll = (state.scroll_offset as usize).min(max_scroll) as u16;
@@ -802,7 +792,10 @@ fn render_preview_column(
         } else {
             Style::default()
         };
-        let mut paragraph = Paragraph::new(parsed_text)
+        let first = clamped_scroll as usize;
+        let last = (first + viewport_height).min(total_lines);
+        let visible = rows.get(first..last).unwrap_or_default().to_vec();
+        let paragraph = Paragraph::new(ratatui::text::Text::from(visible))
             .style(base_style)
             .block(
                 Block::default()
@@ -810,11 +803,7 @@ fn render_preview_column(
                     .padding(Padding::horizontal(1))
                     .border_style(Style::default().fg(Color::Cyan).bg(Color::Reset))
                     .title(title),
-            )
-            .scroll((clamped_scroll, 0));
-        if wrap {
-            paragraph = paragraph.wrap(ratatui::widgets::Wrap { trim: false });
-        }
+            );
 
         f.render_widget(paragraph, preview_area);
 
@@ -978,6 +967,60 @@ pub fn render_rescan_confirmation(f: &mut Frame, folder_label: &str) {
     f.render_widget(paragraph, dialog_area);
 }
 
+/// The text preview's screen rows: the file parsed or formatted, then word-wrapped to
+/// `inner_width` unless it is art or a table, whose rows are cut off at the pane edge.
+fn preview_rows(
+    state: &FileInfoPopupState,
+    art: Option<crate::logic::file::ArtStyle>,
+    inner_width: u16,
+    canvas_width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    let error_text;
+    let content_str: &str = match &state.file_content {
+        Ok(text) => text,
+        Err(msg) => {
+            error_text = format!("Error: {}", msg);
+            &error_text
+        }
+    };
+    let archive = state
+        .archive
+        .as_ref()
+        .filter(|_| state.file_content.is_ok());
+    let view = crate::logic::file::rendered_view(state.view_path())
+        .filter(|_| state.file_content.is_ok() && archive.is_none());
+    let parsed_text = if let Err(msg) = &state.file_content {
+        // Plain text so the paragraph word-wraps it
+        ratatui::text::Text::from(preview_message_text(msg))
+    } else if let Some(listing) = archive {
+        crate::logic::archive::listing_text(listing)
+    } else if let (Some(view), false) = (view, state.raw_view) {
+        crate::logic::formatted::render(view, content_str, inner_width)
+    } else {
+        crate::logic::file::parse_ansi_to_text(content_str, canvas_width)
+    };
+
+    // Art and tables are not wrapped, so each parsed row is one screen row
+    let wrap = art.is_none()
+        && view.is_none_or(|v| {
+            state.raw_view
+                || state.file_content.is_err()
+                || crate::logic::formatted::wraps(v, content_str)
+        });
+    if wrap {
+        return crate::logic::preview_rows::wrap_rows(&parsed_text, inner_width);
+    }
+    let text_style = parsed_text.style;
+    parsed_text
+        .lines
+        .into_iter()
+        .map(|mut line| {
+            line.style = text_style.patch(line.style);
+            line
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1005,6 +1048,7 @@ mod tests {
             art: None,
             archive: None,
             gzip: None,
+            rendered_rows: None,
             scroll_offset: 0,
             raw_view,
         }
@@ -1045,6 +1089,83 @@ mod tests {
                 is_dir: false,
             }],
         }
+    }
+
+    // ========================================
+    // RENDERED ROW CACHE
+    // ========================================
+
+    fn numbered_lines(n: usize) -> String {
+        (0..n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    fn cached_rows(
+        state: &FileInfoPopupState,
+    ) -> std::sync::Arc<Vec<ratatui::text::Line<'static>>> {
+        state
+            .rendered_rows
+            .as_ref()
+            .expect("rows cached after a draw")
+            .rows
+            .clone()
+    }
+
+    #[test]
+    fn test_rows_are_built_once_across_frames() {
+        let mut state = popup("notes.txt", &numbered_lines(200), false);
+        render_rows(&mut state, 60, 12);
+        let first = cached_rows(&state);
+        state.scroll_offset = 40;
+        render_rows(&mut state, 60, 12);
+        assert!(std::sync::Arc::ptr_eq(&first, &cached_rows(&state)));
+    }
+
+    #[test]
+    fn test_rows_rebuild_for_raw_toggle_and_width() {
+        let mut state = popup("data.json", r#"{"a":1}"#, false);
+        render_rows(&mut state, 60, 12);
+        let formatted = cached_rows(&state);
+        state.raw_view = true;
+        render_rows(&mut state, 60, 12);
+        let raw = cached_rows(&state);
+        assert!(!std::sync::Arc::ptr_eq(&formatted, &raw));
+        render_rows(&mut state, 50, 12);
+        assert!(!std::sync::Arc::ptr_eq(&raw, &cached_rows(&state)));
+    }
+
+    #[test]
+    fn test_scrolled_preview_shows_rows_at_offset() {
+        let mut state = popup("notes.txt", &numbered_lines(200), false);
+        state.scroll_offset = 150;
+        let rows = render_rows(&mut state, 60, 12);
+        assert!(rows[1].contains("line 150"), "{:#?}", rows);
+        assert!(rows[10].contains("line 159"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_scroll_clamps_to_last_screen() {
+        let mut state = popup("notes.txt", &numbered_lines(200), false);
+        state.scroll_offset = u16::MAX;
+        let rows = render_rows(&mut state, 60, 12);
+        assert_eq!(state.scroll_offset, 190);
+        assert!(rows[10].contains("line 199"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_long_line_scrolls_by_wrapped_row() {
+        let words: String = (0..300).map(|i| format!("w{i:03} ")).collect();
+        let mut state = popup("notes.txt", &words, false);
+        state.scroll_offset = 5;
+        let rows = render_rows(&mut state, 44, 6);
+        // 40 columns: eight 5-column words per row, so row 5 starts at word 40.
+        assert!(
+            rows[1]
+                .trim_start_matches('│')
+                .trim_start()
+                .starts_with("w040"),
+            "{:#?}",
+            rows
+        );
     }
 
     // ========================================

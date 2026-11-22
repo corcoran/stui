@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ANSI art previews in the classic DOS colors on black, the same in every terminal. Uncolored text is light grey instead of your terminal's text color, and bold text is bright
 - ANSI art with a SAUCE width is drawn at that width
 - ANSI art rows are cut off at the pane edge instead of wrapping
+- Large text previews scroll smoothly. Only opening the file takes time; a 20 MB file used to stall on every scroll step
 
 ### 🐛 Bug Fixes
 

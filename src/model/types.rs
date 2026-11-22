@@ -122,9 +122,20 @@ pub struct FileInfoPopupState {
     pub art: Option<crate::logic::file::ArtStyle>,
     pub archive: Option<crate::logic::archive::ArchiveListing>,
     pub gzip: Option<crate::logic::gzip::GzipNote>,
+    /// The text preview's screen rows, built on first draw; `None` until then.
+    pub rendered_rows: Option<RenderedRows>,
     pub scroll_offset: u16,
     pub raw_view: bool,
     // image_state moved to Runtime - ImagePreviewState is not Clone
+}
+
+/// Preview rows for one pane width and raw/formatted choice. Holding them means a frame
+/// draws only the rows on screen instead of re-rendering the whole file.
+#[derive(Clone, Debug)]
+pub struct RenderedRows {
+    pub width: u16,
+    pub raw_view: bool,
+    pub rows: std::sync::Arc<Vec<ratatui::text::Line<'static>>>,
 }
 
 impl FileInfoPopupState {

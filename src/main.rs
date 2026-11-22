@@ -1062,6 +1062,7 @@ where
                         }
                         _ => {}
                     }
+                    popup_state.rendered_rows = None;
                 }
             }
         }

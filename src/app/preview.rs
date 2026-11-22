@@ -51,6 +51,7 @@ impl App {
                     art: None,
                     archive: None,
                     gzip: None,
+                    rendered_rows: None,
                     scroll_offset: 0,
                     raw_view: false,
                 });
@@ -77,6 +78,7 @@ impl App {
             art: None,
             archive: None,
             gzip: None,
+            rendered_rows: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -218,6 +220,7 @@ impl App {
             art: art.filter(|_| file_content_ok),
             archive: archive.filter(|_| file_content_ok),
             gzip: gzip.filter(|_| file_content_ok),
+            rendered_rows: None,
             scroll_offset: 0,
             raw_view: false,
         });
