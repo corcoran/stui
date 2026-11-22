@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.14.0] - 2026-11-22
+
 ### ✨ New Features
 
 - **Local deletions**: In a Receive Only folder, a file deleted on this device shows ❌ (a trash can in Nerd Font mode) and "Deleted locally". It no longer looks like a pending download. Its preview says how to restore it
