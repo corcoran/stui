@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: demo/record.sh [--only stills|hero] [--shot NAME] [--keep] [--reuse]
+# Usage: demo/record.sh [--only stills|hero|previews] [--shot NAME] [--keep] [--reuse]
 # Env: STUI_BIN, GIF_FPS (15), GIF_QUALITY (80)
 #   --keep   leave the cluster running afterwards
 #   --reuse  skip up.sh when the laptop API already answers (implies --keep)
@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
         *) die "unknown flag $1" ;;
     esac
 done
-case "$ONLY" in ""|stills|hero) ;; *) die "--only takes stills or hero" ;; esac
+case "$ONLY" in ""|stills|hero|previews) ;; *) die "--only takes stills, hero or previews" ;; esac
 if [ -n "$SHOT" ] && [ "$(type -t "still_$SHOT")" != function ]; then
     die "unknown shot $SHOT (one of: ${STILLS[*]})"
 fi
@@ -47,26 +47,38 @@ else
 fi
 session_start
 
-if [ "$ONLY" != hero ]; then stills_pass "$SHOT"; fi
-if [ "$ONLY" != stills ]; then
+make_gif() {
+    gifski --quiet --fps "${GIF_FPS:-15}" --width 1200 --quality "${GIF_QUALITY:-80}" \
+        -o "$ASSETS/$1.gif" "$RUN/$1.mp4"
+}
+CLIPS=()
+case "$ONLY" in ""|hero) CLIPS+=(hero) ;; esac
+case "$ONLY" in ""|previews) CLIPS+=(previews) ;; esac
+
+if [ -z "$ONLY" ] || [ "$ONLY" = stills ]; then stills_pass "$SHOT"; fi
+mkdir -p "$ASSETS"
+if [[ " ${CLIPS[*]} " == *" hero "* ]]; then
     hero_pass
-    mkdir -p "$ASSETS"
     cp "$RUN/hero.mp4" "$ASSETS/hero.mp4"
-    gifski --quiet --fps "${GIF_FPS:-15}" --width 1200 --quality "${GIF_QUALITY:-80}" -o "$ASSETS/hero.gif" "$RUN/hero.mp4"
+    make_gif hero
+fi
+if [[ " ${CLIPS[*]} " == *" previews "* ]]; then
+    previews_pass
+    make_gif previews
 fi
 
 log "verifying outputs"
 ok=1
-if [ "$ONLY" != hero ]; then
+if [ -z "$ONLY" ] || [ "$ONLY" = stills ]; then
     for s in "${STILLS[@]}"; do
         [ -n "$SHOT" ] && [ "$s" != "$SHOT" ] && continue
         assert_png_dims "$ASSETS/$s.png" 1440 900 || ok=0
     done
 fi
-if [ "$ONLY" != stills ]; then
-    assert_max_size "$ASSETS/hero.gif" $((8 * 1024 * 1024)) || {
+for c in "${CLIPS[@]}"; do
+    assert_max_size "$ASSETS/$c.gif" $((8 * 1024 * 1024)) || {
         ok=0; echo "lower GIF_QUALITY (now ${GIF_QUALITY:-80}) or GIF_FPS (now ${GIF_FPS:-15})" >&2
     }
-fi
+done
 [ "$ok" -eq 1 ] || die "output verification failed"
 log "done: $ASSETS"

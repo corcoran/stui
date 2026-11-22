@@ -21,12 +21,12 @@ The font in `kitty.conf` is JetBrainsMono Nerd Font Mono (`ttf-jetbrains-mono-ne
 
 ```bash
 cargo build --release      # record.sh never builds; it runs target/release/stui
-demo/record.sh             # full run: cluster up, 7 stills, hero GIF, verify, cluster down
+demo/record.sh             # full run: cluster up, 7 stills, hero and previews GIFs, verify, cluster down
 ```
 
 | Flag / env | Effect |
 |---|---|
-| `--only stills` / `--only hero` | Record just one pass |
+| `--only stills` / `--only hero` / `--only previews` | Record just one pass |
 | `--shot NAME` | Redo one still (`folders breadcrumbs preview-image preview-ansi out-of-sync search history`) |
 | `--keep` | Leave the cluster running afterwards |
 | `--reuse` | Skip `up.sh` if the laptop API already answers (implies `--keep`) |
@@ -34,7 +34,7 @@ demo/record.sh             # full run: cluster up, 7 stills, hero GIF, verify, c
 | `GIF_FPS`, `GIF_QUALITY` | gifski settings (defaults 15 and 80). The GIF must stay under 8 MiB |
 | `DEMO_SYNCTHING_TAG=tag` | Syncthing image tag for both nodes (default `2.1.7`), read by `up.sh`. Use e.g. `2.0` to check behavior on Syncthing without folder groups |
 
-`record.sh` checks that stills are 1440x900 and that the GIF is under the size cap. The shot list and the hero's key sequences live in `shots.sh`. The look lives in `kitty.conf` (font, colors) and `sway.conf` (resolution).
+`record.sh` checks that stills are 1440x900 and that each GIF is under the size cap. The shot list and the hero's and previews' key sequences live in `shots.sh`. `kit send-key J` sends a plain `j`, so shifted letters go through `send-text` (`htype`). The look lives in `kitty.conf` (font, colors) and `sway.conf` (resolution).
 
 Media only trickles in for about 25 minutes after `up.sh`. Shots that should show syncing need a fresh cluster, so skip `--reuse` if the cluster is older than that.
 
@@ -92,7 +92,7 @@ Run each session inside a single `bash -c`. Background processes (sway, kitty, w
 
 | Folder | State on the laptop |
 |---|---|
-| Documents | Receive-only with 3 local changes (edit, add, delete). `art/` holds `gentoo.ans` and `smiths.ans` |
+| Documents | Receive-only with 3 local changes (edit, add, delete). `art/` holds `gentoo.ans`, `lucia.ans`, `smiths.ans` and `stui.nfo` |
 | Media | Six 100 MB files trickling in at 400 KiB/s: syncing and remote-only |
 | Photos | Synced, with `Cats/` and `Kitten/`. `Kitten/kitten-sideways.jpg` stores its pixels sideways with EXIF orientation 6, so it only shows upright when orientation is applied |
 | Projects | Synced. `notes/scratch.txt` is ignored but on disk, and `website/build.log` is ignored and deleted |

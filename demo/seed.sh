@@ -102,8 +102,10 @@ id;name;email;role;notes
 5;Margaret Hamilton;margaret@example.org;viewer;Owns the on-call rotation and the incident postmortems
 EOF
     mkdir -p "$d/art"
-    cp "$DEMO/fixtures/gentoo.ans" "$DEMO/fixtures/smiths.ans" "$DEMO/fixtures/stui.nfo" "$d/art/"
-    age "$d/art/gentoo.ans" 50; age "$d/art/smiths.ans" 48; age "$d/art/stui.nfo" 46
+    cp "$DEMO/fixtures/gentoo.ans" "$DEMO/fixtures/lucia.ans" "$DEMO/fixtures/smiths.ans" \
+        "$DEMO/fixtures/stui.nfo" "$d/art/"
+    age "$d/art/gentoo.ans" 50; age "$d/art/lucia.ans" 49; age "$d/art/smiths.ans" 48
+    age "$d/art/stui.nfo" 46
     printf 'Windows notes\nCafé menu: crème brûlée\nBackup runs at 02:00\n' \
         | iconv -f UTF-8 -t UTF-16 > "$d/windows-notes.txt"
     age "$d/windows-notes.txt" 2

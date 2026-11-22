@@ -8,10 +8,12 @@ FOLDER_DOCUMENTS=3
 FOLDER_MEDIA=4
 PHOTOS_CATS=0        # Cats, Kitten
 CATS_HERO_IMAGE=1    # blue-blanket.jpg
-DOCS_ART=0           # art, manuals, recipes, todo.txt
+DOCS_ART=0           # art, manuals, recipes, then files from settings.json
 DOCS_MANUALS=1
 DOCS_RECIPES=2
-ART_ANSI=1           # smiths.ans
+DOCS_SETTINGS=3      # settings.json, site-backup.zip, snapshots.tar.gz, todo.txt,
+                     # users.csv, windows-notes.txt
+ART_ANSI=2           # gentoo.ans, lucia.ans, smiths.ans, stui.nfo
 PROJECTS_NOTES=0     # notes, stui, website
 PROJECTS_STUI=1
 PROJECTS_WEBSITE=2
@@ -122,5 +124,26 @@ hero_pass() {
     hkey u; pause 3                                              # update history
     hkey enter; pause 4                                          # jump to deploy.md
     clip_stop hero
+    stui_stop
+}
+
+# Steps through the formatted previews with J (next file inside the preview).
+previews_pass() {
+    stui_start
+    to_folder "$FOLDER_DOCUMENTS"; key enter; pause 1.5
+    down "$DOCS_SETTINGS"; pause 0.5
+    clip_start previews
+    pause 1
+    hkey enter; pause 2.5                                        # settings.json
+    local n
+    for ((n=0; n<5; n++)); do htype J; pause 1.8; done            # zip, tar.gz, todo, csv, utf-16
+    hkey escape; pause 0.8
+    hkey g g; pause 0.4; hkey enter; pause 1.2                   # art/
+    hkey enter; pause 3                                          # gentoo.ans
+    htype J; pause 2.5                                           # lucia.ans
+    hkey ctrl+d; pause 1.5; hkey ctrl+d; pause 2                 # scroll the rest of it
+    for ((n=0; n<2; n++)); do htype J; pause 3; done             # smiths, stui.nfo
+    hkey escape; pause 0.8
+    clip_stop previews
     stui_stop
 }
