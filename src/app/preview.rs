@@ -50,6 +50,7 @@ impl App {
                     is_image: false,
                     art: None,
                     archive: None,
+                    gzip: None,
                     scroll_offset: 0,
                     raw_view: false,
                 });
@@ -75,6 +76,7 @@ impl App {
             is_image,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -85,6 +87,7 @@ impl App {
         // 2. If image, spawn background loading; otherwise read as text
         let mut art: Option<logic::file::ArtStyle> = None;
         let mut archive: Option<logic::archive::ArchiveListing> = None;
+        let mut gzip: Option<logic::gzip::GzipNote> = None;
         let (file_content, exists_on_disk, is_binary, _image_state) = if is_image {
             // Translate path for image loading
             let container_path = format!("{}/{}", folder.path.trim_end_matches('/'), file_path);
@@ -171,6 +174,7 @@ impl App {
             let read = Self::read_file_content_static(&self.path_map, &folder, &file_path).await;
             art = read.art;
             archive = read.archive;
+            gzip = read.gzip;
             (read.content, read.exists, read.is_binary, None)
         };
 
@@ -213,6 +217,7 @@ impl App {
             is_image: is_image && exists_on_disk,
             art: art.filter(|_| file_content_ok),
             archive: archive.filter(|_| file_content_ok),
+            gzip: gzip.filter(|_| file_content_ok),
             scroll_offset: 0,
             raw_view: false,
         });
@@ -415,6 +420,7 @@ impl App {
                 is_binary: false,
                 art: None,
                 archive: Some(listing),
+                gzip: None,
             },
             Err(e) => TextRead {
                 content: Err(format!("Couldn't read archive: {e}")),
@@ -422,6 +428,58 @@ impl App {
                 is_binary: false,
                 art: None,
                 archive: None,
+                gzip: None,
+            },
+        })
+    }
+
+    /// Decompresses a plain gzip and decodes the inner file under its name without `.gz`;
+    /// `None` when the file is not a plain gzip.
+    async fn read_gzip(host_path: &str, relative_path: &str) -> Option<TextRead> {
+        use tokio::io::AsyncReadExt;
+
+        let mut head = vec![0u8; 8192];
+        let mut file = tokio::fs::File::open(host_path).await.ok()?;
+        let n = file.read(&mut head).await.ok()?;
+        head.truncate(n);
+        if !logic::gzip::is_plain_gzip(&head) {
+            return None;
+        }
+
+        let path = std::path::PathBuf::from(host_path);
+        let unpacked = tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+            logic::gzip::gunzip_limited(
+                std::io::BufReader::new(file),
+                logic::gzip::MAX_GUNZIP_BYTES,
+            )
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+        Some(match unpacked {
+            Ok(out) => {
+                let inner_name = logic::gzip::inner_name(relative_path).to_string();
+                let decoded = logic::file::decode_preview_bytes(&inner_name, &out.bytes);
+                TextRead {
+                    content: Ok(decoded.text),
+                    exists: true,
+                    is_binary: decoded.is_binary,
+                    art: decoded.art,
+                    archive: None,
+                    gzip: Some(logic::gzip::GzipNote {
+                        inner_name,
+                        truncated: out.truncated,
+                        incomplete: out.incomplete,
+                    }),
+                }
+            }
+            Err(e) => TextRead {
+                content: Err(format!("Couldn't decompress: {e}")),
+                exists: true,
+                is_binary: false,
+                art: None,
+                archive: None,
+                gzip: None,
             },
         })
     }
@@ -439,6 +497,7 @@ impl App {
             is_binary: false,
             art: None,
             archive: None,
+            gzip: None,
         };
 
         // Translate container path to host path
@@ -466,10 +525,14 @@ impl App {
                 is_binary: false,
                 art: None,
                 archive: None,
+                gzip: None,
             };
         }
 
         if let Some(read) = Self::read_archive_listing(&host_path).await {
+            return read;
+        }
+        if let Some(read) = Self::read_gzip(&host_path, relative_path).await {
             return read;
         }
 
@@ -492,6 +555,7 @@ impl App {
                     is_binary: decoded.is_binary,
                     art: decoded.art,
                     archive: None,
+                    gzip: None,
                 }
             }
             Err(e) => failed(format!("Failed to read file: {}", e), true),
@@ -506,6 +570,7 @@ struct TextRead {
     is_binary: bool,
     art: Option<logic::file::ArtStyle>,
     archive: Option<logic::archive::ArchiveListing>,
+    gzip: Option<logic::gzip::GzipNote>,
 }
 
 /// Decode the image at `path`, rotated and flipped as its EXIF orientation says. Camera
@@ -606,5 +671,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(read.content.is_ok(), "{:?}", read.content);
         assert_eq!(read.archive.map(|a| a.total_files), Some(1));
+    }
+
+    fn gzip_bytes(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(bytes).unwrap();
+        enc.finish().unwrap()
+    }
+
+    /// Reads `name` holding `bytes` from a fresh folder.
+    async fn read_one(name: &str, bytes: &[u8]) -> TextRead {
+        let dir = std::env::temp_dir().join(format!(
+            "stui-gz-{}-{}",
+            std::process::id(),
+            name.replace('.', "-")
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), bytes).unwrap();
+        let folder = Folder {
+            id: "f".into(),
+            label: None,
+            path: dir.to_string_lossy().into_owned(),
+            paused: false,
+            folder_type: "sendreceive".into(),
+            devices: vec![],
+            group: None,
+        };
+        let read = App::read_file_content_static(&HashMap::new(), &folder, name).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        read
+    }
+
+    #[tokio::test]
+    async fn test_gzip_previews_the_inner_file() {
+        let read = read_one("config.json.gz", &gzip_bytes(br#"{"a":1}"#)).await;
+        assert_eq!(read.content, Ok(r#"{"a":1}"#.to_string()));
+        assert!(!read.is_binary);
+        assert!(read.archive.is_none());
+        assert_eq!(
+            read.gzip,
+            Some(logic::gzip::GzipNote {
+                inner_name: "config.json".into(),
+                truncated: false,
+                incomplete: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gzip_inner_art_name_renders_art() {
+        let read = read_one("logo.ans.gz", &gzip_bytes(b"\x1b[31mX\x1b[0m")).await;
+        assert!(read.art.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_gzip_inner_output_stops_at_20mb() {
+        let read = read_one("zeros.txt.gz", &gzip_bytes(&vec![b'a'; 21 * 1024 * 1024])).await;
+        assert_eq!(read.content.map(|c| c.len()), Ok(20 * 1024 * 1024));
+        assert!(read.gzip.is_some_and(|g| g.truncated));
+    }
+
+    #[tokio::test]
+    async fn test_damaged_gzip_shows_error() {
+        let read = read_one("bad.gz", &[0x1f, 0x8b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).await;
+        assert!(
+            read.content
+                .as_ref()
+                .is_err_and(|e| e.starts_with("Couldn't decompress")),
+            "{:?}",
+            read.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tar_gz_still_lists() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_ustar();
+        header.set_size(3);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "a.txt", &b"abc"[..])
+            .unwrap();
+        let read = read_one("s.tar.gz", &gzip_bytes(&builder.into_inner().unwrap())).await;
+        assert!(read.archive.is_some());
+        assert!(read.gzip.is_none());
     }
 }

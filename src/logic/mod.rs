@@ -34,6 +34,7 @@ pub mod folder_groups;
 pub mod folder_history;
 pub mod formatted;
 pub mod formatting;
+pub mod gzip;
 pub mod ignore;
 pub mod json;
 pub mod layout;

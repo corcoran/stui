@@ -95,7 +95,7 @@ Run each session inside a single `bash -c`. Background processes (sway, kitty, w
 | Documents | Receive-only with 3 local changes (edit, add, delete). `art/` holds `gentoo.ans`, `lucia.ans`, `smiths.ans` and `stui.nfo` |
 | Media | Six 100 MB files trickling in at 400 KiB/s: syncing and remote-only |
 | Photos | Synced, with `Cats/` and `Kitten/`. `Kitten/kitten-sideways.jpg` stores its pixels sideways with EXIF orientation 6, so it only shows upright when orientation is applied |
-| Projects | Synced. `notes/scratch.txt` is ignored but on disk, and `website/build.log` is ignored and deleted |
+| Projects | Synced. `notes/scratch.txt` is ignored but on disk, and `website/build.log` is ignored and deleted. `website/access.log.gz` and `website/stats.json.gz` are plain gzip |
 | Vault | Paused |
 
 `seed.sh` backdates files and directories over the past few weeks. `deploy_edit` changes `Projects/website/deploy.md` on the nas and waits for the laptop to receive it, which puts a fresh entry at the top of the update history.

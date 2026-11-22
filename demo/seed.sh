@@ -60,6 +60,14 @@ EOF
     write "$d/website/build.log" 2 <<'EOF'
 [ok] 14 pages rendered
 EOF
+    printf '%s\n' \
+        '203.0.113.7 - - [20/Nov/2026:08:14:02 +0000] "GET / HTTP/1.1" 200 5120' \
+        '198.51.100.23 - - [20/Nov/2026:08:15:40 +0000] "GET /deploy HTTP/1.1" 200 2048' \
+        '203.0.113.7 - - [20/Nov/2026:08:16:11 +0000] "GET /missing HTTP/1.1" 404 512' \
+        | gzip -n > "$d/website/access.log.gz"
+    printf '%s' '{"visits":1840,"top":[{"path":"/","hits":1203},{"path":"/deploy","hits":411}],"errors":{"404":12}}' \
+        | gzip -n > "$d/website/stats.json.gz"
+    age "$d/website/access.log.gz" 3; age "$d/website/stats.json.gz" 3
     write "$d/notes/ideas.md" 4 <<'EOF'
 # Ideas
 

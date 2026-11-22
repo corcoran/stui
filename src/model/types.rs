@@ -121,9 +121,19 @@ pub struct FileInfoPopupState {
     pub is_image: bool,
     pub art: Option<crate::logic::file::ArtStyle>,
     pub archive: Option<crate::logic::archive::ArchiveListing>,
+    pub gzip: Option<crate::logic::gzip::GzipNote>,
     pub scroll_offset: u16,
     pub raw_view: bool,
     // image_state moved to Runtime - ImagePreviewState is not Clone
+}
+
+impl FileInfoPopupState {
+    /// The name that picks the rendered view: a gzip's inner file name, else the file path.
+    pub fn view_path(&self) -> &str {
+        self.gzip
+            .as_ref()
+            .map_or(&self.file_path, |g| &g.inner_name)
+    }
 }
 
 /// Unified confirmation action enum

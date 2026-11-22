@@ -898,7 +898,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 return Ok(());
             }
             KeyCode::Char('r') => {
-                if crate::logic::file::has_rendered_view(&popup_state.file_path) {
+                if crate::logic::file::has_rendered_view(popup_state.view_path()) {
                     popup_state.raw_view = !popup_state.raw_view;
                     popup_state.scroll_offset = 0;
                 }

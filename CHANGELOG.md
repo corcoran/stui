@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JSON preview**: `.json` files preview pretty-printed with colors. Press `r` for the raw file
 - **CSV/TSV preview**: `.csv` and `.tsv` files preview as a table fitted to the pane, with long cells ending in `…`. Press `r` for the raw file. JSON, CSV and TSV files over 2 MB show raw
 - **Archive preview**: zip (including jar, apk, epub, cbz and Office files), tar and tar.gz files preview as a listing with each entry's date, size and path, whatever their extension. Zips with more than 10,000 entries list their first 10,000 rows (the totals cover the whole archive). Tarballs list their first 10,000 entries or first 64 MB (tar.gz: or first 512 MB unpacked)
+- **gzip preview**: a gzip file that isn't a tarball previews as the file inside it, so `syslog.1.gz` shows the log and `config.json.gz` shows formatted JSON. Previews show the first 20 MB unpacked. A damaged or partly written file shows what decompressed and says it is incomplete
 
 ### 🔧 Improvements
 

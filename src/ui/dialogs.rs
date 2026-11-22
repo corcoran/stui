@@ -734,7 +734,7 @@ fn render_preview_column(
             .archive
             .as_ref()
             .filter(|_| state.file_content.is_ok());
-        let view = crate::logic::file::rendered_view(&state.file_path)
+        let view = crate::logic::file::rendered_view(state.view_path())
             .filter(|_| state.file_content.is_ok() && archive.is_none());
         let parsed_text = if let Err(msg) = &state.file_content {
             // Plain text so the paragraph word-wraps it
@@ -766,13 +766,32 @@ fn render_preview_column(
         state.scroll_offset = clamped_scroll;
 
         let scroll_keys = "↑↓/j/k, ^d/^u, ^f/^b, gg/G, PgUp/PgDn";
+        let gzip = state
+            .gzip
+            .as_ref()
+            .filter(|_| state.file_content.is_ok())
+            .map(|g| g.label());
+        let source = |kind: String| match &gzip {
+            Some(g) => format!("{g} · {kind}"),
+            None => kind,
+        };
         let title = match (view, state.raw_view) {
             _ if archive.is_some() => format!("Preview (Archive | {})", scroll_keys),
-            (Some(v), false) => format!("Preview ({}, r: raw | {})", v.label(), scroll_keys),
-            (Some(v), true) => {
-                format!("Preview (Raw, r: {} | {})", v.rendered_word(), scroll_keys)
-            }
-            (None, _) => format!("Preview ({})", scroll_keys),
+            (Some(v), false) => format!(
+                "Preview ({}, r: raw | {})",
+                source(v.label().to_string()),
+                scroll_keys
+            ),
+            (Some(v), true) => format!(
+                "Preview ({}, r: {} | {})",
+                source("Raw".to_string()),
+                v.rendered_word(),
+                scroll_keys
+            ),
+            (None, _) => match &gzip {
+                Some(g) => format!("Preview ({g} | {})", scroll_keys),
+                None => format!("Preview ({})", scroll_keys),
+            },
         };
 
         // Spans patch over this base style, so the art's own colors still win
@@ -985,6 +1004,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 0,
             raw_view,
         }
@@ -1025,6 +1045,63 @@ mod tests {
                 is_dir: false,
             }],
         }
+    }
+
+    // ========================================
+    // GZIP PREVIEW
+    // ========================================
+
+    fn gzipped(path: &str, content: &str, truncated: bool, incomplete: bool) -> FileInfoPopupState {
+        let mut state = popup(path, content, false);
+        state.gzip = Some(crate::logic::gzip::GzipNote {
+            inner_name: crate::logic::gzip::inner_name(path).to_string(),
+            truncated,
+            incomplete,
+        });
+        state
+    }
+
+    #[test]
+    fn test_gzip_json_preview_is_formatted() {
+        let mut state = gzipped("config.json.gz", r#"{"a":1}"#, false, false);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(
+            rows[0].contains("Preview (gzip · JSON, r: raw |"),
+            "{}",
+            rows[0]
+        );
+        assert!(rows.iter().any(|r| r.contains(r#""a": 1"#)), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_gzip_raw_view_title() {
+        let mut state = gzipped("config.json.gz", r#"{"a":1}"#, false, false);
+        state.raw_view = true;
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(
+            rows[0].contains("Preview (gzip · Raw, r: formatted |"),
+            "{}",
+            rows[0]
+        );
+    }
+
+    #[test]
+    fn test_gzip_text_preview_title() {
+        let mut state = gzipped("syslog.1.gz", "boot ok", false, false);
+        let rows = render_rows(&mut state, 120, 8);
+        assert!(rows[0].contains("Preview (gzip |"), "{}", rows[0]);
+        assert!(rows[1].contains("boot ok"), "{:#?}", rows);
+    }
+
+    #[test]
+    fn test_gzip_title_marks_truncated_and_incomplete() {
+        let mut state = gzipped("syslog.1.gz", "boot ok", true, true);
+        let rows = render_rows(&mut state, 140, 8);
+        assert!(
+            rows[0].contains("Preview (gzip, first 20 MB, incomplete |"),
+            "{}",
+            rows[0]
+        );
     }
 
     #[test]

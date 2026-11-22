@@ -537,6 +537,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 0,
             raw_view: false,
         });
@@ -604,6 +605,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 0,
             raw_view: false,
         });

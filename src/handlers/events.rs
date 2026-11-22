@@ -3446,6 +3446,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 5,
             raw_view: false,
         });
@@ -3478,6 +3479,20 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Char('r')).await;
         assert!(!popup(&app).raw_view);
         assert_eq!(popup(&app).scroll_offset, 5);
+    }
+
+    #[tokio::test]
+    async fn test_r_toggles_raw_view_on_gzipped_json() {
+        let mut app = create_test_app();
+        open_preview(&mut app, "config.json.gz");
+        app.model.ui.file_info_popup.as_mut().unwrap().gzip = Some(crate::logic::gzip::GzipNote {
+            inner_name: "config.json".into(),
+            truncated: false,
+            incomplete: false,
+        });
+
+        press(&mut app, crossterm::event::KeyCode::Char('r')).await;
+        assert!(popup(&app).raw_view);
     }
 
     #[tokio::test]
@@ -3520,6 +3535,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 7,
             raw_view: true,
         });
@@ -5576,6 +5592,7 @@ mod tests {
             is_image: false,
             art: None,
             archive: None,
+            gzip: None,
             scroll_offset: 0,
             raw_view: false,
         });
