@@ -48,9 +48,17 @@ fn default_image_protocol() -> String {
 }
 
 impl Config {
-    /// Parse a config file's contents
+    /// Parse a config file's contents. A file with no settings at all reads as an empty
+    /// mapping, so its error names the first missing setting instead of "end of input".
     pub fn from_yaml(yaml: &str) -> anyhow::Result<Config> {
-        Ok(serde_saphyr::from_str(yaml)?)
+        let has_content = yaml.lines().map(str::trim).any(|line| {
+            !line.is_empty() && !line.starts_with('#') && line != "---" && line != "..."
+        });
+        Ok(serde_saphyr::from_str(if has_content {
+            yaml
+        } else {
+            "{}"
+        })?)
     }
 }
 
@@ -163,5 +171,25 @@ mod tests {
         assert_eq!(config.api_key, "abc123");
         assert_eq!(config.base_url, "http://127.0.0.1:8384");
         assert!(config.vim_mode);
+    }
+
+    fn parse_error(yaml: &str) -> String {
+        Config::from_yaml(yaml).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn test_empty_file_asks_for_api_key() {
+        assert!(parse_error("").contains("api_key"));
+    }
+
+    #[test]
+    fn test_comments_only_file_asks_for_api_key() {
+        assert!(parse_error("# stui configuration\n\n# see the README\n").contains("api_key"));
+    }
+
+    #[test]
+    fn test_broken_syntax_names_the_line() {
+        let error = parse_error("api_key: k\nbase_url: [unclosed\n");
+        assert!(error.contains("line 2"), "{error}");
     }
 }

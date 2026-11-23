@@ -450,7 +450,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
 
 ### Configuration
 
-YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, `editor`, `open_text_in_editor`, image preview settings, `terminal_title`. Command settings take arguments (`logic::command::parse_command`, shell quoting, no shell). `config.yaml.example` ships in every release; the README's config block must match it (a test checks)
+YAML config at `~/.config/stui/config.yaml` (Linux) with: API key, base URL, `path_map`, `vim_mode`, `icon_mode`, `open_command`, `clipboard_command`, `editor`, `open_text_in_editor`, image preview settings, `terminal_title`. Command settings take arguments (`logic::command::parse_command`, shell quoting, no shell). `config.yaml.example` ships in every release; the README's config block must match it (a test checks). `Config::from_yaml` is the only parser (`serde-saphyr`); a file with no settings (blank or comments only) parses as `{}`, otherwise its error says "end of input" instead of naming `api_key`
 
 CLI flags: `--debug`, `--vim`, `--config <path>`
 
