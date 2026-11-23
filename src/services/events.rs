@@ -74,6 +74,11 @@ pub(crate) fn item_finished_failed(data: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+/// The invalidation a config event sends, if any
+pub(crate) fn config_invalidation(event_type: &str) -> Option<CacheInvalidation> {
+    (event_type == "ConfigSaved").then_some(CacheInvalidation::FolderConfigChanged)
+}
+
 #[derive(Debug, Clone)]
 pub enum CacheInvalidation {
     /// Invalidate a single file
@@ -107,6 +112,8 @@ pub enum CacheInvalidation {
         #[allow(dead_code)]
         timestamp: std::time::SystemTime,
     },
+    /// Syncthing saved its config (folders may be paused, resumed, added or edited)
+    FolderConfigChanged,
     /// Activity event for status bar display
     Activity {
         folder_id: String,
@@ -396,13 +403,17 @@ async fn event_listener_loop(
                                         let _ = invalidation_tx.send(invalidation);
                                     }
                                 }
-                                _ => {
-                                    // Ignore other event types (but log them for debugging)
-                                    log_debug(&format!(
+                                // The payload may be an old config replayed after a restart,
+                                // so the app refetches the config instead of using it
+                                event_type => match config_invalidation(event_type) {
+                                    Some(invalidation) => {
+                                        let _ = invalidation_tx.send(invalidation);
+                                    }
+                                    None => log_debug(&format!(
                                         "DEBUG [EVENT]: Ignoring event type: {}",
-                                        event.event_type
-                                    ));
-                                }
+                                        event_type
+                                    )),
+                                },
                             }
 
                             last_event_id = event.id;
@@ -551,5 +562,23 @@ mod tests {
         assert!(item_finished_failed(
             &serde_json::json!({"item": "a", "error": "permission denied"})
         ));
+    }
+
+    // ========================================
+    // CONFIG CHANGES
+    // ========================================
+
+    #[test]
+    fn test_config_saved_event_reports_folder_config_change() {
+        assert!(matches!(
+            config_invalidation("ConfigSaved"),
+            Some(CacheInvalidation::FolderConfigChanged)
+        ));
+    }
+
+    #[test]
+    fn test_other_events_report_no_config_change() {
+        assert!(config_invalidation("FolderSummary").is_none());
+        assert!(config_invalidation("ItemFinished").is_none());
     }
 }

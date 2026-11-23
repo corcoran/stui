@@ -254,6 +254,10 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
                 ));
             }
         }
+        CacheInvalidation::FolderConfigChanged => {
+            crate::log_debug("DEBUG [Event]: Config saved, folder list will be refetched");
+            app.model.ui.folder_config_stale = true;
+        }
         CacheInvalidation::Activity {
             folder_id,
             event_message,
@@ -4307,6 +4311,111 @@ mod tests {
         press(&mut app, crossterm::event::KeyCode::Char('y')).await;
 
         assert!(!app.model.selected_folder().unwrap().paused);
+    }
+
+    // ========================================
+    // FOLDER CONFIG CHANGED OUTSIDE STUI
+    // ========================================
+
+    #[test]
+    fn test_config_saved_marks_folder_config_stale() {
+        let mut app = create_test_app();
+
+        handle_cache_invalidation(&mut app, CacheInvalidation::FolderConfigChanged);
+
+        assert!(app.model.ui.folder_config_stale);
+    }
+
+    #[tokio::test]
+    async fn test_folder_paused_outside_stui_clears_its_preview() {
+        let mut app = create_test_app();
+        folder_list_previewing_media(&mut app, false);
+
+        app.apply_folder_config(vec![
+            pausable_folder("media", true),
+            pausable_folder("vault", false),
+        ])
+        .await;
+
+        assert!(app.model.selected_folder().unwrap().paused);
+        assert!(app.model.navigation.breadcrumb_trail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_folder_resumed_outside_stui_shows_its_preview() {
+        let mut app = create_test_app();
+        app.model.set_folders(vec![pausable_folder("vault", true)]);
+        app.model.navigation.folders_state_selection = Some(0);
+        app.cache
+            .save_browse_items("vault", None, &[file_item("key.txt")], 0)
+            .unwrap();
+
+        app.apply_folder_config(vec![pausable_folder("vault", false)])
+            .await;
+
+        assert!(!app.model.selected_folder().unwrap().paused);
+        let trail = &app.model.navigation.breadcrumb_trail;
+        assert_eq!(trail.len(), 1);
+        assert_eq!(trail[0].folder_id, "vault");
+        assert_eq!(trail[0].items[0].name, "key.txt");
+        assert_eq!(app.model.navigation.focus_level, 0);
+    }
+
+    #[tokio::test]
+    async fn test_folder_paused_outside_stui_while_browsing_returns_to_folder_list() {
+        let mut app = create_test_app();
+        app.model.set_folders(vec![
+            pausable_folder("media", false),
+            pausable_folder("vault", false),
+        ]);
+        app.model.navigation.folders_state_selection = Some(0);
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+
+        app.apply_folder_config(vec![
+            pausable_folder("media", true),
+            pausable_folder("vault", false),
+        ])
+        .await;
+
+        assert_eq!(app.model.navigation.focus_level, 0);
+        assert!(app.model.navigation.breadcrumb_trail.is_empty());
+        assert_eq!(app.model.selected_folder().unwrap().id, "media");
+    }
+
+    #[tokio::test]
+    async fn test_other_folder_paused_outside_stui_keeps_browsing() {
+        let mut app = create_test_app();
+        app.model.set_folders(vec![
+            pausable_folder("media", false),
+            pausable_folder("vault", false),
+        ]);
+        app.model.navigation.folders_state_selection = Some(0);
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+
+        app.apply_folder_config(vec![
+            pausable_folder("media", false),
+            pausable_folder("vault", true),
+        ])
+        .await;
+
+        assert_eq!(app.model.navigation.focus_level, 1);
+        assert_eq!(app.model.navigation.breadcrumb_trail[0].folder_id, "media");
+        assert!(app.model.syncthing.get_folder("vault").unwrap().paused);
+    }
+
+    #[tokio::test]
+    async fn test_folder_type_changed_outside_stui_is_applied() {
+        let mut app = create_test_app();
+        app.model.set_folders(vec![pausable_folder("media", false)]);
+        let mut changed = pausable_folder("media", false);
+        changed.folder_type = "receiveonly".to_string();
+
+        app.apply_folder_config(vec![changed]).await;
+
+        assert_eq!(
+            app.model.syncthing.get_folder("media").unwrap().folder_type,
+            "receiveonly"
+        );
     }
 
     // ========================================

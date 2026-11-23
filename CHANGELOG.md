@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🐛 Bug Fixes
 
 - The out-of-sync filter (`f`) no longer overwrites what stui remembers about each file. Afterwards a file could show the wrong icon when opened again: ❓ for one that was downloading, or ⛅ for one deleted on another device. In a Receive Only folder, a file with local changes could also drop out of the filter
+- Pausing, resuming or editing a folder in Syncthing's web GUI or another app shows in stui right away. A folder you are browsing returns you to the folder list when it is paused
 
 ---
 

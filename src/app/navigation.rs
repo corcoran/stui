@@ -10,6 +10,47 @@ use anyhow::Result;
 use std::time::Instant;
 
 impl App {
+    /// Apply a folder list fetched after Syncthing saved its config, then update the pane
+    /// when the shown folder was paused, resumed or removed
+    pub(crate) async fn apply_folder_config(&mut self, folders: Vec<crate::api::Folder>) {
+        let focus_level = self.model.navigation.focus_level;
+        let shown = if focus_level == 0 {
+            self.model.selected_folder().map(|f| f.id.clone())
+        } else {
+            self.model
+                .navigation
+                .breadcrumb_trail
+                .first()
+                .map(|level| level.folder_id.clone())
+        };
+        let change = logic::folder::pane_change(
+            focus_level,
+            shown.as_deref(),
+            &self.model.syncthing.folders,
+            &folders,
+        );
+        log_debug(&format!(
+            "DEBUG [apply_folder_config]: {} folders, shown={:?} focus={} pane={:?}",
+            folders.len(),
+            shown,
+            focus_level,
+            change
+        ));
+        let _ = self.cache.save_folders(&folders);
+        self.model.set_folders(folders);
+        match change {
+            logic::folder::PaneChange::Keep => {}
+            logic::folder::PaneChange::Reload => {
+                let _ = self.load_root_level(true).await;
+            }
+            logic::folder::PaneChange::LeaveFolder => {
+                self.model.navigation.focus_level = 0;
+                self.model.navigation.breadcrumb_trail.clear();
+                let _ = self.load_root_level(true).await;
+            }
+        }
+    }
+
     pub(crate) async fn load_root_level(&mut self, preview_only: bool) -> Result<()> {
         if let Some(selected) = self.model.navigation.folders_state_selection
             && let Some(folder) = self.model.syncthing.folders.get(selected).cloned()

@@ -88,6 +88,8 @@ pub struct UiModel {
 
     /// Flag to trigger folder refresh in main loop (after reconnection)
     pub needs_folder_refresh: bool,
+    /// Syncthing saved its config; the folder list must be refetched
+    pub folder_config_stale: bool,
 
     pub toast: Option<Toast>,
 
@@ -152,6 +154,7 @@ impl UiModel {
             show_setup_help: false,
             config_path: String::new(),
             needs_folder_refresh: false,
+            folder_config_stale: false,
             toast: None,
             terminal_requests: Vec::new(),
             search_mode: false,

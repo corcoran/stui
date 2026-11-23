@@ -179,6 +179,37 @@ pub fn folders_needing_refresh_after_cache_load(
         .collect()
 }
 
+/// What a folder config change does to the folder pane
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneChange {
+    Keep,
+    /// Reload the folder list's preview of the selected folder
+    Reload,
+    /// Return to the folder list from inside the browsed folder
+    LeaveFolder,
+}
+
+/// `shown` is the selected folder at `focus_level` 0, else the browsed folder
+pub fn pane_change(
+    focus_level: usize,
+    shown: Option<&str>,
+    before: &[crate::api::Folder],
+    after: &[crate::api::Folder],
+) -> PaneChange {
+    let Some(id) = shown else {
+        return PaneChange::Keep;
+    };
+    let paused_in =
+        |folders: &[crate::api::Folder]| folders.iter().find(|f| f.id == id).map(|f| f.paused);
+    let now = paused_in(after);
+    match focus_level {
+        0 if now != paused_in(before) => PaneChange::Reload,
+        0 => PaneChange::Keep,
+        _ if now.is_none_or(|paused| paused) => PaneChange::LeaveFolder,
+        _ => PaneChange::Keep,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +489,96 @@ mod tests {
                 "{state} should not be transient"
             );
         }
+    }
+
+    // ========================================
+    // PANE AFTER A CONFIG CHANGE
+    // ========================================
+
+    fn paused_folder(id: &str, paused: bool) -> crate::api::Folder {
+        crate::api::Folder {
+            paused,
+            ..test_folder(id)
+        }
+    }
+
+    #[test]
+    fn test_pane_change_reloads_preview_when_selected_folder_pauses() {
+        let before = [paused_folder("a", false)];
+        let after = [paused_folder("a", true)];
+
+        assert_eq!(
+            pane_change(0, Some("a"), &before, &after),
+            PaneChange::Reload
+        );
+    }
+
+    #[test]
+    fn test_pane_change_reloads_preview_when_selected_folder_resumes() {
+        let before = [paused_folder("a", true)];
+        let after = [paused_folder("a", false)];
+
+        assert_eq!(
+            pane_change(0, Some("a"), &before, &after),
+            PaneChange::Reload
+        );
+    }
+
+    #[test]
+    fn test_pane_change_leaves_folder_being_browsed_when_it_pauses() {
+        let before = [paused_folder("a", false)];
+        let after = [paused_folder("a", true)];
+
+        assert_eq!(
+            pane_change(2, Some("a"), &before, &after),
+            PaneChange::LeaveFolder
+        );
+    }
+
+    #[test]
+    fn test_pane_change_leaves_folder_being_browsed_when_it_is_removed() {
+        let before = [paused_folder("a", false), paused_folder("b", false)];
+        let after = [paused_folder("b", false)];
+
+        assert_eq!(
+            pane_change(1, Some("a"), &before, &after),
+            PaneChange::LeaveFolder
+        );
+    }
+
+    #[test]
+    fn test_pane_change_reloads_preview_when_selected_folder_is_removed() {
+        let before = [paused_folder("a", false), paused_folder("b", false)];
+        let after = [paused_folder("b", false)];
+
+        assert_eq!(
+            pane_change(0, Some("a"), &before, &after),
+            PaneChange::Reload
+        );
+    }
+
+    #[test]
+    fn test_pane_change_keeps_pane_when_another_folder_pauses() {
+        let before = [paused_folder("a", false), paused_folder("b", false)];
+        let after = [paused_folder("a", false), paused_folder("b", true)];
+
+        assert_eq!(pane_change(0, Some("a"), &before, &after), PaneChange::Keep);
+        assert_eq!(pane_change(1, Some("a"), &before, &after), PaneChange::Keep);
+    }
+
+    #[test]
+    fn test_pane_change_keeps_pane_when_pause_state_is_unchanged() {
+        let before = [paused_folder("a", true)];
+        let after = [paused_folder("a", true)];
+
+        assert_eq!(pane_change(0, Some("a"), &before, &after), PaneChange::Keep);
+    }
+
+    #[test]
+    fn test_pane_change_keeps_pane_with_no_folder_shown() {
+        let before = [paused_folder("a", false)];
+        let after = [paused_folder("a", true)];
+
+        assert_eq!(pane_change(0, None, &before, &after), PaneChange::Keep);
     }
 }
