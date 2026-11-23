@@ -20,7 +20,6 @@
 
 ### Known Bugs
 
-- The out-of-sync walk writes its cache rows with `INSERT OR REPLACE` (`src/cache.rs`, near line 881). These rows can overwrite file states that other code wrote
 - A folder paused outside stui (web GUI or REST) goes unnoticed for 10 s or more. The folder list's paused flag refreshes only after stui's own actions
 
 ---

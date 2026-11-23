@@ -845,22 +845,14 @@ impl CacheDb {
             .as_secs() as i64;
         let walk = walk as i64;
 
+        // Need entries carry only the global FileInfo, so they never write `sync_states`: a
+        // state guessed from them would read back as FileInfo's
         let entries = need_response
             .progress
             .iter()
-            .map(|f| (f, "Syncing", "downloading"))
-            .chain(
-                need_response
-                    .queued
-                    .iter()
-                    .map(|f| (f, "RemoteOnly", "queued")),
-            )
-            .chain(
-                need_response
-                    .rest
-                    .iter()
-                    .map(|f| (f, "RemoteOnly", "remote_only")),
-            );
+            .map(|f| (f, "downloading"))
+            .chain(need_response.queued.iter().map(|f| (f, "queued")))
+            .chain(need_response.rest.iter().map(|f| (f, "remote_only")));
 
         // One transaction per page: a 1000-entry page is otherwise 1000 commits on the UI thread
         let tx = self.conn.unchecked_transaction()?;
@@ -877,14 +869,9 @@ impl CacheDb {
                      walk = excluded.walk
                  WHERE need_entries.walk IS NOT excluded.walk",
             )?;
-            let mut state_stmt = tx.prepare(
-                "INSERT OR REPLACE INTO sync_states (folder_id, file_path, file_sequence, sync_state)
-                 VALUES (?1, ?2, 0, ?3)",
-            )?;
-            for (file, state, category) in entries {
+            for (file, category) in entries {
                 new_rows +=
                     need_stmt.execute(params![folder_id, &file.name, category, now, walk])? as u64;
-                state_stmt.execute(params![folder_id, &file.name, state])?;
             }
         }
         tx.commit()?;
@@ -1431,6 +1418,9 @@ mod tests {
         cache
             .cache_needed_files("f", &rest_page(&["a"]), 1)
             .unwrap();
+        cache
+            .save_sync_state("f", "a", SyncState::Synced, 1)
+            .unwrap();
 
         cache.invalidate_folder("f").unwrap();
 
@@ -1515,6 +1505,71 @@ mod tests {
 
         assert!(cache.get_out_of_sync_items("f").unwrap().is_empty());
         assert_eq!(need_paths(&cache, "f"), vec!["a"]);
+    }
+
+    #[test]
+    fn test_cache_needed_files_keeps_cached_file_info_state() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .save_sync_state("f", "a", SyncState::Synced, 7)
+            .unwrap();
+
+        cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+
+        assert_eq!(
+            cache.get_sync_state_unvalidated("f", "a").unwrap(),
+            Some(SyncState::Synced)
+        );
+    }
+
+    #[test]
+    fn test_cache_needed_files_keeps_local_changed_flags() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        cache
+            .cache_local_changed_files("f", &["a".to_string()])
+            .unwrap();
+
+        cache
+            .cache_needed_files("f", &rest_page(&["a"]), 1)
+            .unwrap();
+
+        assert_eq!(cache.get_local_changed_items("f").unwrap(), vec!["a"]);
+    }
+
+    #[test]
+    fn test_cache_needed_files_writes_no_sync_states() {
+        let cache = CacheDb::new_in_memory().unwrap();
+        let page = NeedResponse {
+            progress: vec![FileInfo {
+                name: "downloading".to_string(),
+                ..Default::default()
+            }],
+            queued: vec![],
+            rest: vec![FileInfo {
+                name: "deleted-remotely".to_string(),
+                deleted: true,
+                ..Default::default()
+            }],
+            page: 1,
+            perpage: 1000,
+        };
+
+        cache.cache_needed_files("f", &page, 1).unwrap();
+
+        assert_eq!(
+            cache
+                .get_sync_state_unvalidated("f", "downloading")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            cache
+                .get_sync_state_unvalidated("f", "deleted-remotely")
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
