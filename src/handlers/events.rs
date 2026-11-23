@@ -4404,6 +4404,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_all_folders_removed_outside_stui_clears_preview() {
+        let mut app = create_test_app();
+        folder_list_previewing_media(&mut app, false);
+
+        app.apply_folder_config(vec![]).await;
+
+        assert!(app.model.syncthing.folders.is_empty());
+        assert_eq!(app.model.navigation.folders_state_selection, None);
+        assert!(app.model.navigation.breadcrumb_trail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_all_folders_removed_while_browsing_returns_to_folder_list() {
+        let mut app = create_test_app();
+        app.model.set_folders(vec![pausable_folder("media", false)]);
+        app.model.navigation.folders_state_selection = Some(0);
+        view_folder_root(&mut app, "media", vec![file_item("a.mkv")]);
+
+        app.apply_folder_config(vec![]).await;
+
+        assert_eq!(app.model.navigation.focus_level, 0);
+        assert!(app.model.navigation.breadcrumb_trail.is_empty());
+    }
+
+    /// Answers every request with `body` as JSON
+    async fn spawn_json_stub(body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    fn connected(app: &mut App) {
+        app.model.syncthing.connection_state = crate::model::syncthing::ConnectionState::Connected;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_folder_config_applies_fetched_folders() {
+        let url = spawn_json_stub(
+            r#"{"folders":[{"id":"vault","label":"vault","path":"/data","paused":true,"type":"sendreceive"}],"devices":[]}"#,
+        )
+        .await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        connected(&mut app);
+        app.model.set_folders(vec![pausable_folder("vault", false)]);
+        app.model.ui.folder_config_stale = true;
+
+        app.refresh_folder_config().await;
+
+        assert!(!app.model.ui.folder_config_stale);
+        assert!(app.model.syncthing.get_folder("vault").unwrap().paused);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_folder_config_retries_after_failed_fetch() {
+        let mut app = create_test_app();
+        connected(&mut app);
+        app.model.set_folders(vec![pausable_folder("vault", false)]);
+        app.model.ui.folder_config_stale = true;
+
+        app.refresh_folder_config().await;
+
+        assert!(
+            app.model.ui.folder_config_stale,
+            "a failed fetch must leave the config stale so the next frame retries"
+        );
+        assert!(!app.model.syncthing.get_folder("vault").unwrap().paused);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_folder_config_waits_while_disconnected() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        app.model.ui.folder_config_stale = true;
+
+        app.refresh_folder_config().await;
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "no request while disconnected"
+        );
+        assert!(app.model.ui.folder_config_stale);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_folder_config_skips_fetch_when_not_stale() {
+        let (url, captured) = spawn_capturing_stub().await;
+        let (mut app, _rx) = create_test_app_at(&url);
+        connected(&mut app);
+
+        app.refresh_folder_config().await;
+
+        assert!(captured.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn test_folder_type_changed_outside_stui_is_applied() {
         let mut app = create_test_app();
         app.model.set_folders(vec![pausable_folder("media", false)]);

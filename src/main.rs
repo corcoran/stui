@@ -1155,16 +1155,7 @@ where
             }
         }
 
-        if app.model.ui.folder_config_stale {
-            app.model.ui.folder_config_stale = false;
-            match app.client.get_folders().await {
-                Ok(folders) => app.apply_folder_config(folders).await,
-                Err(e) => log_debug(&format!(
-                    "Failed to refetch folders after config change: {}",
-                    e
-                )),
-            }
-        }
+        app.refresh_folder_config().await;
 
         // Refresh device/system status periodically (less frequently than folder stats)
         // System status every 30 seconds, connection stats every 2-3 seconds

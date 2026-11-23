@@ -187,6 +187,8 @@ pub enum PaneChange {
     Reload,
     /// Return to the folder list from inside the browsed folder
     LeaveFolder,
+    /// No folders remain: return to the folder list with no pane
+    Clear,
 }
 
 /// `shown` is the selected folder at `focus_level` 0, else the browsed folder
@@ -199,6 +201,9 @@ pub fn pane_change(
     let Some(id) = shown else {
         return PaneChange::Keep;
     };
+    if after.is_empty() {
+        return PaneChange::Clear;
+    }
     let paused_in =
         |folders: &[crate::api::Folder]| folders.iter().find(|f| f.id == id).map(|f| f.paused);
     let now = paused_in(after);
@@ -572,6 +577,14 @@ mod tests {
         let after = [paused_folder("a", true)];
 
         assert_eq!(pane_change(0, Some("a"), &before, &after), PaneChange::Keep);
+    }
+
+    #[test]
+    fn test_pane_change_clears_pane_when_no_folders_remain() {
+        let before = [paused_folder("a", false)];
+
+        assert_eq!(pane_change(0, Some("a"), &before, &[]), PaneChange::Clear);
+        assert_eq!(pane_change(2, Some("a"), &before, &[]), PaneChange::Clear);
     }
 
     #[test]

@@ -10,6 +10,28 @@ use anyhow::Result;
 use std::time::Instant;
 
 impl App {
+    /// Refetch the folder list once Syncthing has saved its config. The config stays stale
+    /// while disconnected or after a failed fetch, so a later frame tries again.
+    pub(crate) async fn refresh_folder_config(&mut self) {
+        let connected = matches!(
+            self.model.syncthing.connection_state,
+            model::syncthing::ConnectionState::Connected
+        );
+        if !self.model.ui.folder_config_stale || !connected {
+            return;
+        }
+        match self.client.get_folders().await {
+            Ok(folders) => {
+                self.model.ui.folder_config_stale = false;
+                self.apply_folder_config(folders).await;
+            }
+            Err(e) => log_debug(&format!(
+                "Failed to refetch folders after config change, will retry: {}",
+                e
+            )),
+        }
+    }
+
     /// Apply a folder list fetched after Syncthing saved its config, then update the pane
     /// when the shown folder was paused, resumed or removed
     pub(crate) async fn apply_folder_config(&mut self, folders: Vec<crate::api::Folder>) {
@@ -47,6 +69,10 @@ impl App {
                 self.model.navigation.focus_level = 0;
                 self.model.navigation.breadcrumb_trail.clear();
                 let _ = self.load_root_level(true).await;
+            }
+            logic::folder::PaneChange::Clear => {
+                self.model.navigation.focus_level = 0;
+                self.model.navigation.breadcrumb_trail.clear();
             }
         }
     }

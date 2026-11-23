@@ -522,6 +522,8 @@ CLI flags: `--debug`, `--vim`, `--config <path>`
 ### Event-Driven Cache Invalidation
 Long-polling `/rest/events` for real-time updates. Granular invalidation (file/dir/folder). Handles LocalIndexUpdated, ItemStarted, ItemFinished. Persistent event ID, auto-recovery.
 
+**Folder config:** `ConfigSaved` only sets `ui.folder_config_stale`. `App::refresh_folder_config` then refetches `/rest/system/config` and never uses the event payload, because events replayed after a restart carry old configs. The config stays stale while disconnected or after a failed fetch, so a later frame retries. `logic::folder::pane_change` decides whether the open pane is kept, reloaded, left or cleared.
+
 **Activity Event Deduplication:** Activity events from ItemFinished are deduplicated by timestamp. Only events newer than existing activity are stored, preventing event replay from overwriting fresh data during event stream reconnection.
 
 ### Performance Optimizations
