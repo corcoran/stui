@@ -343,7 +343,7 @@ See `src/api.rs:43` for `BrowseItem` struct definition.
 - **TUI Framework**: Ratatui
 - **Dependencies**:
   - `reqwest` (HTTP client)
-  - `serde` / `serde_json` / `serde_yaml` (serialization)
+  - `serde` / `serde_json` (serialization), `serde-saphyr` (config YAML, read only)
   - `crossterm` (terminal handling)
   - `tokio` (async runtime)
   - `rusqlite` (SQLite cache)

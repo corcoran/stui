@@ -867,7 +867,7 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config_str = fs::read_to_string(&config_path)?;
-    let mut config: Config = serde_yaml::from_str(&config_str)?;
+    let mut config = Config::from_yaml(&config_str)?;
 
     // Override config with CLI flags
     if args.vim {

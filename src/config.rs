@@ -47,6 +47,13 @@ fn default_image_protocol() -> String {
     "auto".to_string()
 }
 
+impl Config {
+    /// Parse a config file's contents
+    pub fn from_yaml(yaml: &str) -> anyhow::Result<Config> {
+        Ok(serde_saphyr::from_str(yaml)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,27 +62,27 @@ mod tests {
 
     #[test]
     fn test_terminal_title_defaults_on() {
-        let config: Config = serde_yaml::from_str(MINIMAL).unwrap();
+        let config: Config = Config::from_yaml(MINIMAL).unwrap();
         assert!(config.terminal_title);
     }
 
     #[test]
     fn test_terminal_title_can_be_turned_off() {
         let yaml = format!("{}terminal_title: false\n", MINIMAL);
-        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        let config: Config = Config::from_yaml(&yaml).unwrap();
         assert!(!config.terminal_title);
     }
 
     #[test]
     fn test_path_map_is_optional() {
         let config: Config =
-            serde_yaml::from_str("api_key: k\nbase_url: http://127.0.0.1:8384\n").unwrap();
+            Config::from_yaml("api_key: k\nbase_url: http://127.0.0.1:8384\n").unwrap();
         assert!(config.path_map.is_empty());
     }
 
     #[test]
     fn test_shipped_example_config_parses() {
-        let config: Config = serde_yaml::from_str(include_str!("../config.yaml.example")).unwrap();
+        let config: Config = Config::from_yaml(include_str!("../config.yaml.example")).unwrap();
         assert!(config.terminal_title);
     }
 
@@ -90,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_editor_settings_default_off() {
-        let config: Config = serde_yaml::from_str(MINIMAL).unwrap();
+        let config: Config = Config::from_yaml(MINIMAL).unwrap();
         assert_eq!(config.editor, None);
         assert!(!config.open_text_in_editor);
     }
@@ -101,8 +108,60 @@ mod tests {
             "{}editor: \"nvim -R\"\nopen_text_in_editor: true\n",
             MINIMAL
         );
-        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        let config: Config = Config::from_yaml(&yaml).unwrap();
         assert_eq!(config.editor.as_deref(), Some("nvim -R"));
         assert!(config.open_text_in_editor);
+    }
+
+    // ========================================
+    // YAML PARSING
+    // ========================================
+
+    #[test]
+    fn test_empty_value_means_not_set() {
+        let yaml = format!("{}open_command:\nclipboard_command: ~\n", MINIMAL);
+        let config = Config::from_yaml(&yaml).unwrap();
+        assert_eq!(config.open_command, None);
+        assert_eq!(config.clipboard_command, None);
+    }
+
+    #[test]
+    fn test_unknown_settings_are_ignored() {
+        let yaml = format!("{}removed_setting: 3\n", MINIMAL);
+        assert!(Config::from_yaml(&yaml).is_ok());
+    }
+
+    #[test]
+    fn test_path_map_reads_quoted_paths() {
+        let config = Config::from_yaml(include_str!("../config.yaml.example")).unwrap();
+        assert_eq!(
+            config.path_map.get("/data").map(String::as_str),
+            Some("/home/user/syncthing-data")
+        );
+        assert_eq!(
+            config.path_map.get("/photos").map(String::as_str),
+            Some("/mnt/photos")
+        );
+    }
+
+    #[test]
+    fn test_missing_api_key_is_an_error() {
+        assert!(Config::from_yaml("base_url: http://127.0.0.1:8384\n").is_err());
+    }
+
+    #[test]
+    fn test_wrong_type_is_an_error() {
+        let yaml = format!("{}vim_mode: maybe\n", MINIMAL);
+        assert!(Config::from_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn test_unquoted_values_parse() {
+        let config =
+            Config::from_yaml("api_key: abc123\nbase_url: http://127.0.0.1:8384\nvim_mode: true\n")
+                .unwrap();
+        assert_eq!(config.api_key, "abc123");
+        assert_eq!(config.base_url, "http://127.0.0.1:8384");
+        assert!(config.vim_mode);
     }
 }
