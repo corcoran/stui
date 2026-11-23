@@ -289,8 +289,9 @@ mod tests {
 
     #[test]
     fn test_toast_kind_set_by_show_method() {
+        type Show = fn(&mut UiModel, &str);
         let mut model = UiModel::new(false);
-        let cases: [(fn(&mut UiModel, &str), ToastKind); 4] = [
+        let cases: [(Show, ToastKind); 4] = [
             (|m, s| m.show_success(s), ToastKind::Success),
             (|m, s| m.show_info(s), ToastKind::Info),
             (|m, s| m.show_warning(s), ToastKind::Warning),

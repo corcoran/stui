@@ -37,7 +37,7 @@ pub fn process_files_for_history(
         .collect();
 
     // Sort by modification time (newest first)
-    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
 
     // Limit to requested count
     entries.truncate(limit);

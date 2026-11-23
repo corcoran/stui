@@ -103,7 +103,7 @@ fn test_poll_transient_state_folders() {
     for state in &transient_states {
         // These states should trigger periodic polling
         let needs_polling = matches!(
-            state.as_ref(),
+            *state,
             "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
         );
 
@@ -114,7 +114,7 @@ fn test_poll_transient_state_folders() {
     let stable_states = vec!["idle", "error"];
     for state in &stable_states {
         let needs_polling = matches!(
-            state.as_ref(),
+            *state,
             "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
         );
 
@@ -147,7 +147,7 @@ fn test_identify_folders_needing_poll() {
         .iter()
         .filter(|(_, state)| {
             matches!(
-                state.as_ref(),
+                **state,
                 "scanning" | "syncing" | "cleaning" | "scan-waiting" | "sync-waiting"
             )
         })

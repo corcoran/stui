@@ -86,7 +86,7 @@ fn test_new_breadcrumb_inherits_filter() {
 #[test]
 fn test_filter_only_shows_out_of_sync() {
     // Simulate directory with mixed sync states
-    let all_items = vec![
+    let all_items = [
         BrowseItem {
             name: "synced.txt".to_string(),
             item_type: "file".to_string(), // Synced file
@@ -148,11 +148,7 @@ fn test_directory_shown_if_child_out_of_sync() {
 
     // Check each directory
     for item in &items {
-        let full_path = if current_path.is_empty() {
-            item.name.clone()
-        } else {
-            format!("{}{}", current_path, item.name)
-        };
+        let full_path = format!("{}{}", current_path, item.name);
 
         if item.item_type == "FILE_INFO_TYPE_DIRECTORY" {
             let dir_prefix = format!("{}/", full_path);
@@ -187,7 +183,7 @@ fn test_subdirectory_filter_application() {
 
     // Simulate being inside Messages/ directory
     let current_path = "Messages/";
-    let items_in_messages = vec![
+    let items_in_messages = [
         BrowseItem {
             name: "foo".to_string(),
             item_type: "file".to_string(), // Out-of-sync file

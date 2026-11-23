@@ -273,7 +273,7 @@ pub fn get_path() { // missing return type
 
 #### Clippy Linting
 
-**Before committing, run:** `cargo clippy -- -D warnings` (failures block CI/CD)
+**Before committing, run:** `cargo clippy --all-targets -- -D warnings` (failures block CI/CD)
 
 **Key patterns:**
 - Use `is_some_and`/`is_none_or` instead of `map_or` with booleans
@@ -293,7 +293,7 @@ The CI pipeline runs these checks automatically:
 1. **tests.yml** (on PRs and pushes):
    - `cargo test` - Run test suite
    - `cargo fmt -- --check` - Verify formatting
-   - `cargo clippy -- -D warnings` - Run linter
+   - `cargo clippy --all-targets -- -D warnings` - Run linter
    - `cargo build --release` - Build project
 
 2. **release.yml** (on version tags):
