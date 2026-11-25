@@ -13,7 +13,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 impl App {
     /// Open the log viewer and request the whole log. `Err` is the reason it can't open.
-    #[allow(dead_code)]
     pub fn open_system_log(&mut self) -> Result<(), String> {
         let version = self.model.syncthing.version.as_deref();
         if !system_log::supports_log_viewer(version) {
@@ -26,6 +25,7 @@ impl App {
             lines: Vec::new(),
             filter: Default::default(),
             selected: None,
+            offset: 0,
             detail: None,
             error: None,
             in_flight: true,
@@ -39,7 +39,6 @@ impl App {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn close_system_log(&mut self) {
         self.model.ui.system_log = None;
     }
@@ -59,7 +58,7 @@ impl App {
         state.last_request = Instant::now();
         let _ = self.api_tx.send(ApiRequest::GetSystemLog {
             generation: state.generation,
-            since: system_log::newest_when(&state.lines).map(str::to_string),
+            since: system_log::poll_since(&state.lines),
         });
     }
 
@@ -89,7 +88,7 @@ impl App {
                 state.error = None;
                 system_log::merge(state, lines);
             }
-            Err(e) => state.error = Some(logic::errors::format_error_message(&e)),
+            Err(e) => state.error = Some(logic::errors::short_error_message(&e)),
         }
         Ok(())
     }
@@ -221,13 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn test_poll_sends_since_newest() {
+    fn test_poll_sends_since_just_before_newest() {
         let (mut app, mut rx) = opened(vec![line(5, "INF"), line(9, "INF"), line(7, "INF")]);
         make_due(&mut app);
         app.poll_system_log();
         assert_eq!(
             sent(&mut rx),
-            Some((1, Some("2026-01-01T10:00:09Z".to_string())))
+            Some((1, Some("2026-01-01T10:00:08.999+00:00".to_string())))
         );
         assert!(log(&mut app).in_flight);
         assert!(log(&mut app).last_request.elapsed() < Duration::from_secs(1));
@@ -366,5 +365,250 @@ mod tests {
         let toast = app.model.ui.toast.as_ref().unwrap();
         assert_eq!(toast.kind, crate::model::ui::ToastKind::Warning);
         assert_eq!(toast.message, "The log viewer needs Syncthing 2.0 or newer");
+    }
+
+    // ========================================
+    // KEYS
+    // ========================================
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    async fn press(app: &mut App, code: KeyCode) {
+        press_with(app, code, KeyModifiers::NONE).await;
+    }
+
+    async fn press_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+        crate::handlers::handle_key(app, KeyEvent::new(code, modifiers))
+            .await
+            .unwrap();
+    }
+
+    async fn ctrl(app: &mut App, c: char) {
+        press_with(app, KeyCode::Char(c), KeyModifiers::CONTROL).await;
+    }
+
+    #[tokio::test]
+    async fn test_v_opens_in_folder_view() {
+        let (mut app, mut rx) = setup();
+        press(&mut app, KeyCode::Char('v')).await;
+        assert!(app.model.ui.system_log.is_some());
+        assert!(sent(&mut rx).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_g_before_opening_does_not_count_inside() {
+        let (mut app, _rx) = setup();
+        app.model.ui.vim_mode = true;
+        press(&mut app, KeyCode::Char('g')).await;
+        press(&mut app, KeyCode::Char('v')).await;
+        app.apply_system_log(1, Ok(lines(0..3))).unwrap();
+        press(&mut app, KeyCode::Char('g')).await;
+        assert_eq!(log(&mut app).selected, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_v_does_nothing_in_breadcrumbs() {
+        let (mut app, _rx) = setup();
+        crate::test_support::view_folder_root(&mut app, "f", vec![]);
+        press(&mut app, KeyCode::Char('v')).await;
+        assert!(app.model.ui.system_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_v_on_1x_warns() {
+        let (mut app, _rx) = setup();
+        app.model.syncthing.version = Some("v1.30.0".to_string());
+        press(&mut app, KeyCode::Char('v')).await;
+        assert!(app.model.ui.system_log.is_none());
+        let toast = app.model.ui.toast.as_ref().unwrap();
+        assert_eq!(toast.kind, crate::model::ui::ToastKind::Warning);
+        assert_eq!(toast.message, TOO_OLD);
+    }
+
+    #[tokio::test]
+    async fn test_v_cycles_filter() {
+        let (mut app, _rx) = opened(lines(0..3));
+        for filter in [LogFilter::Warnings, LogFilter::Errors, LogFilter::All] {
+            press(&mut app, KeyCode::Char('v')).await;
+            assert_eq!(log(&mut app).filter, filter);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes() {
+        let (mut app, _rx) = opened(lines(0..3));
+        press(&mut app, KeyCode::Esc).await;
+        assert!(app.model.ui.system_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_v_does_nothing_in_detail() {
+        let (mut app, _rx) = opened(lines(0..3));
+        press(&mut app, KeyCode::Enter).await;
+        press(&mut app, KeyCode::Char('v')).await;
+        assert_eq!(log(&mut app).filter, LogFilter::All);
+        assert!(log(&mut app).detail.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enter_opens_detail_on_selected() {
+        let (mut app, _rx) = opened(lines(0..3));
+        press(&mut app, KeyCode::Up).await;
+        press(&mut app, KeyCode::Enter).await;
+        let detail = log(&mut app).detail.clone().unwrap();
+        assert_eq!(detail.line.message, "m1");
+        assert_eq!(detail.scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn test_enter_without_selection_does_nothing() {
+        let (mut app, _rx) = opened(vec![]);
+        press(&mut app, KeyCode::Enter).await;
+        assert!(log(&mut app).detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_esc_leaves_detail_then_closes() {
+        let (mut app, _rx) = opened(lines(0..3));
+        press(&mut app, KeyCode::Enter).await;
+        press(&mut app, KeyCode::Esc).await;
+        assert!(log(&mut app).detail.is_none());
+        press(&mut app, KeyCode::Esc).await;
+        assert!(app.model.ui.system_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_arrows_move_and_scroll_detail() {
+        let (mut app, _rx) = opened(lines(0..3));
+        press(&mut app, KeyCode::Up).await;
+        assert_eq!(log(&mut app).selected, Some(1));
+        press(&mut app, KeyCode::Down).await;
+        assert_eq!(log(&mut app).selected, Some(2));
+        press(&mut app, KeyCode::Enter).await;
+        let scroll = |app: &mut App| log(app).detail.as_ref().unwrap().scroll;
+        press(&mut app, KeyCode::Down).await;
+        press(&mut app, KeyCode::PageDown).await;
+        assert_eq!(scroll(&mut app), 11);
+        press(&mut app, KeyCode::Up).await;
+        assert_eq!(scroll(&mut app), 10);
+        press(&mut app, KeyCode::Home).await;
+        press(&mut app, KeyCode::Up).await;
+        assert_eq!(scroll(&mut app), 0);
+        press(&mut app, KeyCode::End).await;
+        press(&mut app, KeyCode::Down).await;
+        assert_eq!(scroll(&mut app), u16::MAX);
+        assert_eq!(log(&mut app).selected, Some(2));
+    }
+
+    async fn assert_page_home_end(app: &mut App) {
+        for (code, selected) in [
+            (KeyCode::PageUp, 20),
+            (KeyCode::Home, 0),
+            (KeyCode::PageDown, 10),
+            (KeyCode::Up, 9),
+            (KeyCode::Down, 10),
+            (KeyCode::End, 30),
+        ] {
+            press(app, code).await;
+            assert_eq!(log(app).selected, Some(selected), "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_page_home_end() {
+        let (mut app, _rx) = opened(lines(0..31));
+        assert_page_home_end(&mut app).await;
+        app.model.ui.vim_mode = true;
+        assert_page_home_end(&mut app).await;
+    }
+
+    #[tokio::test]
+    async fn test_vim_keys() {
+        let (mut app, _rx) = opened(lines(0..31));
+        app.model.ui.vim_mode = true;
+        let selected = |app: &mut App| log(app).selected.unwrap();
+        press(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(selected(&mut app), 29);
+        press(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(selected(&mut app), 30);
+        ctrl(&mut app, 'u').await;
+        assert_eq!(selected(&mut app), 25);
+        ctrl(&mut app, 'd').await;
+        assert_eq!(selected(&mut app), 30);
+        ctrl(&mut app, 'b').await;
+        assert_eq!(selected(&mut app), 20);
+        ctrl(&mut app, 'f').await;
+        assert_eq!(selected(&mut app), 30);
+        press(&mut app, KeyCode::Char('g')).await;
+        assert_eq!(selected(&mut app), 30);
+        press(&mut app, KeyCode::Char('g')).await;
+        assert_eq!(selected(&mut app), 0);
+        press_with(&mut app, KeyCode::Char('G'), KeyModifiers::SHIFT).await;
+        assert_eq!(selected(&mut app), 30);
+        // A key between the two cancels gg
+        press(&mut app, KeyCode::Char('g')).await;
+        press(&mut app, KeyCode::Char('k')).await;
+        press(&mut app, KeyCode::Char('g')).await;
+        assert_eq!(selected(&mut app), 29);
+    }
+
+    #[tokio::test]
+    async fn test_vim_keys_need_vim_mode() {
+        let (mut app, _rx) = opened(lines(0..31));
+        for c in ['k', 'g', 'g'] {
+            press(&mut app, KeyCode::Char(c)).await;
+        }
+        ctrl(&mut app, 'u').await;
+        ctrl(&mut app, 'b').await;
+        assert_eq!(log(&mut app).selected, Some(30));
+    }
+
+    #[tokio::test]
+    async fn test_other_keys_are_swallowed() {
+        let (mut app, _rx) = opened(lines(0..3));
+        app.model.set_folders(vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "f", "label": "f", "path": "/data", "paused": false, "type": "sendreceive"
+            }))
+            .unwrap(),
+        ]);
+        app.model.navigation.folders_state_selection = Some(0);
+        press(&mut app, KeyCode::Char('p')).await;
+        press(&mut app, KeyCode::Char('q')).await;
+        assert!(app.model.ui.confirm_action.is_none());
+        assert!(!app.model.ui.should_quit);
+        assert!(app.model.ui.system_log.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_keys_on_empty_list_do_not_panic() {
+        let (mut app, _rx) = opened(lines(0..3));
+        app.model.ui.vim_mode = true;
+        press(&mut app, KeyCode::Char('v')).await;
+        assert_eq!(log(&mut app).selected, None);
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Enter,
+            KeyCode::Char('j'),
+            KeyCode::Char('G'),
+        ] {
+            press(&mut app, code).await;
+        }
+        assert_eq!(log(&mut app).selected, None);
+    }
+
+    #[tokio::test]
+    async fn test_detail_survives_line_dropping() {
+        let (mut app, _rx) = opened(lines(0..1));
+        press(&mut app, KeyCode::Enter).await;
+        app.apply_system_log(1, Ok(lines(1..1002))).unwrap();
+        let state = log(&mut app);
+        assert!(!state.lines.contains(&line(0, "INF")));
+        assert_eq!(state.detail.as_ref().unwrap().line.message, "m0");
     }
 }

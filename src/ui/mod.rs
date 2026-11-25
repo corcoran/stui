@@ -11,6 +11,7 @@
 // - search: Renders search input box with query and match count
 // - status_bar: Renders bottom status bar with metrics
 // - dialogs: Renders confirmation dialogs (revert, delete, pattern selection)
+// - system_log: Renders the log viewer popup
 // - toast: Renders toast notifications (brief pop-up messages)
 
 pub mod breadcrumb;
@@ -24,6 +25,7 @@ pub mod render;
 pub mod search;
 pub mod status_bar;
 pub mod system_bar;
+pub mod system_log;
 pub mod toast;
 
 // Re-export main render function for convenience

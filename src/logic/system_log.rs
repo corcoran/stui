@@ -157,7 +157,10 @@ pub fn summary(parsed: &ParsedMessage) -> String {
     let subject = field("folder.label")
         .or_else(|| field("folder.id"))
         .or_else(|| field("device"));
-    let parts: Vec<&str> = [subject, field("file.name"), field("error")]
+    let file = field("file.name")
+        .or_else(|| field("dir.name"))
+        .or_else(|| field("path"));
+    let parts: Vec<&str> = [subject, file, field("error")]
         .into_iter()
         .flatten()
         .collect();
@@ -190,16 +193,17 @@ pub fn visible(lines: &[LogLine], filter: LogFilter) -> Vec<usize> {
         .collect()
 }
 
-/// The latest time held. Lines can be out of time order, so it isn't always the last line's.
-pub fn newest_when(lines: &[LogLine]) -> Option<&str> {
-    lines
+/// The `since` that returns every line recorded after the ones held; `None` asks for the whole
+/// log. Syncthing sends everything from the first line newer than it, and times can be out of
+/// order, so it is just before the latest time held: that line and all recorded after it
+/// come back, whatever their times.
+pub fn poll_since(lines: &[LogLine]) -> Option<String> {
+    let newest = lines
         .iter()
-        .filter_map(|line| {
-            let time = chrono::DateTime::parse_from_rfc3339(&line.when).ok()?;
-            Some((time, line.when.as_str()))
-        })
-        .max_by_key(|(time, _)| *time)
-        .map(|(_, when)| when)
+        .filter_map(|line| chrono::DateTime::parse_from_rfc3339(&line.when).ok())
+        .max()?;
+    let before = newest.checked_sub_signed(chrono::Duration::milliseconds(1))?;
+    Some(before.to_rfc3339())
 }
 
 /// False only for a version known to be older than 2.0
@@ -242,6 +246,8 @@ pub fn merge(state: &mut SystemLogState, reply: Vec<LogLine>) {
     };
     state.lines.extend(fresh);
     let dropped = state.lines.len().saturating_sub(MAX_LINES);
+    let dropped_rows = visible(&state.lines[..dropped], state.filter).len();
+    state.offset = state.offset.saturating_sub(dropped_rows);
     state.lines.drain(..dropped);
 
     let shown = visible(&state.lines, state.filter);
@@ -307,6 +313,7 @@ mod tests {
             lines: vec![],
             filter: LogFilter::All,
             selected: None,
+            offset: 0,
             detail: None,
             error: None,
             in_flight: false,
@@ -489,6 +496,22 @@ mod tests {
     }
 
     #[test]
+    fn test_summary_names_directories_and_paths() {
+        assert_eq!(
+            summary_of(&[("folder.label", "Sites"), ("dir.name", "a/b")]),
+            "Sites: a/b"
+        );
+        assert_eq!(
+            summary_of(&[
+                ("path", "a.mkv"),
+                ("error", "EOF"),
+                ("folder.label", "Media")
+            ]),
+            "Media: a.mkv: EOF"
+        );
+    }
+
+    #[test]
     fn test_summary_device_error() {
         assert_eq!(
             summary_of(&[("device", "CX"), ("address", "1.2.3.4:5"), ("error", "EOF")]),
@@ -589,23 +612,55 @@ mod tests {
     }
 
     #[test]
-    fn test_newest_when_ignores_order() {
+    fn test_poll_since_is_just_before_the_newest_time() {
         let lines: Vec<_> = ["10", "12", "11"]
             .iter()
             .map(|h| line_at(&format!("2026-01-01T{h}:00:00Z"), "INF", "m"))
             .collect();
-        assert_eq!(newest_when(&lines), Some("2026-01-01T12:00:00Z"));
-        assert_eq!(newest_when(&[]), None);
-        assert_eq!(newest_when(&[line_at("junk", "INF", "m")]), None);
+        assert_eq!(
+            poll_since(&lines).as_deref(),
+            Some("2026-01-01T11:59:59.999+00:00")
+        );
+        assert_eq!(poll_since(&[]), None);
+        assert_eq!(poll_since(&[line_at("junk", "INF", "m")]), None);
     }
 
     #[test]
-    fn test_newest_when_compares_offsets() {
+    fn test_poll_since_compares_offsets() {
         let lines = [
             line_at("2026-01-01T10:00:00+02:00", "INF", "m"),
             line_at("2026-01-01T09:00:00Z", "INF", "m"),
         ];
-        assert_eq!(newest_when(&lines), Some("2026-01-01T09:00:00Z"));
+        assert_eq!(
+            poll_since(&lines).as_deref(),
+            Some("2026-01-01T08:59:59.999+00:00")
+        );
+    }
+
+    /// What Syncthing sends: everything from the first line newer than `since`
+    fn served(log: &[LogLine], since: Option<String>) -> Vec<LogLine> {
+        let time = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap();
+        let first = log
+            .iter()
+            .position(|l| since.as_deref().is_none_or(|s| time(&l.when) > time(s)));
+        first.map_or(vec![], |i| log[i..].to_vec())
+    }
+
+    #[test]
+    fn test_polling_misses_no_out_of_order_lines() {
+        let log = [
+            line_at("2026-01-01T10:00:00Z", "INF", "start"),
+            line_at("2026-01-01T12:00:00Z", "INF", "ahead"),
+            line_at("2026-01-01T12:00:00Z", "INF", "same time"),
+            line_at("2026-01-01T10:00:01Z", "ERR", "clock went back"),
+            line_at("2026-01-01T12:00:01Z", "INF", "later"),
+        ];
+        let mut s = state();
+        for known in 1..=log.len() {
+            let reply = served(&log[..known], poll_since(&s.lines));
+            merge(&mut s, reply);
+            assert_eq!(s.lines, log[..known]);
+        }
     }
 
     // ========================================
@@ -728,6 +783,25 @@ mod tests {
         cycle_filter(&mut s);
         move_selection(&mut s, -1);
         assert_eq!(selected_message(&s), Some("w1"));
+    }
+
+    #[test]
+    fn test_offset_shifts_with_dropped_rows() {
+        let mut s = state();
+        merge(&mut s, numbered(0..1000));
+        s.selected = Some(500);
+        s.offset = 490;
+        merge(&mut s, numbered(1000..1005));
+        assert_eq!(s.offset, 485);
+
+        // Only rows the filter shows count
+        let mut s = state_with(&[("WRN", "w1"), ("INF", "i"), ("WRN", "w2"), ("WRN", "w3")]);
+        cycle_filter(&mut s);
+        s.offset = 1;
+        s.selected = Some(2);
+        merge(&mut s, numbered(0..998));
+        assert_eq!(s.lines[0].message, "w2");
+        assert_eq!((s.offset, s.selected), (0, Some(0)));
     }
 
     // ========================================

@@ -388,6 +388,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
         );
     }
 
+    if let Some(state) = &mut app.model.ui.system_log {
+        crate::ui::system_log::render_system_log(f, size, state);
+    }
+
     // Render toast notification if active
     if let Some(t) = &app.model.ui.toast {
         toast::render_toast(f, size, t);

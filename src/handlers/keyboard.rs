@@ -64,6 +64,82 @@ fn unignore_blocked_toast(path: &std::path::Path) -> String {
     )
 }
 
+/// Movement in the log viewer: rows in the list, or lines in the detail view
+enum LogMotion {
+    By(i16),
+    First,
+    Last,
+}
+
+/// The motion for a key other than `g`
+fn log_motion(key: &KeyEvent, vim: bool) -> Option<LogMotion> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Up => LogMotion::By(-1),
+        KeyCode::Down => LogMotion::By(1),
+        KeyCode::PageUp => LogMotion::By(-10),
+        KeyCode::PageDown => LogMotion::By(10),
+        KeyCode::Home => LogMotion::First,
+        KeyCode::End => LogMotion::Last,
+        KeyCode::Char('k') if vim => LogMotion::By(-1),
+        KeyCode::Char('j') if vim => LogMotion::By(1),
+        KeyCode::Char('G') if vim => LogMotion::Last,
+        KeyCode::Char('u') if vim && ctrl => LogMotion::By(-5),
+        KeyCode::Char('d') if vim && ctrl => LogMotion::By(5),
+        KeyCode::Char('b') if vim && ctrl => LogMotion::By(-10),
+        KeyCode::Char('f') if vim && ctrl => LogMotion::By(10),
+        _ => return None,
+    })
+}
+
+fn handle_system_log_key(app: &mut App, key: KeyEvent) {
+    use crate::logic::system_log;
+
+    let vim = app.model.ui.vim_mode;
+    let g_pressed = vim && key.code == KeyCode::Char('g');
+    let (vim_state, jump_to_first) =
+        crate::logic::ui::next_vim_command_state(app.model.ui.vim_command_state, g_pressed);
+    app.model.ui.vim_command_state = vim_state;
+    let motion = if jump_to_first {
+        Some(LogMotion::First)
+    } else {
+        log_motion(&key, vim)
+    };
+
+    let Some(state) = app.model.ui.system_log.as_mut() else {
+        return;
+    };
+    match (motion, state.detail.as_mut()) {
+        (Some(LogMotion::By(n)), Some(detail)) => {
+            detail.scroll = detail.scroll.saturating_add_signed(n)
+        }
+        (Some(LogMotion::First), Some(detail)) => detail.scroll = 0,
+        // Drawing clamps it to the last line
+        (Some(LogMotion::Last), Some(detail)) => detail.scroll = u16::MAX,
+        (Some(LogMotion::By(n)), None) => system_log::move_selection(state, n.into()),
+        (Some(LogMotion::First), None) => system_log::select_first(state),
+        (Some(LogMotion::Last), None) => system_log::select_last(state),
+        (None, Some(_)) => {
+            if key.code == KeyCode::Esc {
+                state.detail = None;
+            }
+        }
+        (None, None) => match key.code {
+            KeyCode::Esc => app.close_system_log(),
+            KeyCode::Char('v') => system_log::cycle_filter(state),
+            KeyCode::Enter => {
+                state.detail = state.selected.and_then(|i| state.lines.get(i)).map(|line| {
+                    crate::model::types::LogDetail {
+                        line: line.clone(),
+                        scroll: 0,
+                    }
+                });
+            }
+            _ => {}
+        },
+    }
+}
+
 pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     // Update last user action timestamp for idle detection
     app.model.performance.last_user_action = Instant::now();
@@ -381,6 +457,11 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 return Ok(());
             }
         }
+    }
+
+    if app.model.ui.system_log.is_some() {
+        handle_system_log_key(app, key);
+        return Ok(());
     }
 
     // ========================================
@@ -1234,6 +1315,12 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let folder_id = folder.id.clone();
                 let label = folder.label.clone().unwrap_or_else(|| folder.id.clone());
                 app.open_folder_history_modal(&folder_id, &label).await;
+            }
+        }
+        KeyCode::Char('v') if app.model.navigation.focus_level == 0 => {
+            app.model.ui.vim_command_state = model::VimCommandState::None;
+            if let Err(message) = app.open_system_log() {
+                app.model.ui.show_warning(message);
             }
         }
         KeyCode::Char('p') if app.model.navigation.focus_level == 0 => {

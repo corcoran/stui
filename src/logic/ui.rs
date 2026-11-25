@@ -571,6 +571,7 @@ mod tests {
             lines: vec![],
             filter: Default::default(),
             selected: None,
+            offset: 0,
             detail: None,
             error: None,
             in_flight: false,

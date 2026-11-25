@@ -4429,7 +4429,6 @@ mod tests {
         assert!(app.model.navigation.breadcrumb_trail.is_empty());
     }
 
-    /// Answers every request with `body` as JSON
     fn connected(app: &mut App) {
         app.model.syncthing.connection_state = crate::model::syncthing::ConnectionState::Connected;
     }

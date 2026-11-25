@@ -67,9 +67,58 @@ pub fn format_error_message(error: &Error) -> String {
     deepest
 }
 
+/// The cause in a few words, for places with little room
+pub fn short_error_message(error: &Error) -> String {
+    let reqwest_error = error
+        .chain()
+        .find_map(|e| e.downcast_ref::<reqwest::Error>());
+    match reqwest_error {
+        Some(e) if e.is_timeout() => "timed out".to_string(),
+        Some(e) if e.is_connect() => "can't connect".to_string(),
+        Some(e) if e.status().is_some() => {
+            format!("HTTP {}", e.status().unwrap_or_default())
+        }
+        _ => error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_short_error_message_leads_with_the_cause() {
+        use anyhow::Context;
+        let (url, _rx) = crate::test_http::spawn_stub("403 Forbidden", "{}").await;
+        let refused = reqwest::get(&url)
+            .await
+            .unwrap()
+            .error_for_status()
+            .context("Failed")
+            .unwrap_err();
+        assert_eq!(short_error_message(&refused), "HTTP 403 Forbidden");
+
+        let unreachable = reqwest::get("http://127.0.0.1:9")
+            .await
+            .context("Failed")
+            .unwrap_err();
+        assert_eq!(short_error_message(&unreachable), "can't connect");
+
+        // Connects but never answers
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let slow = reqwest::Client::new()
+            .get(format!("http://{}", silent.local_addr().unwrap()))
+            .timeout(std::time::Duration::from_millis(50))
+            .send()
+            .await
+            .context("Failed")
+            .unwrap_err();
+        assert_eq!(short_error_message(&slow), "timed out");
+
+        assert_eq!(short_error_message(&anyhow::anyhow!("boom")), "boom");
+        let nested = anyhow::anyhow!("bad json").context("Failed to parse");
+        assert_eq!(short_error_message(&nested), "Failed to parse");
+    }
 
     #[test]
     fn test_classify_connection_refused() {

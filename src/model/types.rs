@@ -217,7 +217,6 @@ pub struct FolderHistoryModal {
 
 /// Log viewer (`v` in the folder view)
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SystemLogState {
     /// Identifies this opening, so replies to an earlier one can be told apart
     pub generation: u64,
@@ -226,6 +225,8 @@ pub struct SystemLogState {
     pub filter: LogFilter,
     /// Index into `lines`
     pub selected: Option<usize>,
+    /// First row on screen, counting visible lines. Drawing clamps it to show the selection
+    pub offset: usize,
     pub detail: Option<LogDetail>,
     /// Last request's failure, cleared by the next success
     pub error: Option<String>,
@@ -237,7 +238,6 @@ pub struct SystemLogState {
 
 /// A log line shown in full. Holds its own copy: the line can drop out of the list.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LogDetail {
     pub line: LogLine,
     pub scroll: u16,

@@ -45,6 +45,8 @@ fn build_hotkey_spans(
         hotkey_spans.extend(vec![
             Span::styled("u", Style::default().fg(Color::Yellow)),
             Span::raw(":Updates  "),
+            Span::styled("v", Style::default().fg(Color::Yellow)),
+            Span::raw(":Log  "),
             Span::styled("c", Style::default().fg(Color::Yellow)),
             Span::raw(":Change Type  "),
             Span::styled("e", Style::default().fg(Color::Yellow)),
@@ -238,6 +240,18 @@ pub fn calculate_legend_height(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_log_key_in_folder_view_only() {
+        let text = |focus_level| {
+            build_hotkey_spans(false, focus_level, false, false, false, false)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        assert!(text(0).contains("u:Updates  v:Log  "));
+        assert!(!text(1).contains("v:Log"));
+    }
 
     /// Helper function to convert spans to plain text for assertions
     fn spans_to_text(spans: &[Span]) -> String {
