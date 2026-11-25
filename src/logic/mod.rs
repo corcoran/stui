@@ -18,6 +18,7 @@
 //! - search: Search query matching and filtering
 //! - sorting: Comparison functions for sorting browse items
 //! - sync_states: Sync state priority and transitions
+//! - system_log: Parsing, filtering and selection for the Syncthing log viewer
 //! - ui: UI state transitions and cycling
 
 pub mod archive;
@@ -50,4 +51,6 @@ pub mod preview_rows;
 pub mod search;
 pub mod sorting;
 pub mod sync_states;
+#[allow(dead_code)]
+pub mod system_log;
 pub mod ui;

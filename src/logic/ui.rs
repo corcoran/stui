@@ -18,6 +18,7 @@ pub fn modal_open(model: &crate::model::Model) -> bool {
         || ui.group_name_input.is_some()
         || ui.file_info_popup.is_some()
         || ui.folder_history_modal.is_some()
+        || ui.system_log.is_some()
 }
 
 /// Cycle to the next display mode: Off → TimestampOnly → TimestampAndSize → Off
@@ -558,6 +559,23 @@ mod tests {
             has_more: false,
             current_offset: 0,
             all_files_sorted: None,
+        });
+        assert!(modal_open(&model));
+    }
+
+    #[test]
+    fn test_modal_open_true_for_system_log() {
+        let mut model = Model::new(false);
+        model.ui.system_log = Some(crate::model::types::SystemLogState {
+            generation: 1,
+            lines: vec![],
+            filter: Default::default(),
+            selected: None,
+            detail: None,
+            error: None,
+            in_flight: false,
+            loaded: false,
+            last_request: std::time::Instant::now(),
         });
         assert!(modal_open(&model));
     }

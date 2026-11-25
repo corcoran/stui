@@ -51,6 +51,23 @@ struct ConfigResponse {
     devices: Vec<Device>,
 }
 
+/// A log level: a name on Syncthing 2.x, a number on 1.x
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub enum RawLevel {
+    Name(String),
+    Number(i64),
+}
+
+/// One line of /rest/system/log
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+pub struct LogLine {
+    pub when: String,
+    pub message: String,
+    pub level: RawLevel,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct BrowseItem {
     pub name: String,

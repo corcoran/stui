@@ -8,7 +8,7 @@ use std::time::Instant;
 use super::types::{
     ConfirmAction, FileInfoPopupState, FolderGroupMenuState, FolderHistoryModal,
     FolderTypeSelectionState, GroupNameInputState, OutOfSyncFilterState, PatternSelectionState,
-    VimCommandState,
+    SystemLogState, VimCommandState,
 };
 use crate::{DisplayMode, SortMode};
 
@@ -117,6 +117,13 @@ pub struct UiModel {
     /// Folder update history modal state
     pub folder_history_modal: Option<FolderHistoryModal>,
 
+    /// Log viewer; `None` when closed
+    pub system_log: Option<SystemLogState>,
+
+    /// Generation of the last log viewer opened
+    #[allow(dead_code)]
+    pub system_log_generation: u64,
+
     /// Per-folder activity tracking (folder_id -> (event_message, timestamp))
     pub folder_activity: std::collections::HashMap<String, (String, std::time::SystemTime)>,
 
@@ -162,6 +169,8 @@ impl UiModel {
             search_origin_level: None,
             out_of_sync_filter: None,
             folder_history_modal: None,
+            system_log: None,
+            system_log_generation: 0,
             folder_activity: std::collections::HashMap::new(),
             device_details_modal: None,
             sixel_cleanup_frames: 0,

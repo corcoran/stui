@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::api::{BrowseItem, FileDetails, LocalChangedFile, SyncState};
+use crate::api::{BrowseItem, FileDetails, LocalChangedFile, LogLine, SyncState};
+use crate::logic::system_log::LogFilter;
 
 /// Vim command state for tracking double-key commands like 'gg'
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,6 +213,34 @@ pub struct FolderHistoryModal {
     pub current_offset: usize,
     // Sorted file cache for pagination (path, mod_time, size)
     pub all_files_sorted: Option<Vec<(String, std::time::SystemTime, u64)>>,
+}
+
+/// Log viewer (`v` in the folder view)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SystemLogState {
+    /// Identifies this opening, so replies to an earlier one can be told apart
+    pub generation: u64,
+    /// In the order Syncthing recorded them
+    pub lines: Vec<LogLine>,
+    pub filter: LogFilter,
+    /// Index into `lines`
+    pub selected: Option<usize>,
+    pub detail: Option<LogDetail>,
+    /// Last request's failure, cleared by the next success
+    pub error: Option<String>,
+    pub in_flight: bool,
+    /// A request has succeeded
+    pub loaded: bool,
+    pub last_request: std::time::Instant,
+}
+
+/// A log line shown in full. Holds its own copy: the line can drop out of the list.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct LogDetail {
+    pub line: LogLine,
+    pub scroll: u16,
 }
 
 /// A single entry in the folder history modal
