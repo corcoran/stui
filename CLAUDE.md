@@ -419,6 +419,7 @@ Display visual indicators for file/folder states following `<file|dir><status>` 
   - Loads files in batches of 100 as you scroll
   - Auto-loads when within 10 items of bottom
   - Press `Enter` on a file to jump directly to that file's location in breadcrumbs
+- `v` (folder view): **Syncthing log** (2.x only; 1.x gets a warning toast). In the popup `v` cycles All → Warnings and errors → Errors, `Enter` shows the line in full, `Esc` goes back. Other keys do nothing there, `q` included
 - Vim keybindings (optional): `hjkl`, `gg`, `G`, `Ctrl-d/u`, `Ctrl-f/b`
 
 ### Search Feature
@@ -469,6 +470,7 @@ CLI flags: `--debug`, `--vim`, `--config <path>`
 /rest/db/need?folder=<id>                     # Get files needed from remote
 /rest/stats/folder                            # Folder statistics (matches web GUI)
 /rest/events?since=<id>&timeout=60            # Event stream (long-polling)
+/rest/system/log[?since=<RFC 3339>]           # Last 1000 log lines (2.x: level names; 1.x: numbers)
 /rest/system/status                           # System status (device info, uptime)
 /rest/system/connections                      # Connection/transfer statistics
 ```
@@ -559,6 +561,9 @@ Cache: reads skip pending paths. Confirmed states and ItemFinished Synced are wr
 
 ### Terminal Requests
 Only `run_app` owns the terminal, so handlers push `model.ui.terminal_requests` (`TerminalRequest::Copy` for OSC 52, `RunInTerminal` for `o` in terminal mode) and `run_terminal_requests` carries them out before the next draw. `RunInTerminal` leaves the alternate screen and raw mode, waits for the program with `block_in_place` (keys are read inline in the loop, so nothing competes for input; background services keep running), then restores the screen whatever the outcome and reports through `handlers::terminal::handle_run_result`. `o` treats a file as text when `detect_encoding` decodes its first 8 KB (the preview's decision). `o` never opens a path that is not on disk, so an editor cannot create a file inside a synced folder.
+
+### Log Viewer
+`model.ui.system_log` (`SystemLogState`, `None` when closed) holds up to 1000 lines in the order Syncthing recorded them, which isn't always time order. `App::poll_system_log` runs each frame and requests `since` just before the latest `when` held (`poll_since`) every 2 s, one request at a time, while connected. `system_log_generation` grows with every opening, and replies from an older one are dropped. `logic::system_log::merge` skips lines already held, because `since` returns everything from the first newer line on, and keeps the selection on the last visible row while it is there. `selected` is an index into `lines`; `offset` counts visible rows and is clamped when drawn. Log text passes through `one_row` before it is drawn, so control characters never reach the terminal.
 
 ### Undelete
 Syncthing has no per-file revert, so `u` ignores the file's exact path, rescans it (Syncthing forgets the local deletion), puts the original ignore list back and rescans again (Syncthing downloads it). Rescans block while a folder syncs, so batches run in the background, one per folder at a time (`App::undelete_jobs`); presses during a batch join the next one. The temporary patterns are recorded in the cache table `pending_undelete_ignores` before they are added and removed after, and `App::remove_leftover_undelete_patterns` clears any left over at startup. Each restored file is a `Restoring` pending change (see Pending Local Changes) until `ItemFinished`, which marks it Synced and drops its local change.

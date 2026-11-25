@@ -6,9 +6,6 @@
 
 ### Feature Enhancements
 
-**High Priority:**
-- Syncthing log viewer
-
 **Medium Priority:**
 - Taskbar icon (plus ability to launch terminal + app)
 
