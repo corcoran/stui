@@ -165,7 +165,6 @@ pub enum ApiRequest {
     },
 
     /// Log lines since a time, for the log viewer opening `generation`
-    #[allow(dead_code)]
     GetSystemLog {
         generation: u64,
         since: Option<String>,
@@ -325,7 +324,6 @@ pub enum ApiResponse {
         files: Result<Vec<LocalChangedFile>, anyhow::Error>,
     },
 
-    #[allow(dead_code)]
     SystemLogResult {
         generation: u64,
         lines: Result<Vec<LogLine>, anyhow::Error>,

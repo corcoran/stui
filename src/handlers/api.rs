@@ -25,6 +25,7 @@ use crate::services::api::{ApiRequest, ApiResponse, Priority};
 /// - ConnectionStatsResult: Transfer statistics
 /// - FolderNeed: Need list (replaces the folder's syncing set and need index)
 /// - LocalChangedIndex: Receive-only local changes for the need index
+/// - SystemLogResult: Lines for the log viewer
 pub fn handle_api_response(app: &mut App, response: ApiResponse) {
     match response {
         ApiResponse::BrowseResult {
@@ -1071,7 +1072,11 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         }
 
-        ApiResponse::SystemLogResult { .. } => {}
+        ApiResponse::SystemLogResult { generation, lines } => {
+            if let Err(message) = app.apply_system_log(generation, lines) {
+                app.model.ui.show_warning(message);
+            }
+        }
 
         ApiResponse::LocalChangedIndex {
             folder_id,

@@ -121,7 +121,6 @@ pub struct UiModel {
     pub system_log: Option<SystemLogState>,
 
     /// Generation of the last log viewer opened
-    #[allow(dead_code)]
     pub system_log_generation: u64,
 
     /// Per-folder activity tracking (folder_id -> (event_message, timestamp))

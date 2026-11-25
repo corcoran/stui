@@ -1158,6 +1158,7 @@ where
         }
 
         app.refresh_folder_config().await;
+        app.poll_system_log();
 
         // Refresh device/system status periodically (less frequently than folder stats)
         // System status every 30 seconds, connection stats every 2-3 seconds

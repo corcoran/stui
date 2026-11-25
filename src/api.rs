@@ -54,7 +54,6 @@ struct ConfigResponse {
 /// A log level: a name on Syncthing 2.x, a number on 1.x
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(untagged)]
-#[allow(dead_code)]
 pub enum RawLevel {
     Name(String),
     Number(i64),
