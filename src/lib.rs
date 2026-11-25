@@ -9,6 +9,8 @@ pub mod cache;
 pub mod logic;
 pub mod model;
 pub mod services;
+#[cfg(test)]
+mod test_http;
 pub mod utils;
 
 // DEBUG_MODE for cache logging (defaults to false in tests)

@@ -1071,6 +1071,8 @@ pub fn handle_api_response(app: &mut App, response: ApiResponse) {
             }
         }
 
+        ApiResponse::SystemLogResult { .. } => {}
+
         ApiResponse::LocalChangedIndex {
             folder_id,
             sequence,

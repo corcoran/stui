@@ -736,6 +736,35 @@ impl SyncthingClient {
         Ok(version.version)
     }
 
+    /// Syncthing's log in the order it was recorded: the last 1000 lines, or those from the
+    /// first one newer than `since` (RFC 3339)
+    pub async fn get_system_log(&self, since: Option<&str>) -> Result<Vec<LogLine>> {
+        #[derive(Deserialize)]
+        struct LogResponse {
+            /// null when nothing is newer
+            messages: Option<Vec<LogLine>>,
+        }
+        let mut url = format!("{}/rest/system/log", self.base_url);
+        if let Some(since) = since {
+            url.push_str(&format!("?since={}", urlencoding::encode(since)));
+        }
+        let log: LogResponse = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            // The viewer sends nothing more until this one returns
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .context("Failed to fetch the log")?
+            .error_for_status()
+            .context("Syncthing refused to send the log")?
+            .json()
+            .await
+            .context("Failed to parse the log")?;
+        Ok(log.messages.unwrap_or_default())
+    }
+
     pub async fn get_system_status(&self) -> Result<SystemStatus> {
         let url = format!("{}/rest/system/status", self.base_url);
         let response = self
@@ -1435,5 +1464,57 @@ mod tests {
         );
         assert_eq!(url.matches('&').count(), 3, "only the separators: {}", url);
         assert!(!url.contains('#'));
+    }
+
+    // ========================================
+    // SYSTEM LOG
+    // ========================================
+
+    async fn system_log(
+        status: &'static str,
+        body: &'static str,
+        since: Option<&str>,
+    ) -> (Result<Vec<LogLine>>, String) {
+        let (url, mut requests) = crate::test_http::spawn_stub(status, body).await;
+        let client = SyncthingClient::new(url, "key".to_string());
+        let lines = client.get_system_log(since).await;
+        (lines, requests.recv().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_get_system_log_sends_encoded_since() {
+        let body = r#"{"messages":[]}"#;
+        let (_, request) = system_log("200 OK", body, Some("2026-01-01T10:00:00+02:00")).await;
+        assert_eq!(
+            request,
+            "GET /rest/system/log?since=2026-01-01T10%3A00%3A00%2B02%3A00 HTTP/1.1"
+        );
+        let (_, request) = system_log("200 OK", body, None).await;
+        assert_eq!(request, "GET /rest/system/log HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn test_get_system_log_null_messages_is_empty() {
+        let (lines, _) = system_log("200 OK", r#"{"messages":null}"#, None).await;
+        assert_eq!(lines.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_get_system_log_reads_string_and_number_levels() {
+        let body = r#"{"messages":[
+            {"when":"2026-01-01T10:00:00Z","message":"a","level":"WRN"},
+            {"when":"2026-01-01T10:00:01Z","message":"b","level":3}]}"#;
+        let (lines, _) = system_log("200 OK", body, None).await;
+        let levels: Vec<_> = lines.unwrap().into_iter().map(|l| l.level).collect();
+        assert_eq!(
+            levels,
+            [RawLevel::Name("WRN".to_string()), RawLevel::Number(3)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_system_log_rejects_http_errors() {
+        let (lines, _) = system_log("403 Forbidden", r#"{"messages":[]}"#, None).await;
+        assert!(lines.is_err());
     }
 }

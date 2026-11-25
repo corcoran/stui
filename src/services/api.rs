@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
 use crate::api::{
-    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, LocalChangedFile, NeedResponse,
-    SyncthingClient, SystemStatus,
+    BrowseItem, ConnectionStats, Device, FileDetails, FolderStatus, LocalChangedFile, LogLine,
+    NeedResponse, SyncthingClient, SystemStatus,
 };
 use crate::utils;
 
@@ -86,6 +86,9 @@ pub(crate) enum RequestKey {
         folder_id: String,
         sequence: u64,
     },
+    SystemLog {
+        generation: u64,
+    },
 }
 
 /// API request types
@@ -160,6 +163,13 @@ pub enum ApiRequest {
         sequence: u64,
         requested_at: std::time::Instant,
     },
+
+    /// Log lines since a time, for the log viewer opening `generation`
+    #[allow(dead_code)]
+    GetSystemLog {
+        generation: u64,
+        since: Option<String>,
+    },
 }
 
 impl ApiRequest {
@@ -233,6 +243,9 @@ impl ApiRequest {
             } => RequestKey::LocalChangedIndex {
                 folder_id: folder_id.clone(),
                 sequence: *sequence,
+            },
+            ApiRequest::GetSystemLog { generation, .. } => RequestKey::SystemLog {
+                generation: *generation,
             },
         }
     }
@@ -310,6 +323,12 @@ pub enum ApiResponse {
         sequence: u64,
         requested_at: std::time::Instant,
         files: Result<Vec<LocalChangedFile>, anyhow::Error>,
+    },
+
+    #[allow(dead_code)]
+    SystemLogResult {
+        generation: u64,
+        lines: Result<Vec<LogLine>, anyhow::Error>,
     },
 }
 
@@ -610,6 +629,14 @@ impl ApiService {
                     files,
                 }
             }
+
+            ApiRequest::GetSystemLog { generation, since } => {
+                let lines = client.get_system_log(since.as_deref()).await;
+                if let Err(e) = &lines {
+                    log_debug(&format!("Failed to get the system log: {:#}", e));
+                }
+                ApiResponse::SystemLogResult { generation, lines }
+            }
         }
     }
 }
@@ -711,5 +738,22 @@ mod tests {
     #[test]
     fn test_empty_queue_inserts_at_front() {
         assert_eq!(queue_insert_position(std::iter::empty(), Priority::Low), 0);
+    }
+
+    // ========================================
+    // SYSTEM LOG
+    // ========================================
+
+    #[test]
+    fn test_system_log_key_differs_by_generation() {
+        let key = |generation, since: Option<&str>| {
+            ApiRequest::GetSystemLog {
+                generation,
+                since: since.map(str::to_string),
+            }
+            .key()
+        };
+        assert_ne!(key(1, None), key(2, None));
+        assert_eq!(key(1, None), key(1, Some("2026-01-01T10:00:00Z")));
     }
 }

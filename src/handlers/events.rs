@@ -295,6 +295,7 @@ pub fn handle_cache_invalidation(app: &mut App, invalidation: CacheInvalidation)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_http::spawn_json_stub;
     use crate::test_support::*;
     use std::time::{Duration, SystemTime};
 
@@ -4429,27 +4430,6 @@ mod tests {
     }
 
     /// Answers every request with `body` as JSON
-    async fn spawn_json_stub(body: &'static str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            while let Ok((mut sock, _)) = listener.accept().await {
-                tokio::spawn(async move {
-                    let mut buf = vec![0u8; 4096];
-                    let _ = sock.read(&mut buf).await;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ = sock.write_all(response.as_bytes()).await;
-                });
-            }
-        });
-        format!("http://{}", addr)
-    }
-
     fn connected(app: &mut App) {
         app.model.syncthing.connection_state = crate::model::syncthing::ConnectionState::Connected;
     }

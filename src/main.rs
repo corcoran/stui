@@ -43,6 +43,8 @@ mod logic;
 mod model;
 mod services;
 #[cfg(test)]
+mod test_http;
+#[cfg(test)]
 mod test_support;
 mod ui;
 mod utils;
