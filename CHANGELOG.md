@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.15.0] - 2026-11-25
+
 ### ✨ New Features
 
 - **Syncthing log**: Press `v` in the folder list to watch Syncthing's log live. Press `v` again to show only warnings and errors, then only errors. `Enter` shows a line in full. Needs Syncthing 2.0 or newer
